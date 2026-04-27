@@ -8,7 +8,7 @@ final class CapsuleWindowController {
     private let hostingView: NSHostingView<CapsuleView>
     private var currentState: CapsuleState = .hidden
     private var currentLevel: Float = 0
-    private let panelSize = NSSize(width: 172, height: 44)
+    private let panelSize = NSSize(width: 196, height: 56)
 
     var onCancel: () -> Void = {}
     var onConfirm: () -> Void = {}

@@ -74,71 +74,81 @@ private struct FixedSidebar: View {
     @State private var stats = SidebarStatsSnapshot.load()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            WindowControlGlassDock()
+        ScrollView(.vertical) {
+            VStack(alignment: .leading, spacing: 12) {
+                Color.clear
+                    .frame(height: 38)
 
-            VStack(alignment: .leading, spacing: 7) {
-                Text("OpenLess")
-                    .font(.system(size: 23, weight: .semibold))
-                Text("自然说话，完美书写")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .glassPanel(cornerRadius: 18)
-
-            VStack(spacing: 8) {
-                ForEach(OpenLessMainTab.allCases) { tab in
-                    Button {
-                        selection = tab
-                    } label: {
-                        HStack(spacing: 11) {
-                            Image(systemName: tab.symbol)
-                                .symbolRenderingMode(.hierarchical)
-                                .frame(width: 22)
-                            Text(tab.title)
-                                .font(.system(size: 14, weight: selection == tab ? .semibold : .regular))
-                            Spacer()
-                        }
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 10)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .foregroundStyle(selection == tab ? .primary : .secondary)
-                        .background(
-                            selection == tab ? Color.accentColor.opacity(0.13) : Color.clear,
-                            in: RoundedRectangle(cornerRadius: 15, style: .continuous)
-                        )
-                        .glassPanel(cornerRadius: 15)
-                    }
-                    .buttonStyle(.plain)
-                    .help(tab.title)
+                VStack(alignment: .leading, spacing: 7) {
+                    Text("OpenLess")
+                        .font(.system(size: 23, weight: .semibold))
+                        .foregroundStyle(.primary)
+                    Text("自然说话，完美书写")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+
+                VStack(spacing: 8) {
+                    ForEach(OpenLessMainTab.allCases) { tab in
+                        Button {
+                            selection = tab
+                        } label: {
+                            HStack(spacing: 11) {
+                                Image(systemName: tab.symbol)
+                                    .symbolRenderingMode(.hierarchical)
+                                    .foregroundStyle(selection == tab ? Color.accentColor : .secondary)
+                                    .frame(width: 22)
+                                Text(tab.title)
+                                    .font(.system(size: 14, weight: selection == tab ? .semibold : .regular))
+                                Spacer()
+                            }
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 10)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .foregroundStyle(selection == tab ? .primary : .secondary)
+                            .background(
+                                selection == tab ? Color.accentColor.opacity(0.12) : Color.primary.opacity(0.035),
+                                in: RoundedRectangle(cornerRadius: 15, style: .continuous)
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 15, style: .continuous)
+                                    .strokeBorder(selection == tab ? Color.accentColor.opacity(0.32) : Color.primary.opacity(0.055), lineWidth: 1)
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+                        .help(tab.title)
+                    }
+                }
+
+                SidebarUsageCard(stats: stats)
+                SidebarConnectionCard(stats: stats)
+
+                VStack(alignment: .leading, spacing: 7) {
+                    Label("右 Option 开始录音", systemImage: "keyboard")
+                    Label("Esc 取消", systemImage: "escape")
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
             }
-
-            SidebarUsageCard(stats: stats)
-            SidebarConnectionCard(stats: stats)
-
-            Spacer()
-
-            VStack(alignment: .leading, spacing: 7) {
-                Label("右 Option 开始录音", systemImage: "keyboard")
-                Label("Esc 取消", systemImage: "escape")
-            }
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .glassPanel(cornerRadius: 18)
+            .padding(12)
         }
-        .padding(.horizontal, 12)
-        .padding(.top, 0)
-        .padding(.bottom, 12)
+        .scrollIndicators(.hidden)
         .frame(width: 264)
         .frame(maxHeight: .infinity, alignment: .top)
-        .glassPanel(cornerRadius: 32)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 32, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 32, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.07), lineWidth: 1)
+        )
         .onAppear { refresh() }
         .onReceive(NotificationCenter.default.publisher(for: .openLessHistoryChanged)) { _ in refresh() }
         .onReceive(NotificationCenter.default.publisher(for: .openLessDictionaryChanged)) { _ in refresh() }
@@ -165,18 +175,6 @@ private struct WindowCanvasBackground: View {
             )
         }
         .ignoresSafeArea()
-    }
-}
-
-private struct WindowControlGlassDock: View {
-    var body: some View {
-        RoundedRectangle(cornerRadius: 18, style: .continuous)
-            .fill(Color.clear)
-            .frame(width: 92, height: 36)
-            .glassPanel(cornerRadius: 18)
-            .padding(.top, 2)
-            .padding(.leading, 2)
-            .help("窗口控制")
     }
 }
 

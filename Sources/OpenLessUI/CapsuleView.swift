@@ -24,19 +24,21 @@ public struct CapsuleView: View {
             centerView
             confirmButton
         }
-        .padding(.horizontal, 10)
-        .frame(width: 152, height: 32)
+        .padding(.horizontal, 8)
+        .frame(width: 176, height: 42)
         .openLessGlass()
-        .modifier(LegacyCapsuleChrome(state: state))
+        .modifier(InputBarChrome(state: state))
     }
 
     @ViewBuilder
     private var cancelButton: some View {
         Button(action: onCancel) {
             Image(systemName: "xmark")
-                .font(.system(size: 10, weight: .semibold))
-                .frame(width: 14, height: 14)
-                .foregroundStyle(state == .cancelled ? Color.red : Color.gray.opacity(0.85))
+                .font(.system(size: 15, weight: .semibold))
+                .frame(width: 28, height: 28)
+                .foregroundStyle(state == .cancelled ? Color.red : Color.primary.opacity(0.78))
+                .background(.thinMaterial, in: Circle())
+                .overlay(Circle().strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.8))
                 .opacity(state == .hidden ? 0 : 1)
         }
         .buttonStyle(.plain)
@@ -48,9 +50,11 @@ public struct CapsuleView: View {
     private var confirmButton: some View {
         Button(action: onConfirm) {
             Image(systemName: "checkmark")
-                .font(.system(size: 10, weight: .semibold))
-                .frame(width: 14, height: 14)
-                .foregroundStyle(state == .inserted ? Color.green : Color.white)
+                .font(.system(size: 15, weight: .semibold))
+                .frame(width: 28, height: 28)
+                .foregroundStyle(state == .inserted ? Color.green : Color.primary)
+                .background(Color.white.opacity(0.92), in: Circle())
+                .overlay(Circle().strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.8))
                 .opacity(state == .hidden ? 0 : 1)
         }
         .buttonStyle(.plain)
@@ -84,7 +88,7 @@ public struct CapsuleView: View {
         }
     }
 
-    private var centerWidth: CGFloat { 82 }
+    private var centerWidth: CGFloat { 84 }
 
     private var isControlEnabled: Bool {
         state == .listening
@@ -99,19 +103,23 @@ public struct CapsuleView: View {
     }
 }
 
-/// macOS 15 上保留旧的描边和投影；macOS 26 上完全交给 Liquid Glass。
-private struct LegacyCapsuleChrome: ViewModifier {
+private struct InputBarChrome: ViewModifier {
     let state: CapsuleState
 
     func body(content: Content) -> some View {
         if #available(macOS 26.0, *) {
             content
+                .overlay(
+                    Capsule().strokeBorder(Color.white.opacity(0.34), lineWidth: 1)
+                )
+                .shadow(color: .black.opacity(0.18), radius: 18, y: 8)
         } else {
             content
+                .background(Color.white.opacity(0.18), in: Capsule())
                 .overlay(
-                    Capsule().strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
+                    Capsule().strokeBorder(Color.white.opacity(0.36), lineWidth: 1)
                 )
-                .shadow(color: .black.opacity(0.16), radius: 10, y: 4)
+                .shadow(color: .black.opacity(0.18), radius: 18, y: 8)
         }
     }
 }
@@ -123,12 +131,12 @@ private struct AudioBars: View {
         HStack(spacing: 3) {
             ForEach(0..<5, id: \.self) { i in
                 Capsule()
-                    .fill(Color.accentColor.opacity(0.9))
+                    .fill(Color.accentColor.opacity(0.82))
                     .frame(width: 3, height: barHeight(index: i))
                     .animation(.spring(response: 0.18, dampingFraction: 0.7), value: level)
             }
         }
-        .frame(width: 35)
+        .frame(width: 42)
     }
 
     private func barHeight(index: Int) -> CGFloat {
