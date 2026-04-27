@@ -1,12 +1,52 @@
-# OpenLess
+<p align="center">
+  <img src="Resources/AppIcon.png" alt="OpenLess" width="160" />
+</p>
 
-> 中文 · [English](README.en.md)
+<h1 align="center">OpenLess</h1>
 
-**面向 AI 时代的开源语音输入：把你说的话变成可直接用的 AI prompt。**
+<p align="center">
+  <strong>面向 AI 时代的开源 macOS 语音输入。</strong><br/>
+  按一次快捷键说话，自动整理成可直接用的 AI prompt，落到当前光标。
+</p>
 
-OpenLess 是一个原生 macOS 语音输入应用，对标 [Wispr Flow](https://wisprflow.ai)、[Talk (Talktastic)](https://talktastic.com)、[Lazy](https://heylazy.com)、Superwhisper 等商业语音输入工具的**开源**替代品。
+<p align="center">
+  <a href="README.md">中文</a> · <a href="README.en.md">English</a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/appergb/openless/releases/latest"><img alt="release" src="https://img.shields.io/github/v/release/appergb/openless?style=flat-square&color=2c5282" /></a>
+  <a href="https://github.com/appergb/openless/blob/main/LICENSE"><img alt="license" src="https://img.shields.io/github/license/appergb/openless?style=flat-square&color=2f855a" /></a>
+  <img alt="macOS" src="https://img.shields.io/badge/macOS-15%2B-1f425f?style=flat-square" />
+  <img alt="Swift" src="https://img.shields.io/badge/Swift-5.9-orange?style=flat-square" />
+  <img alt="Stars" src="https://img.shields.io/github/stars/appergb/openless?style=flat-square&color=805ad5" />
+</p>
+
+---
+
+OpenLess 是一个原生 macOS 语音输入应用，对标 [Wispr Flow](https://wisprflow.ai)、[Talk (Talktastic)](https://talktastic.com)、[Lazy](https://heylazy.com)、Superwhisper 等商业语音输入工具的 **完全开源** 替代品。
 
 把光标放在 ChatGPT、Claude、Cursor、Notion、邮件、聊天框任意输入框里，按一次全局快捷键说话——OpenLess 会录音、转写、按你选的模式润色，把结果直接插入光标位置。插入失败时会自动复制到剪贴板，尽量保证「你说过的话不丢」。
+
+不像那些只把语音转成「逐字稿」的输入法，OpenLess 的核心模式是 **AI prompt 模式**：你只管乱讲，它自动补上结构、列出约束、整理出有上下文的 prompt，复制粘贴就能直接喂给 ChatGPT / Claude / Cursor。
+
+## 一个具体的例子
+
+按住快捷键，对着 OpenLess 说：
+
+> 嗯…就是…我想让那个 ChatGPT 帮我写个 SQL，从 orders 表里查上个月的订单，按客户分组，金额倒序，要前十个吧
+
+松开快捷键，一秒后你的输入框里出现的是：
+
+```text
+请帮我写一段 SQL，要求如下：
+
+- 从 `orders` 表查询上个月的订单。
+- 按客户分组。
+- 按金额倒序排序。
+- 只返回前 10 条。
+```
+
+不需要修改，直接 Enter 就能问 GPT。这就是 OpenLess 想做的事：**让你用嘴写 prompt，比用键盘还快还清楚。**
 
 ## 为什么开源 OpenLess
 

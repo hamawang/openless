@@ -1,12 +1,52 @@
-# OpenLess
+<p align="center">
+  <img src="Resources/AppIcon.png" alt="OpenLess" width="160" />
+</p>
 
-> [中文](README.md) · English
+<h1 align="center">OpenLess</h1>
 
-**Open-source voice input for the AI era — turn what you say into a usable AI prompt.**
+<p align="center">
+  <strong>Open-source macOS voice input for the AI era.</strong><br/>
+  Press a hotkey, speak, get a usable AI prompt at your cursor.
+</p>
 
-OpenLess is a native macOS voice-input app, an **open-source** alternative to commercial tools like [Wispr Flow](https://wisprflow.ai), [Talk (Talktastic)](https://talktastic.com), [Lazy](https://heylazy.com), and Superwhisper.
+<p align="center">
+  <a href="README.md">中文</a> · <a href="README.en.md">English</a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/appergb/openless/releases/latest"><img alt="release" src="https://img.shields.io/github/v/release/appergb/openless?style=flat-square&color=2c5282" /></a>
+  <a href="https://github.com/appergb/openless/blob/main/LICENSE"><img alt="license" src="https://img.shields.io/github/license/appergb/openless?style=flat-square&color=2f855a" /></a>
+  <img alt="macOS" src="https://img.shields.io/badge/macOS-15%2B-1f425f?style=flat-square" />
+  <img alt="Swift" src="https://img.shields.io/badge/Swift-5.9-orange?style=flat-square" />
+  <img alt="Stars" src="https://img.shields.io/github/stars/appergb/openless?style=flat-square&color=805ad5" />
+</p>
+
+---
+
+OpenLess is a native macOS voice-input app — a **fully open-source** alternative to commercial tools like [Wispr Flow](https://wisprflow.ai), [Talk (Talktastic)](https://talktastic.com), [Lazy](https://heylazy.com), and Superwhisper.
 
 Put your cursor in any text field — ChatGPT, Claude, Cursor, Notion, an email draft, a chat box — press one global hotkey and talk. OpenLess records, transcribes, polishes the text in the mode you picked, and inserts the result at the cursor. If insertion is blocked it copies to the clipboard, so the words you spoke don't get lost.
+
+Unlike voice typing tools that just dump a word-for-word transcript, OpenLess's headline mode is **AI-prompt mode**: you ramble, it adds structure, lists constraints, and produces a context-rich prompt you can paste straight into ChatGPT / Claude / Cursor.
+
+## A concrete example
+
+Hold the hotkey, say to OpenLess:
+
+> uh… so… I want ChatGPT to write me a SQL query, from the orders table get last month's orders, group by customer, sort by amount desc, top ten
+
+Release the hotkey. A second later your input box reads:
+
+```text
+Please write a SQL query that:
+
+- Pulls orders from last month from the `orders` table.
+- Groups by customer.
+- Sorts by total amount, descending.
+- Returns the top 10 rows only.
+```
+
+No edits needed. Hit Enter and ask GPT. That's the whole pitch: **write prompts with your mouth, faster and cleaner than typing them.**
 
 ## Why OpenLess is open source
 
