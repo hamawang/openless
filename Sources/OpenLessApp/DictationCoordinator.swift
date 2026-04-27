@@ -88,8 +88,20 @@ final class DictationCoordinator {
         }
     }
 
+    func openHome() {
+        settings.show(tab: .home)
+    }
+
+    func openHistory() {
+        settings.show(tab: .history)
+    }
+
+    func openDictionary() {
+        settings.show(tab: .dictionary)
+    }
+
     func openSettings() {
-        settings.show()
+        settings.show(tab: .settings)
     }
 
     func toggleDictationFromMenu() {

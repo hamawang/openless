@@ -25,6 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         coordinator.bootstrap()
         self.coordinator = coordinator
         self.menuBar = menuBar
+        coordinator.openHome()
         runLaunchActions(coordinator: coordinator)
     }
 
@@ -50,6 +51,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        coordinator?.openHome()
+        return true
     }
 
     private func runLaunchActions(coordinator: DictationCoordinator) {

@@ -4,21 +4,23 @@ import SwiftUI
 @MainActor
 final class SettingsWindowController {
     private var window: NSWindow?
+    private let navigation = SettingsNavigationModel()
 
-    func show() {
+    func show(tab: OpenLessMainTab = .home) {
+        navigation.selection = tab
         if let window = window {
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             return
         }
-        let hosting = NSHostingController(rootView: SettingsView())
+        let hosting = NSHostingController(rootView: SettingsView(navigation: navigation))
         let win = NSWindow(contentViewController: hosting)
-        win.title = "OpenLess 设置"
+        win.title = "OpenLess"
         win.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
         win.titlebarAppearsTransparent = false
         win.toolbarStyle = .unified
-        win.setContentSize(NSSize(width: 760, height: 520))
-        win.contentMinSize = NSSize(width: 720, height: 480)
+        win.setContentSize(NSSize(width: 1040, height: 700))
+        win.contentMinSize = NSSize(width: 960, height: 640)
         win.tabbingMode = .disallowed
         win.center()
         win.isReleasedWhenClosed = false

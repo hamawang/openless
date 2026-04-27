@@ -62,6 +62,18 @@ final class MenuBarController {
 
         menu.addItem(.separator())
 
+        let home = NSMenuItem(title: "打开首页…", action: #selector(MenuActions.openHome), keyEquivalent: "")
+        home.target = actions
+        menu.addItem(home)
+
+        let history = NSMenuItem(title: "打开历史记录…", action: #selector(MenuActions.openHistory), keyEquivalent: "")
+        history.target = actions
+        menu.addItem(history)
+
+        let dictionary = NSMenuItem(title: "打开词典…", action: #selector(MenuActions.openDictionary), keyEquivalent: "")
+        dictionary.target = actions
+        menu.addItem(dictionary)
+
         let settings = NSMenuItem(title: "打开设置…", action: #selector(MenuActions.openSettings), keyEquivalent: ",")
         settings.target = actions
         menu.addItem(settings)
@@ -101,6 +113,18 @@ private final class MenuActions: NSObject {
 
     @objc func openSettings() {
         coordinator?.openSettings()
+    }
+
+    @objc func openHome() {
+        coordinator?.openHome()
+    }
+
+    @objc func openHistory() {
+        coordinator?.openHistory()
+    }
+
+    @objc func openDictionary() {
+        coordinator?.openDictionary()
     }
 
     @objc func toggleDictation() {

@@ -7,65 +7,123 @@ import OpenLessRecorder
 import OpenLessASR
 import OpenLessPolish
 
-struct SettingsView: View {
-    @State private var selection: Tab = .overview
+enum OpenLessMainTab: String, CaseIterable, Identifiable {
+    case home
+    case history
+    case dictionary
+    case settings
 
-    enum Tab: String, CaseIterable, Identifiable {
-        case overview, insights, dictionary, credentials, hotkey, modes, history, privacy
-        var id: String { rawValue }
+    var id: String { rawValue }
 
-        var title: String {
-            switch self {
-            case .overview: return "概览"
-            case .insights: return "效果"
-            case .dictionary: return "词典"
-            case .credentials: return "凭据"
-            case .hotkey: return "快捷键"
-            case .modes: return "模式"
-            case .history: return "历史"
-            case .privacy: return "隐私"
-            }
-        }
-
-        var symbol: String {
-            switch self {
-            case .overview: return "checklist"
-            case .insights: return "chart.line.uptrend.xyaxis"
-            case .dictionary: return "text.book.closed"
-            case .credentials: return "key"
-            case .hotkey: return "keyboard"
-            case .modes: return "text.badge.checkmark"
-            case .history: return "clock"
-            case .privacy: return "lock.shield"
-            }
+    var title: String {
+        switch self {
+        case .home: return "首页"
+        case .history: return "历史记录"
+        case .dictionary: return "词典"
+        case .settings: return "设置"
         }
     }
 
+    var symbol: String {
+        switch self {
+        case .home: return "chart.line.uptrend.xyaxis"
+        case .history: return "clock"
+        case .dictionary: return "text.book.closed"
+        case .settings: return "gearshape"
+        }
+    }
+}
+
+@MainActor
+final class SettingsNavigationModel: ObservableObject {
+    @Published var selection: OpenLessMainTab
+
+    init(selection: OpenLessMainTab = .home) {
+        self.selection = selection
+    }
+}
+
+struct SettingsView: View {
+    @ObservedObject private var navigation: SettingsNavigationModel
+
+    init(navigation: SettingsNavigationModel) {
+        self.navigation = navigation
+    }
+
     var body: some View {
-        NavigationSplitView {
-            List(Tab.allCases, selection: $selection) { tab in
-                Label(tab.title, systemImage: tab.symbol).tag(tab)
-                    .padding(.vertical, 3)
-            }
-            .listStyle(.sidebar)
-            .navigationSplitViewColumnWidth(min: 196, ideal: 220)
-        } detail: {
+        HStack(spacing: 0) {
+            FixedSidebar(selection: $navigation.selection)
+            Divider()
             Group {
-                switch selection {
-                case .overview: OverviewTab()
-                case .insights: InsightsTab()
-                case .dictionary: DictionaryTab()
-                case .credentials: CredentialsTab()
-                case .hotkey: HotkeyTab()
-                case .modes: ModesTab()
+                switch navigation.selection {
+                case .home: HomeTab()
                 case .history: HistoryTab()
-                case .privacy: PrivacyTab()
+                case .dictionary: DictionaryTab()
+                case .settings: SettingsHubTab()
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
-        .navigationSplitViewStyle(.balanced)
-        .frame(minWidth: 940, minHeight: 660)
+        .frame(minWidth: 1040, minHeight: 700)
+    }
+}
+
+private struct FixedSidebar: View {
+    @Binding var selection: OpenLessMainTab
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("OpenLess")
+                    .font(.system(size: 24, weight: .semibold))
+                Text("自然说话，完美书写")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 18)
+            .padding(.top, 24)
+
+            VStack(spacing: 6) {
+                ForEach(OpenLessMainTab.allCases) { tab in
+                    Button {
+                        selection = tab
+                    } label: {
+                        HStack(spacing: 11) {
+                            Image(systemName: tab.symbol)
+                                .symbolRenderingMode(.hierarchical)
+                                .frame(width: 22)
+                            Text(tab.title)
+                                .font(.system(size: 14, weight: selection == tab ? .semibold : .regular))
+                            Spacer()
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(
+                            selection == tab ? Color.accentColor.opacity(0.16) : Color.clear,
+                            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        )
+                        .foregroundStyle(selection == tab ? .primary : .secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help(tab.title)
+                }
+            }
+            .padding(.horizontal, 12)
+
+            Spacer()
+
+            VStack(alignment: .leading, spacing: 7) {
+                Label("右 Option 开始录音", systemImage: "keyboard")
+                Label("Esc 取消", systemImage: "escape")
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 18)
+            .padding(.bottom, 20)
+        }
+        .frame(width: 224)
+        .background(.regularMaterial)
     }
 }
 
@@ -206,6 +264,15 @@ private func isFilled(_ value: String?) -> Bool {
     return !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
 }
 
+private func polishModeHint(_ mode: PolishMode) -> String {
+    switch mode {
+    case .raw: return "尽量忠实转写，只做基础标点和必要分句。"
+    case .light: return "去掉明显口癖和重复，尽量保留原句式和语气。"
+    case .structured: return "整理句子、段落和列表，适合 prompt 与笔记。"
+    case .formal: return "适合邮件、工作沟通和正式文档。"
+    }
+}
+
 private extension View {
     func glassPanel(cornerRadius: CGFloat) -> some View {
         modifier(GlassPanelModifier(cornerRadius: cornerRadius))
@@ -282,9 +349,9 @@ private struct OverviewTab: View {
     }
 }
 
-// MARK: - Insights
+// MARK: - Home
 
-private struct InsightsTab: View {
+private struct HomeTab: View {
     @State private var sessions: [DictationSession] = []
     @State private var dictionaryEntries: [DictionaryEntry] = []
     private let history = HistoryStore()
@@ -292,15 +359,15 @@ private struct InsightsTab: View {
 
     var body: some View {
         SettingsPage(
-            title: "自然说话，完美书写",
-            subtitle: "用实际输入记录展示口述速度、节省时间、词典建议和个人词汇积累。"
+            title: "首页",
+            subtitle: "用个人输入记录展示口述时长、总字数、平均每分钟字数和节省时间。"
         ) {
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 14), count: 2), spacing: 14) {
-                MetricTile(title: "累计口述", value: formattedDuration(totalSpeakingSeconds), symbol: "waveform")
+                MetricTile(title: "口述时长", value: formattedDuration(totalSpeakingSeconds), symbol: "waveform")
+                MetricTile(title: "总字数", value: "\(totalCharacters) 字", symbol: "number")
+                MetricTile(title: "平均每分钟", value: "\(Int(spokenCharsPerMinute.rounded())) 字", symbol: "speedometer")
                 MetricTile(title: "估算节省", value: formattedDuration(savedTypingSeconds), symbol: "keyboard.badge.clock")
-                MetricTile(title: "平均口述", value: "\(Int(spokenCharsPerMinute.rounded())) 字/分钟", symbol: "speedometer")
                 MetricTile(title: "速度提升", value: String(format: "%.1fx", speedLift), symbol: "bolt.fill")
-                MetricTile(title: "词典参与", value: "\(dictionaryUsageCount) 次", symbol: "text.badge.checkmark")
                 MetricTile(title: "启用词条", value: "\(enabledDictionaryCount) 个", symbol: "text.book.closed")
             }
 
@@ -443,11 +510,8 @@ private struct MetricTile: View {
 
 private struct DictionaryTab: View {
     @State private var entries: [DictionaryEntry] = []
-    @State private var selectedID: UUID?
-    @State private var phrase = ""
-    @State private var category: DictionaryEntryCategory = .aiTool
-    @State private var notes = ""
-    @State private var enabled = true
+    @State private var editingEntry: DictionaryEntry?
+    @State private var isShowingEditor = false
     @State private var saved = false
     private let store = DictionaryStore()
 
@@ -457,68 +521,35 @@ private struct DictionaryTab: View {
             subtitle: "把 Claude、OpenLess、内部项目名等正确词放进词典。ASR 会优先识别；后期模型会根据整句语义自动判断是否需要修正。"
         ) {
             GlassSection(title: "词条", symbol: "text.book.closed") {
-                HStack(alignment: .top, spacing: 18) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        if entries.isEmpty {
-                            ContentUnavailableView("还没有词条", systemImage: "text.book.closed", description: Text("先添加一个 Claude 示例。ASR 会优先识别 Claude；后期模型会根据语义判断 Cloud 是否应为 Claude。"))
-                                .frame(maxWidth: .infinity, minHeight: 230)
-                        } else {
-                            ScrollView {
-                                LazyVStack(alignment: .leading, spacing: 8) {
-                                    ForEach(entries) { entry in
-                                        DictionaryRow(entry: entry, selected: selectedID == entry.id)
-                                            .onTapGesture { select(entry) }
-                                    }
-                                }
-                            }
-                            .frame(minHeight: 260, maxHeight: 330)
-                        }
-
-                        HStack {
-                            Button("Claude 示例") { addClaudeExample() }
-                            Button("新建") { clearForm() }
-                        }
-                        .buttonStyle(.bordered)
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Text("正确词会同时参与 ASR 热词和后期语义判断。")
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Claude 示例") { addClaudeExample() }
+                        Button("新建") { beginCreate() }
+                            .buttonStyle(.borderedProminent)
                     }
-                    .frame(width: 310)
 
-                    VStack(alignment: .leading, spacing: 12) {
-                        SettingsRow(title: "标准词") {
-                            TextField("Claude", text: $phrase)
-                                .textFieldStyle(.roundedBorder)
-                        }
-                        SettingsRow(title: "分类") {
-                            Picker("分类", selection: $category) {
-                                ForEach(DictionaryEntryCategory.allCases, id: \.self) { item in
-                                    Text(item.displayName).tag(item)
+                    if entries.isEmpty {
+                        ContentUnavailableView("还没有词条", systemImage: "text.book.closed", description: Text("先添加一个 Claude 示例。ASR 会优先识别 Claude；后期模型会根据语义判断 Cloud 是否应为 Claude。"))
+                            .frame(maxWidth: .infinity, minHeight: 260)
+                    } else {
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 8) {
+                                ForEach(entries) { entry in
+                                    DictionaryRow(entry: entry)
+                                        .contentShape(Rectangle())
+                                        .onTapGesture { beginEdit(entry) }
                                 }
                             }
-                            .labelsHidden()
-                            .pickerStyle(.menu)
-                            .frame(width: 180, alignment: .leading)
                         }
-                        SettingsRow(title: "启用") {
-                            Toggle("用于 ASR 热词和后期语义判断", isOn: $enabled)
-                                .toggleStyle(.checkbox)
-                        }
-                        SettingsRow(title: "备注") {
-                            TextField("例如：AI 产品名，模型可按语义判断是否需要修正", text: $notes, axis: .vertical)
-                                .lineLimit(2...5)
-                                .textFieldStyle(.roundedBorder)
-                        }
+                        .frame(minHeight: 320, maxHeight: 430)
+                    }
 
-                        PrimaryActionRow {
-                            Button("删除") { deleteSelected() }
-                                .disabled(selectedID == nil)
-                            Button("保存词条") { saveEntry() }
-                                .buttonStyle(.borderedProminent)
-                                .keyboardShortcut(.defaultAction)
-                                .disabled(phrase.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                            if saved {
-                                Label("已保存", systemImage: "checkmark.circle.fill")
-                                    .foregroundStyle(.green)
-                            }
-                        }
+                    if saved {
+                        Label("已保存", systemImage: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
                     }
                 }
             }
@@ -532,6 +563,19 @@ private struct DictionaryTab: View {
             }
         }
         .onAppear { reload() }
+        .sheet(isPresented: $isShowingEditor) {
+            DictionaryEditorSheet(entry: editingEntry) { entry in
+                store.upsert(entry)
+                NotificationCenter.default.post(name: .openLessDictionaryChanged, object: nil)
+                saved = true
+                reload()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) { saved = false }
+            } onDelete: { id in
+                store.delete(id: id)
+                NotificationCenter.default.post(name: .openLessDictionaryChanged, object: nil)
+                reload()
+            }
+        }
     }
 
     private func dictionaryStep(_ title: String, _ body: String) -> some View {
@@ -544,65 +588,36 @@ private struct DictionaryTab: View {
 
     private func reload() {
         entries = store.all()
-        if let selectedID, let selected = entries.first(where: { $0.id == selectedID }) {
-            select(selected)
-        }
     }
 
-    private func select(_ entry: DictionaryEntry) {
-        selectedID = entry.id
-        phrase = entry.phrase
-        category = entry.category
-        notes = entry.notes
-        enabled = entry.enabled
+    private func beginCreate() {
+        editingEntry = nil
+        isShowingEditor = true
     }
 
-    private func clearForm() {
-        selectedID = nil
-        phrase = ""
-        category = .aiTool
-        notes = ""
-        enabled = true
+    private func beginEdit(_ entry: DictionaryEntry) {
+        editingEntry = entry
+        isShowingEditor = true
     }
 
-    private func saveEntry() {
+    private func addClaudeExample() {
         let entry = DictionaryEntry(
-            id: selectedID ?? UUID(),
-            phrase: phrase,
-            category: category,
-            notes: notes,
-            enabled: enabled,
-            source: selectedID.flatMap { id in entries.first(where: { $0.id == id })?.source } ?? .manual
+            phrase: "Claude",
+            category: .aiTool,
+            notes: "AI 产品名；后期模型会根据整句语义判断是否需要把误识别内容修正为 Claude。",
+            enabled: true,
+            source: .manual
         )
         store.upsert(entry)
         NotificationCenter.default.post(name: .openLessDictionaryChanged, object: nil)
         saved = true
         reload()
-        selectedID = entry.id
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) { saved = false }
-    }
-
-    private func deleteSelected() {
-        guard let selectedID else { return }
-        store.delete(id: selectedID)
-        NotificationCenter.default.post(name: .openLessDictionaryChanged, object: nil)
-        clearForm()
-        reload()
-    }
-
-    private func addClaudeExample() {
-        phrase = "Claude"
-        category = .aiTool
-        notes = "AI 产品名；后期模型会根据整句语义判断是否需要把误识别内容修正为 Claude。"
-        enabled = true
-        selectedID = nil
-        saveEntry()
     }
 }
 
 private struct DictionaryRow: View {
     let entry: DictionaryEntry
-    let selected: Bool
 
     var body: some View {
         HStack(spacing: 10) {
@@ -621,10 +636,274 @@ private struct DictionaryRow: View {
                 .foregroundStyle(.secondary)
             }
             Spacer()
+            Image(systemName: "chevron.right")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 11)
+        .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+}
+
+private struct DictionaryEditorSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let entry: DictionaryEntry?
+    let onSave: (DictionaryEntry) -> Void
+    let onDelete: (UUID) -> Void
+    @State private var phrase: String
+    @State private var category: DictionaryEntryCategory
+    @State private var notes: String
+    @State private var enabled: Bool
+
+    init(
+        entry: DictionaryEntry?,
+        onSave: @escaping (DictionaryEntry) -> Void,
+        onDelete: @escaping (UUID) -> Void
+    ) {
+        self.entry = entry
+        self.onSave = onSave
+        self.onDelete = onDelete
+        _phrase = State(initialValue: entry?.phrase ?? "")
+        _category = State(initialValue: entry?.category ?? .aiTool)
+        _notes = State(initialValue: entry?.notes ?? "")
+        _enabled = State(initialValue: entry?.enabled ?? true)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(entry == nil ? "新建词条" : "编辑词条")
+                    .font(.system(size: 24, weight: .semibold))
+                Text("只添加正确词。易错词暂时不需要手动维护，交给 ASR 热词和后期模型按语义判断。")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            VStack(spacing: 0) {
+                SettingsRow(title: "标准词") {
+                    TextField("Claude", text: $phrase)
+                        .textFieldStyle(.roundedBorder)
+                }
+                DividerLine()
+                SettingsRow(title: "分类") {
+                    Picker("分类", selection: $category) {
+                        ForEach(DictionaryEntryCategory.allCases, id: \.self) { item in
+                            Text(item.displayName).tag(item)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(width: 180, alignment: .leading)
+                }
+                DividerLine()
+                SettingsRow(title: "启用") {
+                    Toggle("用于 ASR 热词和后期语义判断", isOn: $enabled)
+                        .toggleStyle(.checkbox)
+                }
+                DividerLine()
+                SettingsRow(title: "备注") {
+                    TextField("例如：AI 产品名，模型可按语义判断是否需要修正", text: $notes, axis: .vertical)
+                        .lineLimit(2...5)
+                        .textFieldStyle(.roundedBorder)
+                }
+            }
+            .glassPanel(cornerRadius: 20)
+
+            HStack {
+                if let entry {
+                    Button("删除") {
+                        onDelete(entry.id)
+                        dismiss()
+                    }
+                    .foregroundStyle(.red)
+                }
+                Spacer()
+                Button("取消") { dismiss() }
+                Button("保存") {
+                    let trimmed = phrase.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !trimmed.isEmpty else { return }
+                    onSave(DictionaryEntry(
+                        id: entry?.id ?? UUID(),
+                        phrase: trimmed,
+                        category: category,
+                        notes: notes,
+                        enabled: enabled,
+                        source: entry?.source ?? .manual,
+                        createdAt: entry?.createdAt ?? Date()
+                    ))
+                    dismiss()
+                }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.defaultAction)
+                .disabled(phrase.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(26)
+        .frame(width: 560)
+    }
+}
+
+// MARK: - Settings Hub
+
+private struct SettingsHubTab: View {
+    @State private var volcAppKey = ""
+    @State private var volcAccessKey = ""
+    @State private var volcResourceId = VolcengineCredentials.defaultResourceId
+    @State private var arkApiKey = ""
+    @State private var arkModelId = ArkCredentials.defaultModelId
+    @State private var arkEndpoint = ArkCredentials.defaultEndpoint.absoluteString
+    @State private var trigger: HotkeyBinding.Trigger = UserPreferences.shared.hotkeyTrigger
+    @State private var mode: PolishMode = UserPreferences.shared.polishMode
+    @State private var hasAccessibility = false
+    @State private var hasMicrophone = false
+    @State private var saved = false
+
+    var body: some View {
+        SettingsPage(
+            title: "设置",
+            subtitle: "凭据、快捷键、输出模式和隐私控制统一放在这里。"
+        ) {
+            GlassSection(title: "运行状态", symbol: "checkmark.seal") {
+                StatusLine(title: "火山引擎 ASR", detail: hasVolcCredentials ? "已配置" : "缺少 App ID 或 Access Token", ok: hasVolcCredentials)
+                DividerLine()
+                StatusLine(title: "Ark 润色", detail: hasArkCredentials ? "已配置" : "未配置，识别后会直接插入原文", ok: hasArkCredentials)
+                DividerLine()
+                StatusLine(title: "辅助功能", detail: hasAccessibility ? "已授权" : "未授权", ok: hasAccessibility)
+                DividerLine()
+                StatusLine(title: "麦克风", detail: hasMicrophone ? "已授权" : "未授权", ok: hasMicrophone)
+            }
+
+            GlassSection(title: "凭据", symbol: "key") {
+                SettingsRow(title: "火山 APP ID") {
+                    PasteableCredentialField(placeholder: "X-Api-App-Key", secure: false, text: $volcAppKey)
+                }
+                DividerLine()
+                SettingsRow(title: "火山 Token") {
+                    PasteableCredentialField(placeholder: "X-Api-Access-Key", secure: true, text: $volcAccessKey)
+                }
+                DividerLine()
+                SettingsRow(title: "Resource ID") {
+                    PasteableCredentialField(placeholder: "X-Api-Resource-Id", secure: false, text: $volcResourceId)
+                }
+                DividerLine()
+                SettingsRow(title: "Ark API Key") {
+                    PasteableCredentialField(placeholder: "Bearer Token", secure: true, text: $arkApiKey)
+                }
+                DividerLine()
+                SettingsRow(title: "Ark Model") {
+                    PasteableCredentialField(placeholder: "Model ID", secure: false, text: $arkModelId)
+                }
+                DividerLine()
+                SettingsRow(title: "Ark Endpoint") {
+                    PasteableCredentialField(placeholder: "Endpoint", secure: false, text: $arkEndpoint)
+                }
+            }
+
+            GlassSection(title: "输入与输出", symbol: "slider.horizontal.3") {
+                SettingsRow(title: "录音快捷键") {
+                    Picker("触发键", selection: $trigger) {
+                        ForEach(HotkeyBinding.Trigger.allCases, id: \.self) { item in
+                            Text(item.displayName).tag(item)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(width: 180, alignment: .leading)
+                    .onChange(of: trigger) { _, newValue in
+                        UserPreferences.shared.hotkeyTrigger = newValue
+                        NotificationCenter.default.post(name: .openLessHotkeyChanged, object: nil)
+                    }
+                }
+                DividerLine()
+                SettingsRow(title: "默认模式") {
+                    Picker("模式", selection: $mode) {
+                        ForEach(PolishMode.allCases, id: \.self) { item in
+                            Text(item.displayName).tag(item)
+                        }
+                    }
+                    .pickerStyle(.radioGroup)
+                    .onChange(of: mode) { _, newValue in
+                        UserPreferences.shared.polishMode = newValue
+                    }
+                }
+                DividerLine()
+                Text(polishModeHint(mode))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 9)
+            }
+
+            GlassSection(title: "隐私", symbol: "lock.shield") {
+                privacyRow("音频默认不保存到磁盘", symbol: "mic.slash")
+                DividerLine()
+                privacyRow("API Key 仅存本机 0600 权限文件", symbol: "key")
+                DividerLine()
+                privacyRow("历史只保存原始转写和最终文本", symbol: "doc.text")
+                DividerLine()
+                privacyRow("使用云端 ASR 时，音频会发送给火山引擎；开启 Ark 润色时，转写文本会发送给 Ark", symbol: "icloud")
+            }
+
+            PrimaryActionRow {
+                Button("保存凭据") { saveCredentials() }
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
+                if saved {
+                    Label("已保存", systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                }
+            }
+        }
+        .onAppear { load() }
+    }
+
+    private var hasVolcCredentials: Bool {
+        isFilled(volcAppKey) && isFilled(volcAccessKey)
+    }
+
+    private var hasArkCredentials: Bool {
+        isFilled(arkApiKey)
+    }
+
+    private func load() {
+        let v = CredentialsVault.shared
+        volcAppKey = v.get(CredentialAccount.volcengineAppKey) ?? ""
+        volcAccessKey = v.get(CredentialAccount.volcengineAccessKey) ?? ""
+        volcResourceId = v.get(CredentialAccount.volcengineResourceId) ?? VolcengineCredentials.defaultResourceId
+        arkApiKey = v.get(CredentialAccount.arkApiKey) ?? ""
+        arkModelId = v.get(CredentialAccount.arkModelId) ?? ArkCredentials.defaultModelId
+        arkEndpoint = v.get(CredentialAccount.arkEndpoint) ?? ArkCredentials.defaultEndpoint.absoluteString
+        trigger = UserPreferences.shared.hotkeyTrigger
+        mode = UserPreferences.shared.polishMode
+        hasAccessibility = AccessibilityPermission.isGranted()
+        hasMicrophone = MicrophonePermission.isGranted()
+    }
+
+    private func saveCredentials() {
+        let v = CredentialsVault.shared
+        try? v.set(volcAppKey.trimmingCharacters(in: .whitespacesAndNewlines), for: CredentialAccount.volcengineAppKey)
+        try? v.set(volcAccessKey.trimmingCharacters(in: .whitespacesAndNewlines), for: CredentialAccount.volcengineAccessKey)
+        try? v.set(volcResourceId.trimmingCharacters(in: .whitespacesAndNewlines), for: CredentialAccount.volcengineResourceId)
+        try? v.set(arkApiKey.trimmingCharacters(in: .whitespacesAndNewlines), for: CredentialAccount.arkApiKey)
+        try? v.set(arkModelId.trimmingCharacters(in: .whitespacesAndNewlines), for: CredentialAccount.arkModelId)
+        try? v.set(arkEndpoint.trimmingCharacters(in: .whitespacesAndNewlines), for: CredentialAccount.arkEndpoint)
+        NotificationCenter.default.post(name: .openLessCredentialsChanged, object: nil)
+        saved = true
+        load()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { saved = false }
+    }
+
+    private func privacyRow(_ text: String, symbol: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: symbol)
+                .foregroundStyle(.secondary)
+                .frame(width: 20)
+            Text(text)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer()
+        }
         .padding(.vertical, 9)
-        .background(selected ? Color.accentColor.opacity(0.16) : Color.clear, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 }
 
