@@ -4,10 +4,11 @@
         <title>OpenLess</title>
         <link>https://raw.githubusercontent.com/appergb/openless/main/appcast.xml</link>
         <description>OpenLess update feed</description>
+        <language>zh-CN</language>
 
         <item>
             <title>OpenLess 1.0.02</title>
-            <pubDate>一, 27  4月 2026 11:02:01 +0000</pubDate>
+            <pubDate>Mon, 27 Apr 2026 11:02:01 +0000</pubDate>
             <sparkle:version>A1004</sparkle:version>
             <sparkle:shortVersionString>1.0.02</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
@@ -47,6 +48,5 @@ xattr -dr com.apple.quarantine /Applications/OpenLess.app
                 type="application/octet-stream"
                 sparkle:edSignature="PVtUgUO28Re0Q80VbF3r6NCamZMgW+X7DANqwOD97yiT2rly9J2MmPt0xnaRj6fWieKsgHUZZ94C8RalkwVQAA==" />
         </item>
-        <language>zh-CN</language>
     </channel>
 </rss>

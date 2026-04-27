@@ -83,7 +83,7 @@ else
   NOTES_HTML="<![CDATA[<p>OpenLess ${VERSION}</p>]]>"
 fi
 
-PUB_DATE=$(/bin/date -u +"%a, %d %b %Y %H:%M:%S +0000")
+PUB_DATE=$(LC_ALL=C /bin/date -u +"%a, %d %b %Y %H:%M:%S +0000")
 DOWNLOAD_URL="https://github.com/appergb/openless/releases/download/v${VERSION}/${ZIP_NAME}"
 
 # 7. 在 appcast.xml 的标记行后插入新 <item>
