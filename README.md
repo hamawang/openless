@@ -5,12 +5,12 @@
 <h1 align="center">OpenLess</h1>
 
 <p align="center">
-  <strong>面向 AI 时代的开源 macOS 语音输入。</strong><br/>
-  按一次快捷键说话，自动整理成可直接用的 AI prompt，落到当前光标。
+  <strong>Open-source macOS voice input for the AI era.</strong><br/>
+  Press a hotkey, speak, get a usable AI prompt at your cursor.
 </p>
 
 <p align="center">
-  <a href="README.md">中文</a> · <a href="README.en.md">English</a>
+  <a href="README.md">English</a> · <a href="README.zh.md">中文</a>
 </p>
 
 <p align="center">
@@ -23,209 +23,206 @@
 
 ---
 
-OpenLess 是一个原生 macOS 语音输入应用，对标 [Wispr Flow](https://wisprflow.ai)、[Talk (Talktastic)](https://talktastic.com)、[Lazy](https://heylazy.com)、Superwhisper 等商业语音输入工具的 **完全开源** 替代品。
+OpenLess is a native macOS voice-input app — a **fully open-source** alternative to commercial tools like [Typeless](https://www.typeless.com/), [Wispr Flow](https://wisprflow.ai), [Lazy](https://heylazy.com), and Superwhisper.
 
-把光标放在 ChatGPT、Claude、Cursor、Notion、邮件、聊天框任意输入框里，按一次全局快捷键说话——OpenLess 会录音、转写、按你选的模式润色，把结果直接插入光标位置。插入失败时会自动复制到剪贴板，尽量保证「你说过的话不丢」。
+Put your cursor in any text field — ChatGPT, Claude, Cursor, Notion, an email draft, a chat box — press one global hotkey and talk. OpenLess records, transcribes, polishes the text in the mode you picked, and inserts the result at the cursor. If insertion is blocked it copies to the clipboard, so the words you spoke don't get lost.
 
-不像那些只把语音转成「逐字稿」的输入法，OpenLess 的核心模式是 **AI prompt 模式**：你只管乱讲，它自动补上结构、列出约束、整理出有上下文的 prompt，复制粘贴就能直接喂给 ChatGPT / Claude / Cursor。
+Unlike voice typing tools that just dump a word-for-word transcript, OpenLess's headline mode is **AI-prompt mode**: you ramble, it adds structure, lists constraints, and produces a context-rich prompt you can paste straight into ChatGPT / Claude / Cursor.
 
-## 一个具体的例子
+## A concrete example
 
-按住快捷键，对着 OpenLess 说：
+Hold the hotkey, say to OpenLess:
 
-> 嗯…就是…我想让那个 ChatGPT 帮我写个 SQL，从 orders 表里查上个月的订单，按客户分组，金额倒序，要前十个吧
+> uh… so… I want ChatGPT to write me a SQL query, from the orders table get last month's orders, group by customer, sort by amount desc, top ten
 
-松开快捷键，一秒后你的输入框里出现的是：
+Release the hotkey. A second later your input box reads:
 
 ```text
-请帮我写一段 SQL，要求如下：
+Please write a SQL query that:
 
-- 从 `orders` 表查询上个月的订单。
-- 按客户分组。
-- 按金额倒序排序。
-- 只返回前 10 条。
+- Pulls orders from last month from the `orders` table.
+- Groups by customer.
+- Sorts by total amount, descending.
+- Returns the top 10 rows only.
 ```
 
-不需要修改，直接 Enter 就能问 GPT。这就是 OpenLess 想做的事：**让你用嘴写 prompt，比用键盘还快还清楚。**
+No edits needed. Hit Enter and ask GPT. That's the whole pitch: **write prompts with your mouth, faster and cleaner than typing them.**
 
-## 为什么开源 OpenLess
+## Why OpenLess is open source
 
-类似工具大多是商业 SaaS：每月订阅、不能自带模型、转写音频会上传到厂商服务器、词典和习惯沉淀在对方账户里。
+The closest tools are subscription SaaS: monthly bill, no bring-your-own model, your audio uploaded to the vendor, your dictionary and habits living in their account.
 
-OpenLess 想做的是同一类体验，但是：
+OpenLess goes for the same end-user experience but:
 
-- **完全开源、本地优先**。代码在仓库里，所有数据写在你的机器上。
-- **自带云凭据**。火山引擎 ASR + Ark / DeepSeek 兼容 chat-completions，不强绑某家。
-- **专门为 AI prompt 优化**。「清晰结构」模式会把零散口语补成有上下文、有约束、有要求的 prompt，复制粘贴就能直接喂给 ChatGPT / Claude / Cursor。
-- **不会替你回答**。模型只整理你的话，不会把「我们这个应用还有哪些功能没做？」变成一份功能清单——只会补成一句通顺的问题，让你拿去问真正的 AI。
+- **Fully open source, local-first.** Code is in this repo; all your data stays on your machine.
+- **Bring your own cloud credentials.** Volcengine streaming ASR + Ark / DeepSeek-compatible chat-completions. No vendor lock-in.
+- **Tuned for AI prompts.** The "Structured" mode reshapes loose speech into a prompt with context, constraints, and asks — paste straight into ChatGPT, Claude, or Cursor.
+- **Won't answer for you.** The model only cleans up your text. If you say "what features does this app still need?", it returns that as a clean question — it does not hand you a feature list. Ask the real AI for that.
 
-## 适用场景
+## Use cases
 
-- 给 ChatGPT / Claude / Cursor / Gemini 写 prompt：口述一段需求，OpenLess 自动整理成结构化、有细节的 prompt。
-- 写邮件、写需求文档、写微信/Slack 长消息：去口癖、补标点、按段落整理。
-- 写代码注释、commit message、PR 描述：把脑子里的想法直接落到光标位置。
-- 任何「我懒得打字，但又必须输出书面文字」的场景。
+- Writing prompts for ChatGPT / Claude / Cursor / Gemini: dictate a request, OpenLess turns it into a structured, detailed prompt.
+- Drafting emails, specs, long Slack/WeChat messages: removes filler, fixes punctuation, organizes paragraphs.
+- Code comments, commit messages, PR descriptions: dump what's in your head straight to the cursor.
+- Any "I don't want to type but I have to produce written text" situation.
 
-## 项目方向
+## Project direction
 
-OpenLess 只做一件事：**把语音变成可用的书面文字（尤其是 AI prompt），落到当前光标位置。**
+OpenLess does one thing: **turn speech into usable written text (especially AI prompts), at the current cursor.**
 
-- 不做问答、不做任务执行、不做项目分析。
-- 不做对话上下文累积，每次输入都是独立的整理请求。
-- 输入语音 → 转写 → 整理 → 插入当前输入框。失败时复制到剪贴板。
-- 围绕这条主路径完善体验：模式选择、词典、历史、菜单栏、首页报告。
+- It does not answer questions, run tasks, or analyze your project.
+- It does not accumulate conversation context — every dictation is an independent cleanup request.
+- Speech → transcript → cleanup → insert at cursor. Clipboard fallback on failure.
+- Everything else (modes, dictionary, history, menu bar, home report) supports that one path.
 
-## 对标参考
+## Comparison
 
-| 工具 | 形态 | OpenLess 的差异 |
+| Tool | Form | How OpenLess differs |
 | --- | --- | --- |
-| [Wispr Flow](https://wisprflow.ai) | 闭源 macOS / Windows，订阅制 | 开源；自带 ASR + LLM 凭据；专门暴露「AI prompt 整理」模式 |
-| [Talk (Talktastic)](https://talktastic.com) | 闭源 macOS，订阅制 | 开源；不绑厂商，凭据在本机 Keychain |
-| [Lazy](https://heylazy.com) | 闭源笔记/捕获工具 | 不做笔记容器，专做「插入到任意输入框」 |
-| [Superwhisper](https://superwhisper.com) | 闭源 macOS，订阅制 | 开源；目前云端 ASR 优先，本地 ASR 在 roadmap |
+| [Typeless](https://www.typeless.com/) | Closed-source macOS / Windows / iOS, subscription | Open source; explicit AI-prompt mode; bring-your-own ASR + LLM; data and dictionary stay on your machine |
+| [Wispr Flow](https://wisprflow.ai) | Closed-source macOS / Windows, subscription | Open source; bring-your-own ASR + LLM; transparent prompt-handling rules |
+| [Lazy](https://heylazy.com) | Closed-source notes / capture tool | Not a notes container — inserts straight into any input field |
+| [Superwhisper](https://superwhisper.com) | Closed-source macOS, subscription | Open source; cloud ASR today, local ASR on the roadmap |
 
-## 当前状态（v1.0）
+## Status (v1.0)
 
-- 原生 Swift / SwiftUI / AppKit，SwiftPM 项目；macOS 15+。
-- macOS 26+ 使用 Liquid Glass 效果，旧系统回退到系统 material。
-- 默认是切换式录音：按一次开始，再按一次结束；录音中按 `Esc` 取消。
-- 接入火山引擎流式 ASR 和 Ark / DeepSeek 兼容 Chat Completions 进行润色。
-- 4 种输出模式：原文、轻度润色、清晰结构（**AI prompt 模式**）、正式表达。
-- 主窗口按「首页 / 历史记录 / 词典 / 设置」组织；菜单栏常驻；底部有微型状态胶囊。
-- 词典支持作为 ASR 热词注入和润色阶段的语义判断。
+- Native Swift / SwiftUI / AppKit, SwiftPM project; macOS 15+.
+- macOS 26+ uses Liquid Glass; older systems fall back to system materials.
+- Toggle-style recording: press to start, press again to stop. `Esc` cancels.
+- Volcengine streaming ASR + Ark / DeepSeek-compatible chat-completions for polish.
+- 4 output modes: raw, light polish, structured (**AI prompt mode**), formal.
+- Main window: Home / History / Dictionary / Settings. Persistent menu bar. Mini status capsule at the bottom of the screen.
+- Dictionary entries are injected as Volcengine ASR `context.hotwords` and as semantic hints during polish.
 
-## 下载与安装（普通用户）
+## Download & install (end users)
 
-到 [Releases](../../releases) 下载 `OpenLess-1.0.0.zip`，解压得到 `OpenLess.app`，拖到 `应用程序`。
+Grab `OpenLess-1.0.0.zip` from [Releases](../../releases), unzip to get `OpenLess.app`, drag to `/Applications`.
 
-**重要：** 1.0 是开发期 ad-hoc 签名构建（未做 Apple Developer ID 签名和 notarization）。直接打开会被 Gatekeeper 拦下提示“无法验证开发者”。需要在终端中移除隔离属性：
+**Important:** the 1.0 build is ad-hoc signed (no Apple Developer ID + notarization). macOS Gatekeeper will block it with "cannot verify developer". Remove the quarantine attribute once in Terminal:
 
 ```bash
 xattr -dr com.apple.quarantine /Applications/OpenLess.app
 ```
 
-之后就可以双击启动。首次启动需要在 `系统设置 → 隐私与安全`：
+Then double-click to launch. On first launch, in `System Settings → Privacy & Security`:
 
-1. 授予 OpenLess 麦克风权限。
-2. 授予 OpenLess 辅助功能权限。
-3. **退出 OpenLess 并重新打开**（辅助功能授权对全局快捷键生效需要重启进程）。
-4. 从 Dock 打开 OpenLess 首页 → 「设置」 → 填入火山引擎 ASR 和 Ark 凭据。
+1. Grant Microphone access to OpenLess.
+2. Grant Accessibility access to OpenLess.
+3. **Quit OpenLess and reopen it.** Accessibility permission only takes effect for the global hotkey after a process restart.
+4. Open the OpenLess home from the Dock → "Settings" → fill in Volcengine ASR + Ark credentials.
 
-完整的端用户使用步骤见 [USAGE.md](USAGE.md)。
+Full end-user walkthrough: [USAGE.md](USAGE.md) (Chinese; English version coming).
 
-## 从源码构建（开发者）
+## Build from source (developers)
 
 ```bash
-# 库 / 测试构建
+# Library / test build
 swift build
 swift test
 
-# 完整 .app 构建（release，ad-hoc 签名，默认重置 TCC）
+# Full .app build (release, ad-hoc signed, resets TCC by default)
 ./scripts/build-app.sh
 
-# 保留已授予的 TCC 权限
+# Keep existing TCC approvals
 RESET_TCC=0 ./scripts/build-app.sh
 
-# 启动
+# Launch
 open build/OpenLess.app
 
-# 实时日志
+# Tail logs
 tail -f ~/Library/Logs/OpenLess/OpenLess.log
 ```
 
-启动参数（在 `AppDelegate.runLaunchActions` 处理）：
+Launch arguments (handled in `AppDelegate.runLaunchActions`):
 
 ```bash
 open build/OpenLess.app --args --open-settings
 open build/OpenLess.app --args --start-recording
 ```
 
-## 凭据
+## Credentials
 
-凭据保存在本机 Keychain（service = `com.openless.app`）。开发期同时维护一份明文 JSON 兜底，用于在 Keychain 不可用时回退：
+Credentials live in the local Keychain (service = `com.openless.app`). A plaintext JSON file at `~/.openless/credentials.json` (mode 0600, dir 0700) is kept as a dev-mode fallback when Keychain is unavailable.
 
-```text
-~/.openless/credentials.json   # 0600，目录 0700
-```
+The repository contains no API keys, tokens, or private endpoints.
 
-仓库本身不包含任何 API Key、Token 或 Endpoint 之外的私有信息。
+You'll need:
 
-需要配置的字段：
+- **Volcengine streaming ASR**: APP ID, Access Token, Resource ID.
+- **Ark polish**: API Key, Model ID, Endpoint. Ark default endpoint is `https://ark.cn-beijing.volces.com/api/v3/chat/completions`.
 
-- 火山引擎 ASR：APP ID、Access Token、Resource ID。
-- Ark 润色：API Key、Model ID、Endpoint。
+## Prompt-handling principles
 
-## 提示词处理原则
+OpenLess's polish model only reshapes text. It does not answer questions, run tasks, or analyze your project. Each dictation is an independent request, and the prompt explicitly tells the model:
 
-OpenLess 的润色模型只做文本整理，不做问答、不做任务执行、不做项目分析。每次语音输入都会作为独立请求发送，提示词会明确告诉模型：
+- This input is isolated from any prior conversation.
+- The raw transcript is text to clean up, not a question to answer.
+- Even if the input contains a question or a command, do not reply or execute.
+- Output the cleaned text only — no "Here's the cleaned version" preamble.
 
-- 本次输入与历史对话隔离。
-- 原始转写只是待整理文本。
-- 即使原文里有问题或命令，也不要回答或执行。
-- 只输出整理后的正文，不添加“我整理如下”等引导语。
-
-例如用户说：“我们这个应用还有哪些功能没有完成”，正确输出应是：
+For example, if the user says "what features does this app still need", the correct output is:
 
 ```text
-我们这个应用还有哪些功能没有完成？
+What features does this app still need?
 ```
 
-而不是直接替用户列出清单。
+…not a list of missing features.
 
-竞品文本和长期改写样例会按“原始文本 -> 目标整理结果 -> 改写规律”的方式沉淀，后续接入向量数据库后，只检索相似改写样例作为参考，不把样例当作当前对话上下文。规范见 [docs/polish-reference-corpus.md](docs/polish-reference-corpus.md)，示例见 [Examples/polish-reference-examples.sample.jsonl](Examples/polish-reference-examples.sample.jsonl)。
+Long-term reference rewrites are stored as `raw → polished → rule` triples and will be retrieved as similar-example references (never as conversation context) once a vector store is wired in. See [docs/polish-reference-corpus.md](docs/polish-reference-corpus.md) and [Examples/polish-reference-examples.sample.jsonl](Examples/polish-reference-examples.sample.jsonl).
 
-## 词典
+## Dictionary
 
-词典用于处理用户自己的专有名词、产品名、人名和新词。当前支持：
+The dictionary handles your proper nouns, product names, names of people, and new words. Today it supports:
 
-- 手动添加正确词、分类和备注；暂不要求用户维护易错词或上下文点。
-- 将启用词条作为火山 ASR `context.hotwords` 注入，优先在识别阶段识别正确。
-- 将词典包裹后注入后期润色模型，明确告诉模型根据整句语义自动判断：如果 `Cloud` 在当前语境下明显指向 AI 产品 `Claude`，就修正为 `Claude`；如果确实是在说云服务 Cloud，则保留原词。
-- 从历史输出中自动学习类似 `Claude`、`ChatGPT`、`OpenLess` 的候选正确词，后续作为 ASR 热词和后期语义判断候选。
+- Manually add the correct spelling, a category, and notes. You don't need to maintain misspellings or context hints.
+- Enabled entries are sent as Volcengine ASR `context.hotwords` so they're recognized correctly during transcription.
+- Entries are also injected into the polish prompt: the model decides per-sentence whether to substitute. If "Cloud" clearly refers to the AI product `Claude` in context, it gets corrected. If it really means cloud computing, it stays.
+- The app auto-learns candidate corrections like `Claude`, `ChatGPT`, `OpenLess` from your history and offers them up later.
 
-主窗口按「首页 / 历史记录 / 词典 / 设置」组织；词典页点击“新建”会弹出独立编辑窗口，首页会展示口述时长、总字数、平均每分钟字数、估算节省时间和词典参与记录。
+The main window is organized as Home / History / Dictionary / Settings. The Dictionary tab opens a separate editor window when you click "New". The Home tab shows total dictation time, total characters, average chars-per-minute, estimated time saved, and dictionary participation stats.
 
-## 架构概览
+## Architecture
 
-SwiftPM 工作区，1 个可执行 + 8 个库。库与库之间无相互依赖，全部只依赖 `OpenLessCore`，由 `OpenLessApp` 统一在 `DictationCoordinator` 里编排。
+A SwiftPM workspace: 1 executable + 8 libraries. Libraries don't depend on each other — they all depend only on `OpenLessCore`. `OpenLessApp` wires everything together inside `DictationCoordinator`.
 
 ```
 OpenLessCore        // Pure value types: DictationSession, PolishMode, HotkeyBinding,
                     //   AudioConsumer protocol, RawTranscript/FinalText, errors.
 OpenLessHotkey      // CGEventTap-based modifier-key monitor. Requires Accessibility.
-OpenLessRecorder    // AVAudioEngine → 16 kHz mono Int16 PCM, 推送到 AudioConsumer.
-OpenLessASR         // 火山引擎 streaming ASR over WebSocket.
-OpenLessPolish      // Ark / Doubao chat-completions 客户端 + 模式驱动 prompts。
-OpenLessInsertion   // AX focused-element 优先；剪贴板 + Cmd+V 兜底；最后 copy-only。
+OpenLessRecorder    // AVAudioEngine → 16 kHz mono Int16 PCM, pushed to AudioConsumer.
+OpenLessASR         // Volcengine streaming ASR over WebSocket.
+OpenLessPolish      // Ark / Doubao chat-completions client + mode-driven prompts.
+OpenLessInsertion   // AX focused-element first; clipboard + Cmd+V; copy-only fallback.
 OpenLessPersistence // CredentialsVault (Keychain), HistoryStore, DictionaryStore,
-                    //   UserPreferences。
-OpenLessUI          // SwiftUI 胶囊视图 + 状态枚举（不接窗口）。
-OpenLessApp        // AppDelegate, 菜单栏, 设置窗口, 胶囊窗口, DictationCoordinator。
+                    //   UserPreferences.
+OpenLessUI          // SwiftUI capsule view + state enum (no window plumbing).
+OpenLessApp         // AppDelegate, menu bar, settings window, capsule window,
+                    //   DictationCoordinator.
 ```
 
-录音 → 转写 → 润色 → 插入的状态机由 `Sources/OpenLessApp/DictationCoordinator.swift` 单一拥有，详见 [CLAUDE.md](CLAUDE.md)。
+The record → transcribe → polish → insert state machine is owned exclusively by `Sources/OpenLessApp/DictationCoordinator.swift`. See [CLAUDE.md](CLAUDE.md) for details.
 
-## 1.0 之后的规划
+## Roadmap (post-1.0)
 
-下面这些功能在需求文档里有规划，但 1.0 没有发布：
+Planned in the requirements docs but not in the 1.0 release:
 
-- 按住说话模式（hold-to-talk）：当前仅支持切换式。
-- 本地 ASR：当前仅接入火山引擎云端 ASR。
-- 常用片段 Snippets：尚无 UI 和触发逻辑。
-- 历史增强：复制按钮、搜索、重新润色、重新插入。
-- 粘贴上一条快捷键。
-- 多屏定位：胶囊按当前焦点所在屏幕显示。
-- Developer ID 签名 + Notarization + Sparkle 自动更新。
+- Hold-to-talk mode (today only toggle).
+- Local ASR (today only Volcengine cloud).
+- Snippets (no UI / trigger logic yet).
+- History enhancements: copy button, search, re-polish, re-insert.
+- "Paste last result" hotkey.
+- Multi-monitor capsule placement on the focused screen.
+- Developer ID signing + notarization + Sparkle auto-update.
 
-## 维护者：发布前检查
+## Maintainer release checklist
 
-- 确认没有提交 `.build/`、`build/`、`.DS_Store`、`~/.openless/credentials.json` 或临时截图。
-- 保留 `Resources/Brand/openless-app-icon-source.jpg`、`Resources/AppIcon.png`、`Resources/AppIcon.icns`。
-- 运行 `./scripts/build-app.sh`，确认 `build/OpenLess.app` 可启动。
-- 在一台干净 macOS 机器上验证权限引导、快捷键、录音、ASR、润色、插入和剪贴板兜底。
-- 用 `ditto -c -k --keepParent build/OpenLess.app build/OpenLess-<version>.zip` 打包，确保 ad-hoc 签名和扩展属性保留。
-- 正式分发前请完成 Developer ID 签名和 notarization。
+- Confirm `.build/`, `build/`, `.DS_Store`, `~/.openless/credentials.json`, and stray screenshots are not committed.
+- Keep `Resources/Brand/openless-app-icon-source.jpg`, `Resources/AppIcon.png`, `Resources/AppIcon.icns`.
+- Run `./scripts/build-app.sh` and confirm `build/OpenLess.app` launches.
+- Verify on a clean macOS box: permission flow, hotkey, recording, ASR, polish, insertion, clipboard fallback.
+- Package with `ditto -c -k --keepParent build/OpenLess.app build/OpenLess-<version>.zip` so ad-hoc signature and xattrs survive.
+- Do Developer ID signing + notarization before any production distribution.
 
-## 许可
+## License
 
 MIT
