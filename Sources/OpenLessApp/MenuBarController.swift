@@ -10,15 +10,13 @@ final class MenuBarController {
 
     init(coordinator: DictationCoordinator) {
         self.coordinator = coordinator
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = statusItem.button {
-            if let image = NSImage(systemSymbolName: "mic.circle", accessibilityDescription: "OpenLess") {
-                image.isTemplate = true
-                button.image = image
-            } else {
-                button.title = "OL"
-            }
-            button.toolTip = "OpenLess  —  点击菜单选择模式 / 退出"
+            button.image = StatusBarIcon.image()
+            button.imageScaling = .scaleProportionallyDown
+            button.imagePosition = .imageOnly
+            button.toolTip = "OpenLess — 点击菜单选择模式 / 退出"
+            button.setAccessibilityLabel("OpenLess")
         }
         actions = MenuActions(coordinator: coordinator)
         statusItem.menu = buildMenu()

@@ -27,6 +27,7 @@ rm -rf "${APP_DIR}"
 mkdir -p "${BIN_DIR}" "${RES_DIR}"
 cp "${BIN_SRC}" "${BIN_DIR}/${APP_NAME}"
 cp "Resources/AppIcon.icns" "${RES_DIR}/AppIcon.icns"
+cp "Resources/StatusBar/OpenLessStatusIcon.svg" "${RES_DIR}/OpenLessStatusIcon.svg"
 
 cat > "${APP_DIR}/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
