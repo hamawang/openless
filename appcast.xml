@@ -1,0 +1,9 @@
+<?xml version="1.0" standalone="yes"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <channel>
+        <title>OpenLess</title>
+        <link>https://raw.githubusercontent.com/appergb/openless/main/appcast.xml</link>
+        <description>OpenLess update feed</description>
+        <language>zh-CN</language>
+    </channel>
+</rss>
