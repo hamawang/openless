@@ -6,6 +6,41 @@
         <description>OpenLess update feed</description>
 
         <item>
+            <title>OpenLess 1.0.06</title>
+            <pubDate>Tue, 28 Apr 2026 05:36:01 +0000</pubDate>
+            <sparkle:version>B1005</sparkle:version>
+            <sparkle:shortVersionString>1.0.06</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[# OpenLess 1.0.06
+
+build B1005 — 紧急修复设置页更新入口。
+
+## 修复
+
+- **设置里的「检查更新…」按钮无响应**。设置页通过 responder chain 发送 `checkForUpdates:`，但实际的 `UpdaterController` 不是 responder chain 的一员，导致 action 找不到 target。现在由 `AppDelegate` 接住同名 action 并转发给 Sparkle updater。
+- **帮助中心 GitHub 链接 404**。链接已从旧的 `github.com/baiqing/openless` 改为正确的 `github.com/appergb/openless`。
+- **帮助中心链接行布局乱**。右侧改为简洁的「打开」按钮，完整 URL 放到 tooltip。
+- **常见问题 Q/A 太挤**。增加问题和答案之间的间距，提升可读性。
+
+## 安装
+
+**老用户**：什么都不用做。下次启动 OpenLess 会自动检查更新。
+
+**新用户**：到 [Releases](https://github.com/appergb/openless/releases) 下载 zip，解压拖到 `/Applications`，跑一次：
+
+```bash
+xattr -dr com.apple.quarantine /Applications/OpenLess.app
+```
+
+之后双击启动。]]></description>
+            <enclosure
+                url="https://github.com/appergb/openless/releases/download/v1.0.06/OpenLess-1.0.06.zip"
+                length="2799409"
+                type="application/octet-stream"
+                sparkle:edSignature="K3nM1N06l4PGdUcQTIBKcFKs4CZoRjkC2XDMK0Us1Ur/BGpRpR4cAXs6VcUPoUmmeQO/SQ3pyHAjL4pfNK1zBQ==" />
+        </item>
+
+        <item>
             <title>OpenLess 1.0.04</title>
             <pubDate>Tue, 28 Apr 2026 05:20:45 +0000</pubDate>
             <sparkle:version>B1003</sparkle:version>
