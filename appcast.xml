@@ -4,6 +4,61 @@
         <title>OpenLess</title>
         <link>https://raw.githubusercontent.com/appergb/openless/main/appcast.xml</link>
         <description>OpenLess update feed</description>
+
+        <item>
+            <title>OpenLess 1.0.03</title>
+            <pubDate>Tue, 28 Apr 2026 03:16:48 +0000</pubDate>
+            <sparkle:version>A1005</sparkle:version>
+            <sparkle:shortVersionString>1.0.03</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[# OpenLess 1.0.03
+
+整轮 UI 重构 + 词汇表升级 + 自动学词关闭。老用户走自动更新即可。
+
+## 侧边栏
+
+旧 4 项变成 6 项，把臃肿的「设置」拆开：**首页 / 历史记录 / 词汇表 / 风格 / 帮助中心 / 设置**。
+
+- **风格**（原「润色模式」改名）：右上角启用开关 + 4 个模式卡片（忠实转写 / 去口癖 / 结构化 / 正式书面），每张卡有样例文本预览，选中卡顶部一条绿色 stroke。关闭时识别后直接插入原文，不调 Ark。
+- **帮助中心**（新增）：4 步快速上手、快捷键速查、3 条常见问题、GitHub / Issues 外链。
+- **设置**：火山 ASR 凭据、Ark / DeepSeek 润色凭据、录音快捷键、授权状态、隐私说明、版本 + 检查更新——全部归到这一处。
+
+## 词汇表
+
+「词典」改名「词汇表」。整页换成 chip 流式布局：
+
+- 每个词条显示 `phrase + 命中次数`，命中数高的排前面
+- 鼠标悬停时右上角浮 ✕，点击删除
+- 顶部支持一行一个批量添加；右上角 **重置统计** / **清除全部**
+- 命中次数：每次润色后的最终输出里出现该词，自增 1
+- **AI 自动学词已关闭**——之前会自动从转写里抓 `MCP`、`CLI` 之类的英文词塞进词汇表，行为太乱。现在词汇表只增长用户手动输入的词
+
+## 修复
+
+- **胶囊外圈黑边**：`NSPanel.hasShadow` 关闭 + macOS 26 路径去掉冗余 SwiftUI 阴影；过大背景下不再裁出深色矩形带
+- **侧边栏灰边 / 黑色卡顿**：`glassPanel` 的 `strokeBorder` opacity 从 0.08 → 0.04、阴影 radius 从 16 → 6；侧边栏顶 padding 收紧后不再被父容器裁出暗矩形
+
+## 首页
+
+底部新增两个区块：**今日概览**（7 段柱状图）+ **风格**（当前模式 + 模式说明，关闭时显示「已关闭 / 直接插入原文」）。
+
+## 安装
+
+**老用户**：什么都不用做。下次启动 OpenLess 会自动检查更新并提示。
+
+**新用户**：到 [Releases](https://github.com/appergb/openless/releases) 下载 zip，解压拖到 `/Applications`，跑一次：
+
+```bash
+xattr -dr com.apple.quarantine /Applications/OpenLess.app
+```
+
+之后双击启动。]]></description>
+            <enclosure
+                url="https://github.com/appergb/openless/releases/download/v1.0.03/OpenLess-1.0.03.zip"
+                length="2736425"
+                type="application/octet-stream"
+                sparkle:edSignature="fOsdRUQfRgkvomyKPKHO6rea5Jt7fio/XBsKjJA3iizYgxhgJRJnOlAEVHS+MgvHaF1gM/xWxb6dXSP7rWgIDA==" />
+        </item>
         <language>zh-CN</language>
 
         <item>
