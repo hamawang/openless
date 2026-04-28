@@ -11,6 +11,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var updaterController: UpdaterController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        VersionedPermissionRefresh().resetIfNeeded()
+
         // 不依赖 UserPreferences flag：每次启动直接查实际权限。
         // ad-hoc 签名下每次 rebuild 二进制 hash 都变，TCC 会自动失效，
         // 必须在那种情况下重新进引导，否则用户看不到 menu bar 也就罢了，
