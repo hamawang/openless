@@ -1,10 +1,10 @@
 import XCTest
 @testable import OpenLessCore
 
-/// ASRProviderRegistry 的静态健康检查：M1 应包含火山引擎 + Apple Speech 两条预设，
-/// id 不重复、displayName 非空、mode 合法。
+/// ASRProviderRegistry 的静态健康检查：当前应包含火山引擎 + Apple Speech +
+/// 阿里 Paraformer + 自定义 Whisper 四条预设，id 不重复、displayName 非空、mode 合法。
 ///
-/// 这些断言看起来很无聊，但 registry 直接被 ASR Tab 的 chip 列表与 vault 兜底逻辑用，
+/// 这些断言看起来很无聊，但 registry 直接被「配置」Tab 的 chip 列表与 vault 兜底逻辑用，
 /// 漏一条都会变成"用户切不了 ASR / picker 空白"的运行期 bug。
 final class ASRProviderRegistryTests: XCTestCase {
 
@@ -13,12 +13,21 @@ final class ASRProviderRegistryTests: XCTestCase {
         let presets = ASRProviderRegistry.presets
 
         // Act / Assert
-        XCTAssertEqual(presets.count, 2, "M1 计划列出的 ASR 预设是 volcengine / apple-speech")
+        XCTAssertEqual(
+            presets.count,
+            4,
+            "ASR 预设：volcengine / apple-speech / aliyun-paraformer / custom-openai-whisper"
+        )
     }
 
     func test_presets_includeAllExpectedProviderIds() {
         // Arrange
-        let expected: Set<String> = ["volcengine", "apple-speech"]
+        let expected: Set<String> = [
+            "volcengine",
+            "apple-speech",
+            "aliyun-paraformer",
+            "custom-openai-whisper",
+        ]
 
         // Act
         let actualIds = Set(ASRProviderRegistry.presets.map(\.providerId))
@@ -63,6 +72,24 @@ final class ASRProviderRegistryTests: XCTestCase {
         // Act / Assert
         XCTAssertNotNil(preset)
         XCTAssertEqual(preset?.mode, .streaming)
+    }
+
+    func test_aliyunParaformerPreset_isStreaming() {
+        // Arrange
+        let preset = ASRProviderRegistry.preset(for: "aliyun-paraformer")
+
+        // Act / Assert
+        XCTAssertNotNil(preset)
+        XCTAssertEqual(preset?.mode, .streaming)
+    }
+
+    func test_customOpenAIWhisperPreset_isBatch() {
+        // Arrange
+        let preset = ASRProviderRegistry.preset(for: "custom-openai-whisper")
+
+        // Act / Assert
+        XCTAssertNotNil(preset)
+        XCTAssertEqual(preset?.mode, .batch, "Whisper API 是批量上传形态")
     }
 
     func test_preset_lookup_returnsRegistered() {

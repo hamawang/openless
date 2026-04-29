@@ -4,27 +4,23 @@ import OpenLessCore
 import OpenLessHotkey
 import OpenLessPersistence
 import OpenLessRecorder
-import OpenLessASR
 
-/// 所有可调项汇总：录音 + ASR 凭据（Volc）+ 授权 + 隐私 + 关于。
-/// LLM provider 配置已经搬到独立的「LLM Provider」Tab；这里只保留 ASR / 系统级开关。
+/// 系统级开关与状态汇总：录音快捷键 + 授权 + 隐私 + 关于。
+/// LLM 与 ASR 的凭据 / provider 切换全部搬到「配置」Tab。
 struct SettingsHubTab: View {
     @State private var trigger: HotkeyBinding.Trigger = UserPreferences.shared.hotkeyTrigger
     @State private var hotkeyMode: HotkeyMode = UserPreferences.shared.hotkeyMode
     @State private var hasAccessibility = false
     @State private var hasMicrophone = false
 
-    @State private var volcAppKey = ""
-    @State private var volcAccessKey = ""
-    @State private var volcResourceId = VolcengineCredentials.defaultResourceId
-    @State private var saved = false
     @State private var hasLLMProvider = false
     @State private var llmProviderDisplayName = ""
+    @State private var activeASRDisplayName = ""
 
     var body: some View {
         SettingsPage(
             title: "设置",
-            subtitle: "录音快捷键、凭据、授权状态、隐私和版本信息全部在这里。"
+            subtitle: "录音快捷键、授权状态、隐私和版本信息。LLM 模型 / ASR 语音的 API Key 和切换在「配置」Tab。"
         ) {
             GlassSection(title: "录音", symbol: "keyboard") {
                 SettingsRow(title: "录音快捷键") {
@@ -63,22 +59,8 @@ struct SettingsHubTab: View {
                     .padding(.top, 4)
             }
 
-            GlassSection(title: "火山引擎大模型流式 ASR", symbol: "waveform") {
-                SettingsRow(title: "APP ID") {
-                    PasteableCredentialField(placeholder: "X-Api-App-Key", secure: false, text: $volcAppKey)
-                }
-                DividerLine()
-                SettingsRow(title: "Access Token") {
-                    PasteableCredentialField(placeholder: "X-Api-Access-Key", secure: true, text: $volcAccessKey)
-                }
-                DividerLine()
-                SettingsRow(title: "Resource ID") {
-                    PasteableCredentialField(placeholder: "X-Api-Resource-Id", secure: false, text: $volcResourceId)
-                }
-            }
-
-            GlassSection(title: "LLM 润色 Provider", symbol: "wand.and.stars") {
-                SettingsRow(title: "当前 Provider") {
+            GlassSection(title: "Provider 概览", symbol: "wand.and.stars") {
+                SettingsRow(title: "LLM 模型") {
                     HStack(spacing: 10) {
                         Label(
                             hasLLMProvider ? llmProviderDisplayName : "未配置",
@@ -89,22 +71,21 @@ struct SettingsHubTab: View {
                     }
                 }
                 DividerLine()
-                Text(hasLLMProvider
-                     ? "去「LLM Provider」Tab 切换 / 编辑详细字段。"
-                     : "前往「LLM Provider」Tab 选择豆包 / OpenAI / DeepSeek / 自定义 OpenAI 兼容 provider。未配置时识别后会直接插入原文。")
+                SettingsRow(title: "ASR 语音") {
+                    HStack(spacing: 10) {
+                        Label(
+                            activeASRDisplayName.isEmpty ? "未选择" : activeASRDisplayName,
+                            systemImage: "waveform"
+                        )
+                        .foregroundStyle(.primary)
+                        Spacer()
+                    }
+                }
+                DividerLine()
+                Text("前往「配置」Tab 选择并填写 LLM / ASR 凭据。未配置 LLM 时识别后直接插入原文；ASR 缺凭据时回退到演示模式。")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .padding(.top, 4)
-            }
-
-            PrimaryActionRow {
-                Button("保存 ASR 凭据") { saveCredentials() }
-                    .keyboardShortcut(.defaultAction)
-                    .buttonStyle(.borderedProminent)
-                if saved {
-                    Label("已保存", systemImage: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                }
             }
 
             GlassSection(title: "授权状态", symbol: "checkmark.seal") {
@@ -120,7 +101,7 @@ struct SettingsHubTab: View {
                 DividerLine()
                 privacyRow("历史只保存原始转写和最终文本", symbol: "doc.text")
                 DividerLine()
-                privacyRow("云端 ASR 会上传音频；开启 Ark 润色时上传转写文本", symbol: "icloud")
+                privacyRow("云端 ASR 会上传音频；开启润色时上传转写文本", symbol: "icloud")
             }
 
             GlassSection(title: "关于", symbol: "info.circle") {
@@ -139,6 +120,9 @@ struct SettingsHubTab: View {
             }
         }
         .onAppear { refresh() }
+        .onReceive(NotificationCenter.default.publisher(for: .openLessCredentialsChanged)) { _ in
+            refresh()
+        }
     }
 
     private var versionString: String {
@@ -154,29 +138,19 @@ struct SettingsHubTab: View {
         hasAccessibility = AccessibilityPermission.isGranted()
         hasMicrophone = MicrophonePermission.isGranted()
         let v = CredentialsVault.shared
-        volcAppKey = v.get(CredentialAccount.volcengineAppKey) ?? ""
-        volcAccessKey = v.get(CredentialAccount.volcengineAccessKey) ?? ""
-        volcResourceId = v.get(CredentialAccount.volcengineResourceId) ?? VolcengineCredentials.defaultResourceId
 
-        // 当前 active LLM provider 是否填了 apiKey；LLM 设置已搬到 LLMProvidersTab。
-        let activeId = v.activeLLMProviderId
-        if let cfg = v.llmProviderConfig(for: activeId), !cfg.apiKey.isEmpty {
+        // 当前 active LLM provider 是否填了 apiKey；详细配置在「配置」Tab。
+        let activeLLMId = v.activeLLMProviderId
+        if let cfg = v.llmProviderConfig(for: activeLLMId), !cfg.apiKey.isEmpty {
             hasLLMProvider = true
             llmProviderDisplayName = cfg.displayName
         } else {
             hasLLMProvider = false
-            llmProviderDisplayName = LLMProviderRegistry.preset(for: activeId)?.displayName ?? activeId
+            llmProviderDisplayName = LLMProviderRegistry.preset(for: activeLLMId)?.displayName ?? activeLLMId
         }
-    }
 
-    private func saveCredentials() {
-        let v = CredentialsVault.shared
-        try? v.set(volcAppKey.trimmingCharacters(in: .whitespacesAndNewlines), for: CredentialAccount.volcengineAppKey)
-        try? v.set(volcAccessKey.trimmingCharacters(in: .whitespacesAndNewlines), for: CredentialAccount.volcengineAccessKey)
-        try? v.set(volcResourceId.trimmingCharacters(in: .whitespacesAndNewlines), for: CredentialAccount.volcengineResourceId)
-        NotificationCenter.default.post(name: .openLessCredentialsChanged, object: nil)
-        saved = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { saved = false }
+        let activeASRId = v.activeASRProviderId
+        activeASRDisplayName = ASRProviderRegistry.preset(for: activeASRId)?.displayName ?? activeASRId
     }
 
     private func privacyRow(_ text: String, symbol: String) -> some View {
