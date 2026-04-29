@@ -14,6 +14,7 @@ config.local.json
 
 # Local working dirs that don't belong in the repo
 SC/
+apps/
 promo/
 promo-openless/
 docs/old-promo/
