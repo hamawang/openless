@@ -35,8 +35,8 @@ public enum ASRProviderRegistry {
         }
     }
 
-    /// M1 内置的 ASR provider 预设。
-    /// 顺序即为 UI 列表的展示顺序——火山在前（旧用户默认），Apple Speech 在后。
+    /// 内置的 ASR provider 预设。
+    /// 顺序即为 UI 列表的展示顺序——火山在前（旧用户默认），Apple Speech、阿里、自定义 Whisper 依次展开。
     public static let presets: [Preset] = [
         Preset(
             providerId: "volcengine",
@@ -49,6 +49,18 @@ public enum ASRProviderRegistry {
             displayName: "macOS 本地 (Apple Speech)",
             mode: .streaming,
             helpText: "使用 macOS 内置语音识别。免费、离线（zh-CN 在 Apple Silicon 上支持纯离线），不需要 API key。首次切换时系统会请求语音识别权限。"
+        ),
+        Preset(
+            providerId: "aliyun-paraformer",
+            displayName: "阿里通义 Paraformer (DashScope)",
+            mode: .streaming,
+            helpText: "DashScope paraformer-realtime-v2 流式语音识别。如果你的 LLM 已经填了阿里通义 DashScope 的 API Key，会自动复用同一个 key。"
+        ),
+        Preset(
+            providerId: "custom-openai-whisper",
+            displayName: "自定义 OpenAI 兼容 (Whisper)",
+            mode: .batch,
+            helpText: "兼容 OpenAI Whisper API（multipart/form-data POST）的任意端点：Groq、DeepInfra、OpenAI、自建反代等。录完整段音频后整段上传转写，长录音会等几秒。"
         ),
     ]
 

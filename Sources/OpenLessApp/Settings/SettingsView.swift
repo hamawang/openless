@@ -15,10 +15,9 @@ enum OpenLessMainTab: String, CaseIterable, Identifiable {
     case history
     case dictionary
     case polish
-    case asr
-    case llm
-    case help
+    case providersConfig
     case settings
+    case help
 
     var id: String { rawValue }
 
@@ -28,10 +27,9 @@ enum OpenLessMainTab: String, CaseIterable, Identifiable {
         case .history: return "历史记录"
         case .dictionary: return "词汇表"
         case .polish: return "风格"
-        case .asr: return "ASR"
-        case .llm: return "LLM Provider"
-        case .help: return "帮助中心"
+        case .providersConfig: return "配置"
         case .settings: return "设置"
+        case .help: return "帮助中心"
         }
     }
 
@@ -41,10 +39,9 @@ enum OpenLessMainTab: String, CaseIterable, Identifiable {
         case .history: return "clock"
         case .dictionary: return "text.book.closed"
         case .polish: return "paintpalette"
-        case .asr: return "waveform"
-        case .llm: return "wand.and.stars"
-        case .help: return "questionmark.circle"
+        case .providersConfig: return "slider.horizontal.3"
         case .settings: return "gearshape"
+        case .help: return "questionmark.circle"
         }
     }
 }
@@ -74,10 +71,9 @@ struct SettingsView: View {
                 case .history: HistoryTab()
                 case .dictionary: DictionaryTab()
                 case .polish: StyleTab()
-                case .asr: ASRProvidersTab()
-                case .llm: LLMProvidersTab()
-                case .help: HelpTab()
+                case .providersConfig: ProvidersConfigTab()
                 case .settings: SettingsHubTab()
+                case .help: HelpTab()
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
