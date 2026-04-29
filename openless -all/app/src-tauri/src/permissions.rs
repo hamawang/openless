@@ -248,6 +248,7 @@ mod platform {
 #[cfg(not(target_os = "macos"))]
 mod platform {
     use super::PermissionStatus;
+    use cpal::traits::{DeviceTrait, HostTrait};
 
     /// Windows / Linux 不存在 macOS 那种 Accessibility 概念；rdev 直接监听键盘。
     pub fn check_accessibility() -> PermissionStatus {
@@ -259,14 +260,35 @@ mod platform {
     }
 
     /// Windows 的麦克风权限走系统设置 → 隐私 → 麦克风；
-    /// 我们没法在用户态直接查授权状态，启动 cpal stream 时 Win10+ 会自动弹一次提示。
-    /// 这里乐观返回 Granted；UI 上不需要展示 Denied 状态。
+    /// 这里用 cpal 做最小可用性探测，避免 UI 在无设备或权限被拒时误报已授权。
     pub fn check_microphone() -> PermissionStatus {
-        PermissionStatus::Granted
+        let host = cpal::default_host();
+        let Some(device) = host.default_input_device() else {
+            log::warn!("[mic] no default input device");
+            return PermissionStatus::Denied;
+        };
+        match device.default_input_config() {
+            Ok(_) => PermissionStatus::Granted,
+            Err(err) => classify_audio_probe_error(err.to_string()),
+        }
     }
 
     pub fn request_microphone() -> PermissionStatus {
-        PermissionStatus::Granted
+        check_microphone()
+    }
+
+    fn classify_audio_probe_error(message: String) -> PermissionStatus {
+        let lower = message.to_lowercase();
+        log::warn!("[mic] default input config failed: {message}");
+        if lower.contains("denied")
+            || lower.contains("permission")
+            || lower.contains("authoriz")
+            || lower.contains("access")
+        {
+            PermissionStatus::Denied
+        } else {
+            PermissionStatus::NotDetermined
+        }
     }
 }
 

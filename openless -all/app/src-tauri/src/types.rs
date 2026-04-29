@@ -130,6 +130,30 @@ pub struct HotkeyBinding {
     pub mode: HotkeyMode,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct HotkeyStatus {
+    pub state: HotkeyStatusState,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum HotkeyStatusState {
+    Starting,
+    Installed,
+    Failed,
+}
+
+impl Default for HotkeyStatus {
+    fn default() -> Self {
+        Self {
+            state: HotkeyStatusState::Starting,
+            message: Some("正在安装全局快捷键监听".into()),
+        }
+    }
+}
+
 impl Default for HotkeyBinding {
     fn default() -> Self {
         // Right Option (mac) / Right Alt (win) — toggle by default per design.

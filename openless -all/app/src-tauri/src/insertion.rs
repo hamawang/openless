@@ -27,13 +27,11 @@ impl TextInserter {
         if !copy_to_clipboard(text) {
             return InsertStatus::Failed;
         }
-        match simulate_paste() {
-            Ok(()) => InsertStatus::Inserted,
-            Err(err) => {
-                log::warn!("[insertion] simulated paste failed: {}", err);
-                InsertStatus::CopiedFallback
-            }
+        if let Err(err) = simulate_paste() {
+            log::warn!("[insertion] simulated paste failed: {}", err);
+            return InsertStatus::CopiedFallback;
         }
+        insertion_success_status()
     }
 }
 
@@ -76,6 +74,17 @@ fn simulate_paste() -> Result<(), String> {
     }
     press_v.map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn insertion_success_status() -> InsertStatus {
+    InsertStatus::Inserted
+}
+
+#[cfg(not(target_os = "macos"))]
+fn insertion_success_status() -> InsertStatus {
+    // Windows/Linux 的 Ctrl+V 只能证明粘贴快捷键已发送，不能证明目标控件已接收。
+    InsertStatus::CopiedFallback
 }
 
 // ─────────────────────────── macOS native CGEvent paste ───────────────────────────

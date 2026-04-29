@@ -188,7 +188,7 @@ function Pill({ state, level, insertedChars, message, onCancel, onConfirm }: Pil
       );
       break;
     case 'done':
-      center = <CenterText text={`已插入 ${insertedChars}`} />;
+      center = <CenterText text={message || `已插入 ${insertedChars}`} />;
       break;
     case 'cancelled':
       center = <CenterText text="已取消" />;
