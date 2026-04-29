@@ -593,6 +593,10 @@ fn emit_capsule(
         let visible = !matches!(state, CapsuleState::Idle);
         if show_capsule && visible {
             let _ = window.show();
+            // 胶囊 show() 在 macOS 会调 makeKeyAndOrderFront: 抢走主窗口焦点。
+            // 若 OpenLess 已是前台 app，用 makeKeyWindow 还原主窗口（不激活 NSApp）。
+            #[cfg(target_os = "macos")]
+            crate::restore_main_window_key_if_active(&app);
         } else {
             let _ = window.hide();
         }

@@ -16,6 +16,7 @@ import {
   readCredential,
   requestAccessibilityPermission,
   requestMicrophonePermission,
+  setActiveLlmProvider,
   setCredential,
   setSettings,
 } from '../lib/ipc';
@@ -224,25 +225,70 @@ function Toggle({ on, onToggle }: { on: boolean; onToggle?: (next: boolean) => v
   );
 }
 
+const LLM_PRESETS = [
+  { id: 'ark',      name: 'ARK（火山方舟）', baseUrl: 'https://ark.cn-beijing.volces.com/api/v3', modelPlaceholder: 'deepseek-v3-2' },
+  { id: 'deepseek', name: 'DeepSeek',        baseUrl: 'https://api.deepseek.com/v1',             modelPlaceholder: 'deepseek-chat' },
+  { id: 'openai',   name: 'OpenAI',          baseUrl: 'https://api.openai.com/v1',               modelPlaceholder: 'gpt-4o' },
+  { id: 'custom',   name: '自定义',           baseUrl: '',                                        modelPlaceholder: '' },
+] as const;
+
+type LlmPresetId = typeof LLM_PRESETS[number]['id'];
+
+const ASR_DEFAULT_RESOURCE_ID = 'volc.bigasr.sauc.duration';
+
 function ProvidersSection() {
+  const [prefs, setPrefsState] = useState<import('../lib/types').UserPreferences | null>(null);
+  const [llmProvider, setLlmProvider] = useState<LlmPresetId>('ark');
+
+  useEffect(() => {
+    getSettings().then(p => {
+      setPrefsState(p);
+      const known = LLM_PRESETS.find(x => x.id === p.activeLlmProvider);
+      setLlmProvider(known ? known.id : 'custom');
+    });
+  }, []);
+
+  const onLlmProviderChange = async (id: LlmPresetId) => {
+    setLlmProvider(id);
+    await setActiveLlmProvider(id);
+    if (prefs) {
+      const next = { ...prefs, activeLlmProvider: id };
+      setPrefsState(next);
+      await setSettings(next);
+    }
+    const preset = LLM_PRESETS.find(p => p.id === id);
+    if (preset?.baseUrl) {
+      await setCredential('ark.endpoint', preset.baseUrl);
+    }
+  };
+
+  const preset = LLM_PRESETS.find(p => p.id === llmProvider) ?? LLM_PRESETS[LLM_PRESETS.length - 1];
+
   return (
     <>
       <Card>
         <div style={{ marginBottom: 10 }}>
           <div style={{ fontSize: 13, fontWeight: 600 }}>LLM 模型（润色）</div>
           <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', marginTop: 2 }}>
-            OpenAI 兼容协议。当前后端固定走 "ark.*" 账户名，但 Keychain 缺时会回落到
-            <code style={{ fontFamily: 'var(--ol-font-mono)' }}> ~/.openless/credentials.json </code>
-            的 active LLM provider（继承自 Swift 旧版）。
+            OpenAI 兼容协议，支持多家供应商切换。
           </div>
         </div>
-        <CredentialField label="API Key" account="ark.api_key" mono mask />
-        <CredentialField
-          label="Base URL"
-          account="ark.endpoint"
-          placeholder="https://ark.cn-beijing.volces.com/api/v3"
-        />
-        <CredentialField label="Model" account="ark.model_id" placeholder="deepseek-v3-2" mono />
+        <SettingRow label="供应商" desc="选择后将自动填入 Base URL 默认值。">
+          <select
+            value={llmProvider}
+            onChange={e => onLlmProviderChange(e.target.value as LlmPresetId)}
+            style={{ ...inputStyle, maxWidth: 200 }}
+          >
+            {LLM_PRESETS.map(p => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+          </select>
+        </SettingRow>
+        <CredentialField key={`${llmProvider}:api_key`} label="API Key" account="ark.api_key" mono mask />
+        <CredentialField key={`${llmProvider}:endpoint`} label="Base URL" account="ark.endpoint"
+          placeholder={preset.baseUrl || 'https://your-endpoint/v1'} />
+        <CredentialField key={`${llmProvider}:model`} label="Model" account="ark.model_id"
+          placeholder={preset.modelPlaceholder || 'model-name'} mono />
       </Card>
 
       <Card>
@@ -252,12 +298,8 @@ function ProvidersSection() {
         </div>
         <CredentialField label="App Key" account="volcengine.app_key" mono mask />
         <CredentialField label="Access Key" account="volcengine.access_key" mono mask />
-        <CredentialField
-          label="Resource ID"
-          account="volcengine.resource_id"
-          mono
-          placeholder="volc.bigasr.sauc.duration"
-        />
+        <CredentialField label="Resource ID" account="volcengine.resource_id" mono
+          placeholder={ASR_DEFAULT_RESOURCE_ID} defaultValue={ASR_DEFAULT_RESOURCE_ID} />
       </Card>
     </>
   );
@@ -269,9 +311,10 @@ interface CredentialFieldProps {
   placeholder?: string;
   mono?: boolean;
   mask?: boolean;
+  defaultValue?: string;
 }
 
-function CredentialField({ label, account, placeholder, mono, mask }: CredentialFieldProps) {
+function CredentialField({ label, account, placeholder, mono, mask, defaultValue }: CredentialFieldProps) {
   const [value, setValue] = useState('');
   const [revealed, setRevealed] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -280,10 +323,18 @@ function CredentialField({ label, account, placeholder, mono, mask }: Credential
     readCredential(account).then(v => setValue(v ?? ''));
   }, [account]);
 
-  const onBlur = async () => {
-    await setCredential(account, value);
+  const save = async (v: string) => {
+    await setCredential(account, v);
     setSaved(true);
     setTimeout(() => setSaved(false), 1200);
+  };
+
+  const onBlur = () => save(value);
+
+  const fillDefault = async () => {
+    if (!defaultValue) return;
+    setValue(defaultValue);
+    await save(defaultValue);
   };
 
   const inputType = mask && !revealed ? 'password' : 'text';
@@ -299,6 +350,11 @@ function CredentialField({ label, account, placeholder, mono, mask }: Credential
           onBlur={onBlur}
           style={{ ...inputStyle, fontFamily: mono ? 'var(--ol-font-mono)' : 'inherit' }}
         />
+        {defaultValue && !value && (
+          <button onClick={fillDefault} title="填入默认值" style={iconBtnStyle}>
+            <Icon name="check" size={13} />
+          </button>
+        )}
         {mask && (
           <button
             onClick={() => setRevealed(r => !r)}

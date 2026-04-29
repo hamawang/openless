@@ -58,6 +58,11 @@ pub fn set_credential(account: String, value: String) -> Result<(), String> {
     }
 }
 
+#[tauri::command]
+pub fn set_active_llm_provider(provider: String) -> Result<(), String> {
+    CredentialsVault::set_active_llm_provider(&provider).map_err(|e| e.to_string())
+}
+
 /// 读出某个账号的实际值（用于设置页预填表单）。
 /// 与 Swift `CredentialsVault.get` 同语义，先 Keychain，缺则回落 ~/.openless/credentials.json。
 #[tauri::command]

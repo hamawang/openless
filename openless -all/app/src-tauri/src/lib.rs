@@ -148,6 +148,7 @@ pub fn run() {
             commands::open_system_settings,
             commands::trigger_microphone_prompt,
             commands::read_credential,
+            commands::set_active_llm_provider,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -287,6 +288,26 @@ fn activate_app<R: Runtime>(app: &AppHandle<R>) {
 
 #[cfg(not(target_os = "macos"))]
 fn activate_app<R: Runtime>(_app: &AppHandle<R>) {}
+
+/// 展示胶囊后调用：若 OpenLess 已是前台 app，用 makeKeyWindow 还原主窗口焦点。
+/// 不调 NSApp.activate，不抢其他 app 焦点，符合 CLAUDE.md 约束。
+#[cfg(target_os = "macos")]
+pub(crate) fn restore_main_window_key_if_active<R: Runtime>(app: &AppHandle<R>) {
+    let _ = app.run_on_main_thread(|| {
+        use objc2::msg_send;
+        use objc2::runtime::{AnyClass, AnyObject, Bool};
+        unsafe {
+            let Some(cls) = AnyClass::get("NSApplication") else { return };
+            let ns_app: *mut AnyObject = msg_send![cls, sharedApplication];
+            if ns_app.is_null() { return; }
+            let is_active: Bool = msg_send![ns_app, isActive];
+            if !is_active.as_bool() { return; }
+            let main_win: *mut AnyObject = msg_send![ns_app, mainWindow];
+            if main_win.is_null() { return; }
+            let _: () = msg_send![main_win, makeKeyWindow];
+        }
+    });
+}
 
 #[cfg(target_os = "macos")]
 fn wait_for_app_activation<R: Runtime>(app: &AppHandle<R>) {

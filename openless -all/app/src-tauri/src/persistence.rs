@@ -596,6 +596,12 @@ impl CredentialsVault {
         save_credentials(&root)
     }
 
+    pub fn set_active_llm_provider(id: &str) -> Result<()> {
+        let mut root = load_credentials();
+        root.active.llm = id.to_string();
+        save_credentials(&root)
+    }
+
     pub fn snapshot() -> CredentialsSnapshot {
         let root = load_credentials();
         CredentialsSnapshot {
