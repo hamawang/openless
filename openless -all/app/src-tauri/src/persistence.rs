@@ -311,6 +311,9 @@ fn lookup_account(root: &CredsRoot, account: CredentialAccount) -> Option<String
         CredentialAccount::ArkApiKey => llm.and_then(|e| pick(&e.apiKey)),
         CredentialAccount::ArkModelId => llm.and_then(|e| pick(&e.model)),
         CredentialAccount::ArkEndpoint => llm.and_then(|e| pick(&e.baseURL)),
+        CredentialAccount::AsrApiKey => asr.and_then(|e| pick(&e.apiKey)),
+        CredentialAccount::AsrEndpoint => asr.and_then(|e| pick(&e.baseURL)),
+        CredentialAccount::AsrModel => asr.and_then(|e| pick(&e.model)),
     }
 }
 
@@ -342,6 +345,18 @@ fn write_account(root: &mut CredsRoot, account: CredentialAccount, value: Option
         CredentialAccount::ArkEndpoint => {
             let entry = root.providers.llm.entry(llm_id).or_default();
             entry.baseURL = normalized;
+        }
+        CredentialAccount::AsrApiKey => {
+            let entry = root.providers.asr.entry(asr_id).or_default();
+            entry.apiKey = normalized;
+        }
+        CredentialAccount::AsrEndpoint => {
+            let entry = root.providers.asr.entry(asr_id).or_default();
+            entry.baseURL = normalized;
+        }
+        CredentialAccount::AsrModel => {
+            let entry = root.providers.asr.entry(asr_id).or_default();
+            entry.model = normalized;
         }
     }
 }
@@ -527,6 +542,12 @@ pub enum CredentialAccount {
     ArkApiKey,
     ArkModelId,
     ArkEndpoint,
+    /// Active ASR provider's API key (used by Whisper-compatible providers).
+    AsrApiKey,
+    /// Active ASR provider's base URL.
+    AsrEndpoint,
+    /// Active ASR provider's model name.
+    AsrModel,
 }
 
 impl CredentialAccount {
@@ -541,6 +562,9 @@ impl CredentialAccount {
             CredentialAccount::ArkApiKey => "ark.api_key",
             CredentialAccount::ArkModelId => "ark.model_id",
             CredentialAccount::ArkEndpoint => "ark.endpoint",
+            CredentialAccount::AsrApiKey => "asr.api_key",
+            CredentialAccount::AsrEndpoint => "asr.endpoint",
+            CredentialAccount::AsrModel => "asr.model",
         }
     }
 
@@ -552,6 +576,9 @@ impl CredentialAccount {
             CredentialAccount::ArkApiKey,
             CredentialAccount::ArkModelId,
             CredentialAccount::ArkEndpoint,
+            CredentialAccount::AsrApiKey,
+            CredentialAccount::AsrEndpoint,
+            CredentialAccount::AsrModel,
         ]
     }
 }
@@ -593,6 +620,16 @@ impl CredentialsVault {
     pub fn remove(account: CredentialAccount) -> Result<()> {
         let mut root = load_credentials();
         write_account(&mut root, account, None);
+        save_credentials(&root)
+    }
+
+    pub fn get_active_asr() -> String {
+        load_credentials().active.asr
+    }
+
+    pub fn set_active_asr_provider(id: &str) -> Result<()> {
+        let mut root = load_credentials();
+        root.active.asr = id.to_string();
         save_credentials(&root)
     }
 

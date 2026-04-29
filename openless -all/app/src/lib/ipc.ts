@@ -116,6 +116,10 @@ export function setCredential(account: string, value: string): Promise<void> {
   return invokeOrMock('set_credential', { account, value }, () => undefined);
 }
 
+export function setActiveAsrProvider(provider: string): Promise<void> {
+  return invokeOrMock('set_active_asr_provider', { provider }, () => undefined);
+}
+
 export function setActiveLlmProvider(provider: string): Promise<void> {
   return invokeOrMock('set_active_llm_provider', { provider }, () => undefined);
 }

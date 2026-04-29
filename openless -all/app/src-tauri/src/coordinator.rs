@@ -14,12 +14,16 @@ use parking_lot::Mutex;
 use tauri::{async_runtime, AppHandle, Emitter, Manager};
 use uuid::Uuid;
 
-use crate::asr::{DictionaryHotword, RawTranscript, VolcengineCredentials, VolcengineStreamingASR};
+use crate::asr::{
+    DictionaryHotword, RawTranscript, VolcengineCredentials, VolcengineStreamingASR,
+    WhisperBatchASR,
+};
 use crate::hotkey::{HotkeyEvent, HotkeyMonitor};
 use crate::insertion::TextInserter;
 use crate::persistence::{
     CredentialAccount, CredentialsVault, DictionaryStore, HistoryStore, PreferencesStore,
 };
+
 use crate::polish::{OpenAICompatibleConfig, OpenAICompatibleLLMProvider};
 use crate::recorder::Recorder;
 use crate::types::{
@@ -33,6 +37,11 @@ enum SessionPhase {
     Starting,
     Listening,
     Processing,
+}
+
+enum ActiveAsr {
+    Volcengine(Arc<VolcengineStreamingASR>),
+    Whisper(Arc<WhisperBatchASR>),
 }
 
 struct SessionState {
@@ -60,7 +69,7 @@ struct Inner {
     vocab: DictionaryStore,
     inserter: TextInserter,
     state: Mutex<SessionState>,
-    asr: Mutex<Option<Arc<VolcengineStreamingASR>>>,
+    asr: Mutex<Option<ActiveAsr>>,
     recorder: Mutex<Option<Recorder>>,
     hotkey: Mutex<Option<HotkeyMonitor>>,
     hotkey_status: Mutex<HotkeyStatus>,
@@ -270,42 +279,44 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
 
     if let Err(message) = ensure_microphone_permission(inner) {
         log::warn!("[coord] microphone permission gate failed: {message}");
-        emit_capsule(
-            inner,
-            CapsuleState::Error,
-            0.0,
-            0,
-            Some(message.clone()),
-            None,
-        );
+        emit_capsule(inner, CapsuleState::Error, 0.0, 0, Some(message.clone()), None);
         inner.state.lock().phase = SessionPhase::Idle;
         return Err(message);
     }
 
     emit_capsule(inner, CapsuleState::Recording, 0.0, 0, None, None);
 
-    let creds = read_volc_credentials();
+    let active_asr = CredentialsVault::get_active_asr();
     let hotwords = enabled_hotwords(inner);
 
-    let asr = Arc::new(VolcengineStreamingASR::new(creds, hotwords));
-    if let Err(e) = asr.open_session().await {
-        log::error!("[coord] open ASR session failed: {e}");
-        emit_capsule(
-            inner,
-            CapsuleState::Error,
-            0.0,
-            0,
-            Some(format!("ASR 连接失败: {e}")),
-            None,
-        );
-        inner.state.lock().phase = SessionPhase::Idle;
-        return Err(e.to_string());
-    }
-    *inner.asr.lock() = Some(Arc::clone(&asr));
+    let consumer: Arc<dyn crate::recorder::AudioConsumer> = if active_asr == "whisper" {
+        let (api_key, base_url, model) = read_whisper_credentials();
+        let whisper = Arc::new(WhisperBatchASR::new(api_key, base_url, model));
+        *inner.asr.lock() = Some(ActiveAsr::Whisper(Arc::clone(&whisper)));
+        let c: Arc<dyn crate::recorder::AudioConsumer> = whisper;
+        c
+    } else {
+        let creds = read_volc_credentials();
+        let asr = Arc::new(VolcengineStreamingASR::new(creds, hotwords));
+        if let Err(e) = asr.open_session().await {
+            log::error!("[coord] open ASR session failed: {e}");
+            emit_capsule(
+                inner,
+                CapsuleState::Error,
+                0.0,
+                0,
+                Some(format!("ASR 连接失败: {e}")),
+                None,
+            );
+            inner.state.lock().phase = SessionPhase::Idle;
+            return Err(e.to_string());
+        }
+        let c: Arc<dyn crate::recorder::AudioConsumer> =
+            Arc::new(AsrBridge { asr: Arc::clone(&asr) });
+        *inner.asr.lock() = Some(ActiveAsr::Volcengine(asr));
+        c
+    };
 
-    let consumer: Arc<dyn crate::recorder::AudioConsumer> = Arc::new(AsrBridge {
-        asr: Arc::clone(&asr),
-    });
     let inner_for_level = Arc::clone(inner);
     let level_handler: Arc<dyn Fn(f32) + Send + Sync> = Arc::new(move |level| {
         let phase = inner_for_level.state.lock().phase;
@@ -331,12 +342,16 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
         Ok(rec) => {
             *inner.recorder.lock() = Some(rec);
             inner.state.lock().phase = SessionPhase::Listening;
-            log::info!("[coord] session started");
+            log::info!("[coord] session started (asr={})", active_asr);
         }
         Err(e) => {
             log::error!("[coord] recorder start failed: {e}");
-            asr.cancel();
-            *inner.asr.lock() = None;
+            if let Some(asr) = inner.asr.lock().take() {
+                match asr {
+                    ActiveAsr::Volcengine(v) => v.cancel(),
+                    ActiveAsr::Whisper(w) => w.cancel(),
+                }
+            }
             emit_capsule(
                 inner,
                 CapsuleState::Error,
@@ -369,7 +384,7 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
         rec.stop();
     }
 
-    let asr_opt = inner.asr.lock().clone();
+    let asr_opt = inner.asr.lock().take();
     let asr = match asr_opt {
         Some(a) => a,
         None => {
@@ -378,28 +393,45 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
         }
     };
 
-    if let Err(e) = asr.send_last_frame().await {
-        log::error!("[coord] send last frame failed: {e}");
-    }
-
-    let raw = match asr.await_final_result().await {
-        Ok(r) => r,
-        Err(e) => {
-            log::error!("[coord] await final failed: {e}");
-            *inner.asr.lock() = None;
-            emit_capsule(
-                inner,
-                CapsuleState::Error,
-                0.0,
-                elapsed,
-                Some(format!("识别失败: {e}")),
-                None,
-            );
-            inner.state.lock().phase = SessionPhase::Idle;
-            return Err(e.to_string());
+    let raw = match asr {
+        ActiveAsr::Volcengine(asr) => {
+            if let Err(e) = asr.send_last_frame().await {
+                log::error!("[coord] send last frame failed: {e}");
+            }
+            match asr.await_final_result().await {
+                Ok(r) => r,
+                Err(e) => {
+                    log::error!("[coord] await final failed: {e}");
+                    emit_capsule(
+                        inner,
+                        CapsuleState::Error,
+                        0.0,
+                        elapsed,
+                        Some(format!("识别失败: {e}")),
+                        None,
+                    );
+                    inner.state.lock().phase = SessionPhase::Idle;
+                    return Err(e.to_string());
+                }
+            }
         }
+        ActiveAsr::Whisper(w) => match w.transcribe().await {
+            Ok(r) => r,
+            Err(e) => {
+                log::error!("[coord] whisper transcribe failed: {e}");
+                emit_capsule(
+                    inner,
+                    CapsuleState::Error,
+                    0.0,
+                    elapsed,
+                    Some(format!("识别失败: {e}")),
+                    None,
+                );
+                inner.state.lock().phase = SessionPhase::Idle;
+                return Err(e.to_string());
+            }
+        },
     };
-    *inner.asr.lock() = None;
 
     emit_capsule(inner, CapsuleState::Polishing, 0.0, elapsed, None, None);
 
@@ -467,7 +499,10 @@ fn cancel_session(inner: &Arc<Inner>) {
         rec.stop();
     }
     if let Some(asr) = inner.asr.lock().take() {
-        asr.cancel();
+        match asr {
+            ActiveAsr::Volcengine(v) => v.cancel(),
+            ActiveAsr::Whisper(w) => w.cancel(),
+        }
     }
     inner.state.lock().phase = SessionPhase::Idle;
     emit_capsule(inner, CapsuleState::Cancelled, 0.0, 0, None, None);
@@ -538,6 +573,23 @@ async fn polish_text(raw: &str, mode: PolishMode, hotwords: &[String]) -> anyhow
     let config = OpenAICompatibleConfig::new("ark", "Doubao Ark", base_url, api_key, model);
     let provider = OpenAICompatibleLLMProvider::new(config);
     Ok(provider.polish(raw, mode, hotwords).await?)
+}
+
+fn read_whisper_credentials() -> (String, String, String) {
+    let api_key = CredentialsVault::get(CredentialAccount::AsrApiKey)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let base_url = CredentialsVault::get(CredentialAccount::AsrEndpoint)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let model = CredentialsVault::get(CredentialAccount::AsrModel)
+        .ok()
+        .flatten()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "whisper-1".to_string());
+    (api_key, base_url, model)
 }
 
 fn read_volc_credentials() -> VolcengineCredentials {

@@ -149,6 +149,7 @@ pub fn run() {
             commands::open_system_settings,
             commands::trigger_microphone_prompt,
             commands::read_credential,
+            commands::set_active_asr_provider,
             commands::set_active_llm_provider,
         ])
         .build(tauri::generate_context!())

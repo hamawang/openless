@@ -64,6 +64,11 @@ pub fn set_credential(account: String, value: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn set_active_asr_provider(provider: String) -> Result<(), String> {
+    CredentialsVault::set_active_asr_provider(&provider).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub fn set_active_llm_provider(provider: String) -> Result<(), String> {
     CredentialsVault::set_active_llm_provider(&provider).map_err(|e| e.to_string())
 }
@@ -84,6 +89,9 @@ fn parse_account(s: &str) -> Result<CredentialAccount, String> {
         "ark.api_key" => Ok(CredentialAccount::ArkApiKey),
         "ark.model_id" => Ok(CredentialAccount::ArkModelId),
         "ark.endpoint" => Ok(CredentialAccount::ArkEndpoint),
+        "asr.api_key" => Ok(CredentialAccount::AsrApiKey),
+        "asr.endpoint" => Ok(CredentialAccount::AsrEndpoint),
+        "asr.model" => Ok(CredentialAccount::AsrModel),
         _ => Err(format!("unknown account: {s}")),
     }
 }

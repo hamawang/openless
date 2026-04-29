@@ -2,7 +2,7 @@
 // Internal sub-sections (Recording / Providers / Shortcuts / Permissions / About)
 // keep their inline-style literals 1:1 with the source JSX.
 
-import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { Icon } from '../components/Icon';
 import { APP_VERSION_LABEL } from '../lib/appVersion';
 import { getHotkeyStartStopLabel, getHotkeyTriggerLabel } from '../lib/hotkey';
@@ -15,6 +15,7 @@ import {
   readCredential,
   requestAccessibilityPermission,
   requestMicrophonePermission,
+  setActiveAsrProvider,
   setActiveLlmProvider,
   setCredential,
 } from '../lib/ipc';
@@ -209,14 +210,24 @@ type LlmPresetId = typeof LLM_PRESETS[number]['id'];
 
 const ASR_DEFAULT_RESOURCE_ID = 'volc.bigasr.sauc.duration';
 
+const ASR_PRESETS = [
+  { id: 'volcengine', name: '火山引擎 bigasr' },
+  { id: 'whisper',    name: 'OpenAI Whisper（兼容）' },
+] as const;
+
+type AsrPresetId = typeof ASR_PRESETS[number]['id'];
+
 function ProvidersSection() {
   const { prefs, updatePrefs } = useHotkeySettings();
   const [llmProvider, setLlmProvider] = useState<LlmPresetId>('ark');
+  const [asrProvider, setAsrProvider] = useState<AsrPresetId>('volcengine');
 
   useEffect(() => {
     if (!prefs) return;
-    const known = LLM_PRESETS.find(x => x.id === prefs.activeLlmProvider);
-    setLlmProvider(known ? known.id : 'custom');
+    const knownLlm = LLM_PRESETS.find(x => x.id === prefs.activeLlmProvider);
+    setLlmProvider(knownLlm ? knownLlm.id : 'custom');
+    const knownAsr = ASR_PRESETS.find(x => x.id === prefs.activeAsrProvider);
+    setAsrProvider(knownAsr ? knownAsr.id : 'volcengine');
   }, [prefs]);
 
   const onLlmProviderChange = async (id: LlmPresetId) => {
@@ -229,6 +240,16 @@ function ProvidersSection() {
     const preset = LLM_PRESETS.find(p => p.id === id);
     if (preset?.baseUrl) {
       await setCredential('ark.endpoint', preset.baseUrl);
+    }
+  };
+
+  const onAsrProviderChange = async (id: AsrPresetId) => {
+    setAsrProvider(id);
+    await setActiveAsrProvider(id);
+    if (prefs) {
+      const next = { ...prefs, activeAsrProvider: id };
+      setPrefsState(next);
+      await setSettings(next);
     }
   };
 
@@ -263,13 +284,36 @@ function ProvidersSection() {
 
       <Card>
         <div style={{ marginBottom: 10 }}>
-          <div style={{ fontSize: 13, fontWeight: 600 }}>ASR 语音（火山引擎）</div>
+          <div style={{ fontSize: 13, fontWeight: 600 }}>ASR 语音（转写）</div>
           <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', marginTop: 2 }}>用于将口述实时转写为文本。</div>
         </div>
-        <CredentialField label="App Key" account="volcengine.app_key" mono mask />
-        <CredentialField label="Access Key" account="volcengine.access_key" mono mask />
-        <CredentialField label="Resource ID" account="volcengine.resource_id" mono
-          placeholder={ASR_DEFAULT_RESOURCE_ID} defaultValue={ASR_DEFAULT_RESOURCE_ID} />
+        <SettingRow label="供应商" desc="切换后将自动选用对应凭据。">
+          <select
+            value={asrProvider}
+            onChange={e => onAsrProviderChange(e.target.value as AsrPresetId)}
+            style={{ ...inputStyle, maxWidth: 200 }}
+          >
+            {ASR_PRESETS.map(p => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+          </select>
+        </SettingRow>
+        {asrProvider === 'volcengine' ? (
+          <>
+            <CredentialField key={`${asrProvider}:app_key`} label="App Key" account="volcengine.app_key" mono mask />
+            <CredentialField key={`${asrProvider}:access_key`} label="Access Key" account="volcengine.access_key" mono mask />
+            <CredentialField key={`${asrProvider}:resource_id`} label="Resource ID" account="volcengine.resource_id" mono
+              placeholder={ASR_DEFAULT_RESOURCE_ID} defaultValue={ASR_DEFAULT_RESOURCE_ID} />
+          </>
+        ) : (
+          <>
+            <CredentialField key={`${asrProvider}:api_key`} label="API Key" account="asr.api_key" mono mask />
+            <CredentialField key={`${asrProvider}:endpoint`} label="Base URL" account="asr.endpoint"
+              placeholder="https://api.openai.com/v1" defaultValue="https://api.openai.com/v1" />
+            <CredentialField key={`${asrProvider}:model`} label="Model" account="asr.model"
+              placeholder="whisper-1" />
+          </>
+        )}
       </Card>
     </>
   );
@@ -288,10 +332,17 @@ function CredentialField({ label, account, placeholder, mono, mask, defaultValue
   const [value, setValue] = useState('');
   const [revealed, setRevealed] = useState(false);
   const [saved, setSaved] = useState(false);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     readCredential(account).then(v => setValue(v ?? ''));
   }, [account]);
+
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, []);
 
   const save = async (v: string) => {
     await setCredential(account, v);
@@ -299,7 +350,20 @@ function CredentialField({ label, account, placeholder, mono, mask, defaultValue
     setTimeout(() => setSaved(false), 1200);
   };
 
-  const onBlur = () => save(value);
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const v = e.target.value;
+    setValue(v);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => save(v), 300);
+  };
+
+  const onBlur = () => {
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current);
+      debounceRef.current = null;
+    }
+    save(value);
+  };
 
   const fillDefault = async () => {
     if (!defaultValue) return;
@@ -316,7 +380,7 @@ function CredentialField({ label, account, placeholder, mono, mask, defaultValue
           type={inputType}
           value={value}
           placeholder={placeholder}
-          onChange={e => setValue(e.target.value)}
+          onChange={handleChange}
           onBlur={onBlur}
           style={{ ...inputStyle, fontFamily: mono ? 'var(--ol-font-mono)' : 'inherit' }}
         />
