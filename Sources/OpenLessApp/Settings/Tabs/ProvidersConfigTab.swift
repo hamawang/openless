@@ -846,70 +846,67 @@ final class ProvidersConfigModel: ObservableObject {
         try? vault.set(volcDraft.resourceId.trimmingCharacters(in: .whitespacesAndNewlines), for: CredentialAccount.volcengineResourceId)
     }
 
-    // MARK: - Aliyun Paraformer draft（暂存 UserDefaults）
+    // MARK: - Aliyun Paraformer draft（vault providers.asr.aliyun-paraformer）
 
     private func loadAliyunParaformerDraft() {
         var d = AliyunParaformerDraft()
-        // 优先用 LLM 阿里通义已填的 apiKey；否则用本地 fallback。
         let vault = CredentialsVault.shared
-        if let llm = vault.llmProviderConfig(for: "aliyun-dashscope"),
-           !llm.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        // 优先用本 provider 自己已存的 apiKey；fallback 用 LLM aliyun-dashscope 的（同一把 DashScope key）。
+        if let asr = vault.asrProviderConfig(for: "aliyun-paraformer"),
+           let key = asr.apiKey, !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            d.apiKey = key
+        } else if let llm = vault.llmProviderConfig(for: "aliyun-dashscope"),
+                  !llm.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             d.apiKey = llm.apiKey
-        } else {
-            d.apiKey = UserDefaults.standard.string(forKey: ProvidersConfigModel.aliyunParaformerApiKeyDefaultsKey) ?? ""
         }
         aliyunParaformerDraft = d
     }
 
     private func persistAliyunParaformerDraft() {
+        let vault = CredentialsVault.shared
         let trimmed = aliyunParaformerDraft.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
-            UserDefaults.standard.removeObject(forKey: ProvidersConfigModel.aliyunParaformerApiKeyDefaultsKey)
+            try? vault.removeASRProvider("aliyun-paraformer")
         } else {
-            UserDefaults.standard.set(trimmed, forKey: ProvidersConfigModel.aliyunParaformerApiKeyDefaultsKey)
+            var entry = vault.asrProviderConfig(for: "aliyun-paraformer") ?? CredentialsProviderASREntry()
+            entry.apiKey = trimmed
+            vault.setASRProviderConfig(entry, for: "aliyun-paraformer")
         }
     }
 
-    // MARK: - Custom OpenAI Whisper draft（暂存 UserDefaults）
+    // MARK: - Custom OpenAI Whisper draft（vault providers.asr.custom-openai-whisper）
 
     private func loadCustomWhisperDraft() {
         var d = CustomWhisperDraft()
-        let defaults = UserDefaults.standard
-        d.baseURL = defaults.string(forKey: ProvidersConfigModel.customWhisperBaseURLKey) ?? ""
-        d.apiKey = defaults.string(forKey: ProvidersConfigModel.customWhisperApiKeyKey) ?? ""
-        d.model = defaults.string(forKey: ProvidersConfigModel.customWhisperModelKey) ?? "whisper-1"
+        let vault = CredentialsVault.shared
+        if let asr = vault.asrProviderConfig(for: "custom-openai-whisper") {
+            d.baseURL = asr.baseURL ?? ""
+            d.apiKey = asr.apiKey ?? ""
+            d.model = (asr.model?.isEmpty == false ? asr.model! : "whisper-1")
+        } else {
+            d.model = "whisper-1"
+        }
         customWhisperDraft = d
     }
 
     private func persistCustomWhisperDraft() {
-        let defaults = UserDefaults.standard
+        let vault = CredentialsVault.shared
         let baseURL = customWhisperDraft.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         let apiKey = customWhisperDraft.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         let model = customWhisperDraft.model.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        if baseURL.isEmpty {
-            defaults.removeObject(forKey: ProvidersConfigModel.customWhisperBaseURLKey)
-        } else {
-            defaults.set(baseURL, forKey: ProvidersConfigModel.customWhisperBaseURLKey)
+        // 三个字段全空才认为这一项被清空 → 从 vault 删除
+        if baseURL.isEmpty && apiKey.isEmpty && model.isEmpty {
+            try? vault.removeASRProvider("custom-openai-whisper")
+            return
         }
-        if apiKey.isEmpty {
-            defaults.removeObject(forKey: ProvidersConfigModel.customWhisperApiKeyKey)
-        } else {
-            defaults.set(apiKey, forKey: ProvidersConfigModel.customWhisperApiKeyKey)
-        }
-        if model.isEmpty {
-            defaults.removeObject(forKey: ProvidersConfigModel.customWhisperModelKey)
-        } else {
-            defaults.set(model, forKey: ProvidersConfigModel.customWhisperModelKey)
-        }
+
+        var entry = vault.asrProviderConfig(for: "custom-openai-whisper") ?? CredentialsProviderASREntry()
+        entry.baseURL = baseURL.isEmpty ? nil : baseURL
+        entry.apiKey = apiKey.isEmpty ? nil : apiKey
+        entry.model = model.isEmpty ? nil : model
+        vault.setASRProviderConfig(entry, for: "custom-openai-whisper")
     }
-
-    // MARK: - 常量
-
-    static let aliyunParaformerApiKeyDefaultsKey = "openless.asr.aliyun_paraformer.api_key"
-    static let customWhisperBaseURLKey = "openless.asr.custom_whisper.base_url"
-    static let customWhisperApiKeyKey = "openless.asr.custom_whisper.api_key"
-    static let customWhisperModelKey = "openless.asr.custom_whisper.model"
 }
 
 // MARK: - Add Custom LLM Provider Sheet
