@@ -302,9 +302,10 @@ mod platform {
 
 #[cfg(not(target_os = "macos"))]
 mod platform {
-    use std::sync::atomic::Ordering;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc::Sender;
     use std::sync::Arc;
+    use std::time::Duration;
 
     use rdev::{listen, Event, EventType, Key};
 
@@ -316,13 +317,25 @@ mod platform {
         tx: Sender<HotkeyEvent>,
         status_tx: std::sync::mpsc::Sender<bool>,
     ) {
-        // rdev 没有"安装即可知"的 API；我们乐观汇报成功，Linux/Win 上一般直接生效。
-        let _ = status_tx.send(true);
+        // rdev 没有"安装即可知"的 API。给 listen 一个短窗口：
+        // 如果 hook 立即失败，向 supervisor 汇报失败；否则视为已进入监听循环。
+        let status_sent = Arc::new(AtomicBool::new(false));
+        let ready_status_sent = Arc::clone(&status_sent);
+        let ready_status_tx = status_tx.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(350));
+            if !ready_status_sent.swap(true, Ordering::SeqCst) {
+                let _ = ready_status_tx.send(true);
+            }
+        });
         let cb_shared = Arc::clone(&shared);
         let result = listen(move |event: Event| {
             dispatch_event(&cb_shared, &tx, event);
         });
         if let Err(err) = result {
+            if !status_sent.swap(true, Ordering::SeqCst) {
+                let _ = status_tx.send(false);
+            }
             log::error!("[hotkey] rdev::listen 启动失败: {:?}", err);
         }
     }

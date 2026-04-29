@@ -8,7 +8,8 @@ use crate::coordinator::Coordinator;
 use crate::permissions::{self, PermissionStatus};
 use crate::persistence::{CredentialAccount, CredentialsSnapshot, CredentialsVault};
 use crate::types::{
-    CredentialsStatus, DictationSession, DictionaryEntry, PolishMode, UserPreferences,
+    CredentialsStatus, DictationSession, DictionaryEntry, HotkeyStatus, PolishMode,
+    UserPreferences,
 };
 
 type CoordinatorState<'a> = State<'a, Arc<Coordinator>>;
@@ -25,6 +26,11 @@ pub fn set_settings(coord: CoordinatorState<'_>, prefs: UserPreferences) -> Resu
     coord.prefs().set(prefs).map_err(|e| e.to_string())?;
     coord.update_hotkey_binding();
     Ok(())
+}
+
+#[tauri::command]
+pub fn get_hotkey_status(coord: CoordinatorState<'_>) -> HotkeyStatus {
+    coord.hotkey_status()
 }
 
 #[tauri::command]
@@ -221,8 +227,17 @@ pub fn open_system_settings(pane: String) -> Result<(), String> {
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = pane;
-        Ok(())
+        let uri = match pane.as_str() {
+            "microphone" => "ms-settings:privacy-microphone",
+            "sound" => "ms-settings:sound",
+            "accessibility" => "ms-settings:easeofaccess",
+            _ => "ms-settings:",
+        };
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", uri])
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| e.to_string())
     }
 }
 

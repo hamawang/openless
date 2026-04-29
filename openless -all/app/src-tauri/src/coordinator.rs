@@ -23,8 +23,8 @@ use crate::persistence::{
 use crate::polish::{OpenAICompatibleConfig, OpenAICompatibleLLMProvider};
 use crate::recorder::Recorder;
 use crate::types::{
-    CapsulePayload, CapsuleState, DictationSession, HotkeyMode, InsertStatus, PolishMode,
-    UserPreferences,
+    CapsulePayload, CapsuleState, DictationSession, HotkeyMode, HotkeyStatus,
+    HotkeyStatusState, InsertStatus, PolishMode,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,6 +63,7 @@ struct Inner {
     asr: Mutex<Option<Arc<VolcengineStreamingASR>>>,
     recorder: Mutex<Option<Recorder>>,
     hotkey: Mutex<Option<HotkeyMonitor>>,
+    hotkey_status: Mutex<HotkeyStatus>,
 }
 
 impl Coordinator {
@@ -85,6 +86,7 @@ impl Coordinator {
                 asr: Mutex::new(None),
                 recorder: Mutex::new(None),
                 hotkey: Mutex::new(None),
+                hotkey_status: Mutex::new(HotkeyStatus::default()),
             }),
         }
     }
@@ -119,6 +121,10 @@ impl Coordinator {
         }
     }
 
+    pub fn hotkey_status(&self) -> HotkeyStatus {
+        self.inner.hotkey_status.lock().clone()
+    }
+
     pub async fn start_dictation(&self) -> Result<(), String> {
         begin_session(&self.inner).await
     }
@@ -147,11 +153,22 @@ fn hotkey_supervisor_loop(inner: Arc<Inner>) {
         if inner.hotkey.lock().is_some() {
             return;
         }
+        *inner.hotkey_status.lock() = HotkeyStatus {
+            state: HotkeyStatusState::Starting,
+            message: Some(format!(
+                "正在安装全局快捷键监听（第 {} 次）",
+                attempts + 1
+            )),
+        };
         let (tx, rx) = mpsc::channel::<HotkeyEvent>();
         let binding = inner.prefs.get().hotkey;
         match HotkeyMonitor::start(binding, tx) {
             Ok(monitor) => {
                 *inner.hotkey.lock() = Some(monitor);
+                *inner.hotkey_status.lock() = HotkeyStatus {
+                    state: HotkeyStatusState::Installed,
+                    message: None,
+                };
                 log::info!(
                     "[coord] hotkey listener installed (after {} attempt(s))",
                     attempts + 1
@@ -165,6 +182,10 @@ fn hotkey_supervisor_loop(inner: Arc<Inner>) {
             }
             Err(e) => {
                 attempts += 1;
+                *inner.hotkey_status.lock() = HotkeyStatus {
+                    state: HotkeyStatusState::Failed,
+                    message: Some(e.to_string()),
+                };
                 if attempts <= 3 || attempts % 10 == 0 {
                     log::warn!(
                         "[coord] hotkey listener attempt #{attempts} failed: {e}; retrying in 3s"
@@ -392,12 +413,22 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
         log::error!("[coord] history append failed: {e}");
     }
 
+    let done_message = match status {
+        InsertStatus::Inserted => None,
+        InsertStatus::CopiedFallback => Some(if cfg!(target_os = "windows") {
+            "已复制，请 Ctrl+V".to_string()
+        } else {
+            "已复制，请粘贴".to_string()
+        }),
+        InsertStatus::Failed => Some("插入失败".to_string()),
+    };
+
     emit_capsule(
         inner,
         CapsuleState::Done,
         0.0,
         elapsed,
-        None,
+        done_message,
         Some(inserted_chars),
     );
 

@@ -12,6 +12,7 @@ import {
   requestMicrophonePermission,
 } from '../lib/ipc';
 import type { PermissionStatus } from '../lib/types';
+import { detectOS } from './WindowChrome';
 
 interface OnboardingProps {
   onComplete: () => void;
@@ -21,6 +22,7 @@ export function Onboarding({ onComplete }: OnboardingProps) {
   const [accessibility, setAccessibility] = useState<PermissionStatus>('notDetermined');
   const [microphone, setMicrophone] = useState<PermissionStatus>('notDetermined');
   const [busy, setBusy] = useState(false);
+  const os = detectOS();
 
   const refresh = async () => {
     const [a, m] = await Promise.all([
@@ -122,19 +124,23 @@ export function Onboarding({ onComplete }: OnboardingProps) {
 
         <PermissionStep
           index={1}
-          title="辅助功能"
-          desc="用于监听全局快捷键（默认 右 Option）并把识别结果写入光标位置。"
+          title={os === 'win' ? '全局快捷键' : '辅助功能'}
+          desc={os === 'win'
+            ? 'Windows 不需要 macOS 辅助功能权限；这里用于确认全局快捷键监听可用。'
+            : '用于监听全局快捷键（默认 右 Option）并把识别结果写入光标位置。'}
           status={accessibility}
           actionLabel={
-            accessibility === 'granted'
+            accessibility === 'notApplicable'
+              ? '无需授权'
+              : accessibility === 'granted'
               ? '已授权'
               : accessibility === 'denied'
                 ? '打开系统设置'
                 : '授权'
           }
           onAction={onGrantAccessibility}
-          disabled={busy || accessibility === 'granted'}
-          hint="授权后必须**完全退出 OpenLess** 再重新打开（macOS TCC 规则）。"
+          disabled={busy || accessibility === 'granted' || accessibility === 'notApplicable'}
+          hint={os === 'mac' ? '授权后必须**完全退出 OpenLess** 再重新打开（macOS TCC 规则）。' : undefined}
         />
 
         <PermissionStep

@@ -6,6 +6,7 @@ import type {
   CredentialsStatus,
   DictationSession,
   DictionaryEntry,
+  HotkeyStatus,
   PermissionStatus,
   PolishMode,
   UserPreferences,
@@ -48,6 +49,11 @@ const mockCredentialsStatus: CredentialsStatus = {
   arkConfigured: true,
 };
 
+const mockHotkeyStatus: HotkeyStatus = {
+  state: 'installed',
+  message: null,
+};
+
 const mockHistory: DictationSession[] = OL_DATA.history.map((h, i) => ({
   id: `mock-${i}`,
   createdAt: new Date().toISOString(),
@@ -78,6 +84,10 @@ export function getSettings(): Promise<UserPreferences> {
 
 export function setSettings(prefs: UserPreferences): Promise<void> {
   return invokeOrMock('set_settings', { prefs }, () => undefined);
+}
+
+export function getHotkeyStatus(): Promise<HotkeyStatus> {
+  return invokeOrMock('get_hotkey_status', undefined, () => mockHotkeyStatus);
 }
 
 // ── Credentials ────────────────────────────────────────────────────────
@@ -144,8 +154,8 @@ export function cancelDictation(): Promise<void> {
 }
 
 // ── Polish ─────────────────────────────────────────────────────────────
-export function repolish(id: string, mode: PolishMode): Promise<DictationSession> {
-  return invokeOrMock('repolish', { id, mode }, () => mockHistory[0]);
+export function repolish(rawText: string, mode: PolishMode): Promise<string> {
+  return invokeOrMock('repolish', { rawText, mode }, () => rawText);
 }
 
 export function setDefaultPolishMode(mode: PolishMode): Promise<void> {
@@ -179,6 +189,15 @@ export function openSystemSettings(pane: 'accessibility' | 'microphone'): Promis
 
 export function triggerMicrophonePrompt(): Promise<void> {
   return invokeOrMock('trigger_microphone_prompt', undefined, () => undefined);
+}
+
+export async function openExternal(url: string): Promise<void> {
+  if (!isTauri) {
+    window.open(url, '_blank', 'noopener,noreferrer');
+    return;
+  }
+  const { open } = await import('@tauri-apps/plugin-shell');
+  await open(url);
 }
 
 export { isTauri };

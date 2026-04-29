@@ -45,6 +45,13 @@ export interface HotkeyBinding {
   mode: HotkeyMode;
 }
 
+export type HotkeyStatusState = 'starting' | 'installed' | 'failed';
+
+export interface HotkeyStatus {
+  state: HotkeyStatusState;
+  message: string | null;
+}
+
 export interface UserPreferences {
   hotkey: HotkeyBinding;
   defaultMode: PolishMode;

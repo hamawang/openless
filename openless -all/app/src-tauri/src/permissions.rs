@@ -248,6 +248,9 @@ mod platform {
 #[cfg(not(target_os = "macos"))]
 mod platform {
     use super::PermissionStatus;
+    use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+    use cpal::{SampleFormat, StreamConfig};
+    use std::time::Duration;
 
     /// Windows / Linux 不存在 macOS 那种 Accessibility 概念；rdev 直接监听键盘。
     pub fn check_accessibility() -> PermissionStatus {
@@ -259,14 +262,77 @@ mod platform {
     }
 
     /// Windows 的麦克风权限走系统设置 → 隐私 → 麦克风；
-    /// 我们没法在用户态直接查授权状态，启动 cpal stream 时 Win10+ 会自动弹一次提示。
-    /// 这里乐观返回 Granted；UI 上不需要展示 Denied 状态。
+    /// 这里用 cpal 建立一次短生命周期输入流，避免只查设备格式时误报已授权。
     pub fn check_microphone() -> PermissionStatus {
-        PermissionStatus::Granted
+        let host = cpal::default_host();
+        let Some(device) = host.default_input_device() else {
+            log::warn!("[mic] no default input device");
+            return PermissionStatus::Denied;
+        };
+        let supported = match device.default_input_config() {
+            Ok(config) => config,
+            Err(err) => return classify_audio_probe_error(err.to_string()),
+        };
+        let sample_format = supported.sample_format();
+        let config: StreamConfig = supported.config();
+        match probe_input_stream(&device, &config, sample_format) {
+            Ok(()) => PermissionStatus::Granted,
+            Err(message) => classify_audio_probe_error(message),
+        }
     }
 
     pub fn request_microphone() -> PermissionStatus {
-        PermissionStatus::Granted
+        check_microphone()
+    }
+
+    fn classify_audio_probe_error(message: String) -> PermissionStatus {
+        let lower = message.to_lowercase();
+        log::warn!("[mic] input probe failed: {message}");
+        if lower.contains("denied")
+            || lower.contains("permission")
+            || lower.contains("authoriz")
+            || lower.contains("access")
+        {
+            PermissionStatus::Denied
+        } else {
+            PermissionStatus::NotDetermined
+        }
+    }
+
+    fn probe_input_stream(
+        device: &cpal::Device,
+        config: &StreamConfig,
+        sample_format: SampleFormat,
+    ) -> Result<(), String> {
+        let err_cb = |err| log::warn!("[mic] probe stream error: {err}");
+
+        macro_rules! build_probe {
+            ($t:ty) => {
+                device
+                    .build_input_stream::<$t, _, _>(
+                        config,
+                        move |_data: &[$t], _info| {},
+                        err_cb,
+                        None,
+                    )
+                    .map_err(|e| e.to_string())
+            };
+        }
+
+        let stream = match sample_format {
+            SampleFormat::F32 => build_probe!(f32),
+            SampleFormat::I16 => build_probe!(i16),
+            SampleFormat::U16 => build_probe!(u16),
+            SampleFormat::I32 => build_probe!(i32),
+            SampleFormat::I8 => build_probe!(i8),
+            SampleFormat::U8 => build_probe!(u8),
+            other => Err(format!("unsupported sample format: {other:?}")),
+        }?;
+
+        stream.play().map_err(|e| e.to_string())?;
+        std::thread::sleep(Duration::from_millis(120));
+        drop(stream);
+        Ok(())
     }
 }
 

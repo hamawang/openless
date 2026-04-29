@@ -33,6 +33,71 @@ cd app
 ./scripts/build-mac.sh
 ```
 
+## Windows Build
+
+The runnable Tauri app is still `app/`. Windows contributors should run a
+preflight before building so missing MSVC, Windows SDK, or MinGW tools fail
+with actionable messages.
+
+```powershell
+cd app
+powershell -ExecutionPolicy Bypass -File .\scripts\windows-preflight.ps1
+```
+
+### MSVC Route
+
+Use this route when Visual Studio Build Tools and the Windows SDK are installed.
+Open a Developer PowerShell, or call `vcvars64.bat`, then run:
+
+```powershell
+cd app
+npm ci
+npm run tauri -- build
+```
+
+Required Visual Studio Installer components:
+
+- `Microsoft.VisualStudio.Workload.VCTools`
+- MSVC v143 x64/x86 build tools
+- Windows 10/11 SDK that provides `kernel32.lib`
+
+If `link.exe` or `kernel32.lib` is missing, rerun:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\windows-preflight.ps1 -Toolchain msvc
+```
+
+### GNU / MinGW Route
+
+Use this route when MSVC/Windows SDK is unavailable. The current repository path
+contains a space in `openless -all`, and GNU/MinGW tooling can fail from paths
+with spaces while generating import libraries. Use the helper script; it mirrors
+the app to a no-space temporary directory before building.
+
+```powershell
+cd app
+scoop install rustup mingw
+rustup toolchain install stable-x86_64-pc-windows-gnu
+rustup target add x86_64-pc-windows-gnu
+powershell -ExecutionPolicy Bypass -File .\scripts\windows-preflight.ps1 -Toolchain gnu
+powershell -ExecutionPolicy Bypass -File .\scripts\windows-build-gnu.ps1
+```
+
+Generated GNU artifacts:
+
+- `%TEMP%\openless-windows-gnu\src-tauri\target\x86_64-pc-windows-gnu\release\openless.exe`
+- `%TEMP%\openless-windows-gnu\src-tauri\target\x86_64-pc-windows-gnu\release\bundle\msi\OpenLess_*_x64_en-US.msi`
+- `%TEMP%\openless-windows-gnu\src-tauri\target\x86_64-pc-windows-gnu\release\bundle\nsis\OpenLess_*_x64-setup.exe`
+
+### Windows Runtime Notes
+
+- Windows does not need the macOS Accessibility permission. Use Settings ->
+  Permissions -> Global hotkey to inspect listener status.
+- Microphone permission is checked by opening a short-lived input stream, so a
+  device-format query alone is not treated as permission granted.
+- Text insertion through `Ctrl+V` is treated as copy fallback unless the app can
+  confirm insertion.
+
 ## Release Signing
 
 Tagged releases (`v*-tauri`) must be Developer ID signed and notarized so users can download and open the macOS app without manually removing quarantine attributes.

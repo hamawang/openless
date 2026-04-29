@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { Icon } from '../components/Icon';
+import { detectOS } from '../components/WindowChrome';
 import { getCredentials, listHistory } from '../lib/ipc';
 import type { CredentialsStatus, DictationSession, PolishMode } from '../lib/types';
 import { Btn, Card, PageHeader, Pill } from './_atoms';
@@ -13,12 +14,18 @@ const MODE_LABEL: Record<PolishMode, string> = {
   formal: '正式表达',
 };
 
-export function Overview() {
+interface OverviewProps {
+  onOpenHistory?: () => void;
+}
+
+export function Overview({ onOpenHistory }: OverviewProps) {
   const [history, setHistory] = useState<DictationSession[]>([]);
   const [creds, setCreds] = useState<CredentialsStatus>({
     volcengineConfigured: false,
     arkConfigured: false,
   });
+  const os = detectOS();
+  const hotkeyLabel = os === 'win' ? '右 Alt' : '右 Option';
 
   useEffect(() => {
     listHistory().then(setHistory);
@@ -76,7 +83,7 @@ export function Overview() {
               background: '#fff', borderRadius: 5,
               border: '0.5px solid var(--ol-line-strong)',
               color: 'var(--ol-ink)',
-            }}>右 Option</kbd>
+            }}>{hotkeyLabel}</kbd>
             开始录音
           </div>
         }
@@ -119,12 +126,12 @@ export function Overview() {
         <Card padding={0}>
           <div style={{ padding: '14px 18px', borderBottom: '0.5px solid var(--ol-line)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--ol-ink-2)' }}>最近识别</span>
-            <Btn size="sm" variant="ghost">全部记录 →</Btn>
+            <Btn size="sm" variant="ghost" onClick={onOpenHistory}>全部记录 →</Btn>
           </div>
           <div>
             {history.length === 0 && (
               <div style={{ padding: 24, textAlign: 'center', fontSize: 12, color: 'var(--ol-ink-4)' }}>
-                还没有记录。按 右 Option 开始第一次录音。
+                还没有记录。按 {hotkeyLabel} 开始第一次录音。
               </div>
             )}
             {history.slice(0, 5).map(s => (

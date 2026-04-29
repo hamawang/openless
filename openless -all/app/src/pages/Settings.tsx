@@ -4,11 +4,14 @@
 
 import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { Icon } from '../components/Icon';
+import { detectOS } from '../components/WindowChrome';
 import { APP_VERSION_LABEL } from '../lib/appVersion';
 import {
   checkAccessibilityPermission,
   checkMicrophonePermission,
+  getHotkeyStatus,
   getSettings,
+  openExternal,
   openSystemSettings,
   readCredential,
   requestAccessibilityPermission,
@@ -16,7 +19,7 @@ import {
   setCredential,
   setSettings,
 } from '../lib/ipc';
-import type { HotkeyMode, HotkeyTrigger, PermissionStatus, UserPreferences } from '../lib/types';
+import type { HotkeyMode, HotkeyStatus, HotkeyTrigger, PermissionStatus, UserPreferences } from '../lib/types';
 import { Btn, Card, PageHeader, Pill } from './_atoms';
 
 interface SettingsProps {
@@ -101,7 +104,7 @@ const TRIGGER_LABEL: Record<HotkeyTrigger, string> = {
   rightAlt: '右 Alt',
 };
 
-const TRIGGER_OPTIONS: HotkeyTrigger[] = [
+const MAC_TRIGGER_OPTIONS: HotkeyTrigger[] = [
   'rightOption',
   'leftOption',
   'rightControl',
@@ -110,8 +113,20 @@ const TRIGGER_OPTIONS: HotkeyTrigger[] = [
   'fn',
 ];
 
+const WIN_TRIGGER_OPTIONS: HotkeyTrigger[] = [
+  'rightAlt',
+  'rightControl',
+  'leftControl',
+  'rightCommand',
+];
+
 function RecordingSection() {
   const [prefs, setPrefs] = useState<UserPreferences | null>(null);
+  const os = detectOS();
+  const triggerOptions = os === 'win' ? WIN_TRIGGER_OPTIONS : MAC_TRIGGER_OPTIONS;
+  const hotkeyDesc = os === 'win'
+    ? '按下即开始捕获语音，全局生效。Windows 不需要辅助功能权限。'
+    : '按下即开始捕获语音，全局生效。需要授予辅助功能权限。';
 
   useEffect(() => {
     getSettings().then(setPrefs);
@@ -146,7 +161,7 @@ function RecordingSection() {
     <Card>
       <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>录音</div>
       <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', marginBottom: 6 }}>定义全局录音的快捷键与触发方式。</div>
-      <SettingRow label="录音快捷键" desc="按下即开始捕获语音，全局生效。需要授予辅助功能权限。">
+      <SettingRow label="录音快捷键" desc={hotkeyDesc}>
         <select
           value={prefs.hotkey.trigger}
           onChange={e => onTriggerChange(e.target.value as HotkeyTrigger)}
@@ -156,7 +171,7 @@ function RecordingSection() {
             fontFamily: 'var(--ol-font-mono)',
           }}
         >
-          {TRIGGER_OPTIONS.map(t => (
+          {triggerOptions.map(t => (
             <option key={t} value={t}>{TRIGGER_LABEL[t]}</option>
           ))}
         </select>
@@ -326,17 +341,21 @@ const iconBtnStyle: CSSProperties = {
 };
 
 function ShortcutsSection() {
+  const os = detectOS();
+  const desc = os === 'win'
+    ? '所有快捷键全局生效。若无响应，请在权限页查看全局快捷键监听状态。'
+    : '所有快捷键全局生效，需要在权限设置中开启辅助功能。';
   const rows: Array<[string, string]> = [
-    ['开始 / 停止录音', '右 Option'],
+    ['开始 / 停止录音', os === 'win' ? '右 Alt' : '右 Option'],
     ['取消本次录音', 'Esc'],
     ['胶囊确认插入', '点击右侧 ✓'],
-    ['切换上一次风格', '⌘ ⇧ S'],
-    ['打开 OpenLess', '⌘ ⇧ O'],
+    ['切换上一次风格', os === 'win' ? '暂未支持' : '⌘ ⇧ S'],
+    ['打开 OpenLess', os === 'win' ? '暂未支持' : '⌘ ⇧ O'],
   ];
   return (
     <Card>
       <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>快捷键速查</div>
-      <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', marginBottom: 6 }}>所有快捷键全局生效，需要在权限设置中开启辅助功能。</div>
+      <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', marginBottom: 6 }}>{desc}</div>
       {rows.map(([k, v]) => (
         <SettingRow key={k} label={k}>
           <kbd style={{
@@ -356,6 +375,11 @@ function ShortcutsSection() {
 function PermissionsSection() {
   const [accessibility, setAccessibility] = useState<PermissionStatus | 'loading'>('loading');
   const [microphone, setMicrophone] = useState<PermissionStatus | 'loading'>('loading');
+  const [hotkey, setHotkey] = useState<HotkeyStatus | null>(null);
+  const os = detectOS();
+  const desc = os === 'win'
+    ? 'OpenLess 需要麦克风可用，并依赖全局快捷键监听状态判断 Windows 侧是否正常工作。'
+    : 'OpenLess 需要以下系统权限才能正常工作。授权后通常需要完全退出 App 重启一次才生效。';
 
   const refresh = async () => {
     const [a, m] = await Promise.all([
@@ -364,6 +388,7 @@ function PermissionsSection() {
     ]);
     setAccessibility(a);
     setMicrophone(m);
+    setHotkey(await getHotkeyStatus());
   };
 
   useEffect(() => {
@@ -401,7 +426,7 @@ function PermissionsSection() {
     <Card>
       <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>权限</div>
       <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', marginBottom: 6 }}>
-        OpenLess 需要以下系统权限才能正常工作。授权后通常需要完全退出 App 重启一次才生效。
+        {desc}
       </div>
       <SettingRow label="麦克风" desc="用于捕获你的语音输入。">
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -413,13 +438,25 @@ function PermissionsSection() {
           )}
         </div>
       </SettingRow>
-      <SettingRow label="辅助功能" desc="用于监听全局快捷键并将识别结果写入光标位置。">
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <PermissionPill status={accessibility} />
-          {accessibility !== 'granted' && accessibility !== 'notApplicable' && (
-            <Btn variant="ghost" size="sm" onClick={reRequestAccessibility}>
-              授权
-            </Btn>
+      {os !== 'win' && (
+        <SettingRow label="辅助功能" desc="用于监听全局快捷键并将识别结果写入光标位置。">
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <PermissionPill status={accessibility} />
+            {accessibility !== 'granted' && accessibility !== 'notApplicable' && (
+              <Btn variant="ghost" size="sm" onClick={reRequestAccessibility}>
+                授权
+              </Btn>
+            )}
+          </div>
+        </SettingRow>
+      )}
+      <SettingRow label="全局快捷键" desc={os === 'win' ? '用于判断 Windows 上快捷键监听是否已经安装。' : '用于判断快捷键监听是否已经安装。'}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', minWidth: 0 }}>
+          <HotkeyStatusPill status={hotkey} />
+          {hotkey?.message && (
+            <span style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {hotkey.message}
+            </span>
           )}
         </div>
       </SettingRow>
@@ -463,12 +500,25 @@ function AboutSection() {
           <div style={{ fontSize: 12, color: 'var(--ol-ink-3)' }}>自然说话，完美书写 · {APP_VERSION_LABEL}</div>
         </div>
       </div>
-      <SettingRow label="检查更新"><Btn variant="ghost" size="sm">检查</Btn></SettingRow>
-      <SettingRow label="文档"><Btn variant="ghost" size="sm" icon="link">openless.app/docs</Btn></SettingRow>
-      <SettingRow label="反馈渠道"><Btn variant="ghost" size="sm" icon="link">GitHub Issues</Btn></SettingRow>
+      <SettingRow label="检查更新"><Btn variant="ghost" size="sm" onClick={() => openExternal('https://github.com/appergb/openless/releases')}>打开 Releases</Btn></SettingRow>
+      <SettingRow label="文档"><Btn variant="ghost" size="sm" icon="link" onClick={() => openExternal('https://github.com/appergb/openless#readme')}>README</Btn></SettingRow>
+      <SettingRow label="反馈渠道"><Btn variant="ghost" size="sm" icon="link" onClick={() => openExternal('https://github.com/appergb/openless/issues')}>GitHub Issues</Btn></SettingRow>
       <SettingRow label="隐私" desc="所有识别结果仅保存在本机。云端 API 仅用于实时转写与润色，不会保留你的录音。">
         <Pill tone="default">本地优先</Pill>
       </SettingRow>
     </Card>
   );
+}
+
+function HotkeyStatusPill({ status }: { status: HotkeyStatus | null }) {
+  if (!status) {
+    return <Pill tone="default">检查中…</Pill>;
+  }
+  if (status.state === 'installed') {
+    return <Pill tone="ok"><Icon name="check" size={11} />已安装</Pill>;
+  }
+  if (status.state === 'starting') {
+    return <Pill tone="default">安装中…</Pill>;
+  }
+  return <Pill tone="outline">监听失败</Pill>;
 }

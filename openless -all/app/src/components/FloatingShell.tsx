@@ -13,7 +13,7 @@ import { History } from '../pages/History';
 import { Vocab } from '../pages/Vocab';
 import { Style } from '../pages/Style';
 import { APP_VERSION_LABEL } from '../lib/appVersion';
-import { getCredentials } from '../lib/ipc';
+import { getCredentials, openExternal } from '../lib/ipc';
 import { OL_DATA } from '../lib/mockData';
 import {
   PROVIDER_SETUP_PROMPT_SEEN_KEY,
@@ -56,6 +56,7 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
   const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSectionId | undefined>();
   const [providerPromptOpen, setProviderPromptOpen] = useState(false);
   const Page = (NAV.find((n) => n.id === currentTab) ?? NAV[0]).cmp;
+  const hotkeyLabel = os === 'win' ? '右 Alt' : '右 Option';
 
   useEffect(() => {
     let cancelled = false;
@@ -176,7 +177,7 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
                 border: '0.5px solid var(--ol-line-strong)',
                 fontFamily: 'var(--ol-font-mono)', color: 'var(--ol-ink)',
                 boxShadow: '0 1px 0 rgba(0,0,0,.04)',
-              }}>右 Option</kbd>
+              }}>{hotkeyLabel}</kbd>
               <span style={{ color: 'var(--ol-ink-4)' }}>开始 / 停止</span>
             </div>
           </div>
@@ -211,7 +212,11 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
             }}
           >
             <div style={{ padding: '24px 28px 32px', flex: 1, minHeight: 0, overflow: 'auto' }}>
-              <Page />
+              {currentTab === 'overview' ? (
+                <Overview onOpenHistory={() => setCurrentTab('history')} />
+              ) : (
+                <Page />
+              )}
             </div>
           </main>
         </div>
@@ -231,15 +236,31 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
           zIndex: 2,
         }}>
 
-        <FooterIcon name="user" tip="账户" />
-        <FooterIcon name="mail" tip="反馈" />
+        <FooterIcon name="user" tip="账户" onClick={() => openSettings('提供商')} />
+        <FooterIcon name="mail" tip="反馈" onClick={() => openExternal('https://github.com/appergb/openless/issues')} />
         <FooterIcon name="settings" tip="设置" active={settingsOpen} onClick={() => openSettings()} />
-        <FooterIcon name="help" tip="帮助" />
+        <FooterIcon name="help" tip="帮助" onClick={() => openExternal('https://github.com/appergb/openless#readme')} />
 
         <div style={{ flex: 1 }} />
 
         <span style={{ fontFamily: 'var(--ol-font-sans)' }}>版本 {APP_VERSION_LABEL}</span>
-        <a style={{ color: 'var(--ol-blue)', marginLeft: 8, textDecoration: 'none', fontWeight: 500 }}>检查更新</a>
+        <button
+          onClick={() => openExternal('https://github.com/appergb/openless/releases')}
+          style={{
+            color: 'var(--ol-blue)',
+            marginLeft: 8,
+            textDecoration: 'none',
+            fontWeight: 500,
+            border: 0,
+            background: 'transparent',
+            fontFamily: 'inherit',
+            fontSize: 11,
+            cursor: 'default',
+            padding: 0,
+          }}
+        >
+          检查更新
+        </button>
       </div>
 
       {/* Settings modal — rendered inside this window */}
