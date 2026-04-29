@@ -30,7 +30,10 @@ final class DictationCoordinator {
 
     /// Toggle 状态：idle → 开始；listening → 结束；starting/processing 阶段忽略重复触发。
     private var sessionPhase: SessionPhase = .idle
-    private var asr: VolcengineStreamingASR?
+    /// 当前 ASR session（通过 ASRProvider.openStreamingSession 拿到）。
+    /// 抽象化后 coordinator 不再直接持有 VolcengineStreamingASR；具体 provider 由
+    /// `makeASRProvider()` 选择，C-3 起会从 vault.activeASRProviderId 路由到不同实现。
+    private var asrSession: ASRStreamingSession?
     private var audioConsumer: BufferingAudioConsumer?
     private var sessionStartedAt: Date = Date()
     /// hold 模式下，Esc 取消后下一次 .released 应被忽略（否则会再次触发结束流程）。
@@ -211,8 +214,11 @@ final class DictationCoordinator {
         guard sessionPhase == .starting || sessionPhase == .listening else { return }
         Log.write("用户取消")
         sessionPhase = .idle
-        asr?.cancel()
-        asr = nil
+        if let session = asrSession {
+            asrSession = nil
+            // session.cancel() 是 async；让它在后台 detach 即可，不阻塞 UI/cancel 路径。
+            Task { await session.cancel() }
+        }
         recorder.stop()
         audioConsumer?.clear()
         audioConsumer = nil
@@ -261,28 +267,27 @@ final class DictationCoordinator {
         }
         guard sessionPhase == .starting else { return }
 
-        guard let credentials = loadVolcengineCredentials() else {
-            Log.write("缺少火山引擎凭据；麦克风已启动，结束后走 mock 模式")
+        guard let provider = makeASRProvider() else {
+            Log.write("缺少 ASR 凭据；麦克风已启动，结束后走 mock 模式")
             sessionPhase = .listening
             return
         }
 
         let dictionaryEntries = dictionary.enabledEntries()
-        let asr = VolcengineStreamingASR(
-            credentials: credentials,
-            dictionaryEntries: dictionaryEntries,
-            logger: { msg in Log.write(msg) }
-        )
-        self.asr = asr
+        let hotwords = dictionaryEntries.map(\.trimmedPhrase).filter { !$0.isEmpty }
 
         do {
-            try await asr.openSession()
-            Log.write("[asr] WebSocket 已连接")
+            let session = try await provider.openStreamingSession(
+                language: "zh-CN",
+                hotwords: hotwords
+            )
+            Log.write("[asr] streaming session opened (provider=\(provider.info.providerId))")
             guard sessionPhase == .starting else {
-                asr.cancel()
+                await session.cancel()
                 return
             }
-            audioConsumer.attach(asr)
+            self.asrSession = session
+            audioConsumer.attach(session)
             Log.write("[asr] 音频已接入 ASR")
             sessionPhase = .listening
         } catch {
@@ -310,17 +315,17 @@ final class DictationCoordinator {
         audioConsumer = nil
         Log.write("[session] 录音停止（含 250ms 末尾 padding），等待 ASR 终态")
 
-        guard let asr = self.asr else {
+        guard let session = self.asrSession else {
             // mock pipeline：无凭据时给一段提示
             await runMockPipeline()
             return
         }
 
         do {
-            try await asr.sendLastFrame()
-            let raw = try await asr.awaitFinalResult()
+            try await session.endStream()
+            let raw = try await session.awaitFinalResult()
             Log.write("[asr] final: \(raw.text)")
-            self.asr = nil
+            self.asrSession = nil
             let trimmed = raw.text.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed.isEmpty {
                 Log.write("[asr] 终态文本为空 — 跳过润色与插入")
@@ -333,7 +338,7 @@ final class DictationCoordinator {
             )
         } catch {
             Log.write("[asr] final 失败: \(error)")
-            self.asr = nil
+            self.asrSession = nil
             await failSession(reason: "识别失败")
         }
     }
@@ -517,8 +522,10 @@ final class DictationCoordinator {
         recorder.stop()
         audioConsumer?.clear()
         audioConsumer = nil
-        asr?.cancel()
-        asr = nil
+        if let session = asrSession {
+            asrSession = nil
+            await session.cancel()
+        }
         sessionPhase = .idle
         capsule.update(state: .error(reason))
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { [weak self] in
@@ -568,4 +575,19 @@ final class DictationCoordinator {
 
     // loadArkCredentials 已移除：润色路径改走 vault.llmProviderConfig(for:) +
     // OpenAICompatibleLLMProvider，不再单独构造 ArkCredentials。
+
+    // MARK: - ASR provider 工厂
+
+    /// 构造当前会话使用的 `ASRProvider`。
+    ///
+    /// C-1 阶段硬编码到 `VolcengineASRProvider`；C-3（Settings UI）会改成从
+    /// `vault.activeASRProviderId` 路由。返回 nil 时 coordinator 走 mock 流程
+    /// （沿用旧版「凭据缺失 → 提示性占位」的契约，不向用户报硬错误）。
+    private func makeASRProvider() -> ASRProvider? {
+        guard let creds = loadVolcengineCredentials() else { return nil }
+        return VolcengineASRProvider(
+            credentials: creds,
+            logger: { msg in Log.write(msg) }
+        )
+    }
 }

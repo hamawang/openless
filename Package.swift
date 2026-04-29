@@ -95,6 +95,11 @@ let package = Package(
             dependencies: ["OpenLessPersistence", "OpenLessCore"],
             path: "Tests/OpenLessPersistenceTests"
         ),
+        .testTarget(
+            name: "OpenLessASRTests",
+            dependencies: ["OpenLessASR", "OpenLessCore"],
+            path: "Tests/OpenLessASRTests"
+        ),
     ],
     // 暂留 Swift 5 语言模式，避免一次性吞掉 Swift 6 严格并发的全部改造。
     // 升 .v6 时需要重新审视 Recorder / VolcengineStreamingASR 等 @unchecked Sendable 类。
