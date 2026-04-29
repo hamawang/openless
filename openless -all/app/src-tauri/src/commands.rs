@@ -21,10 +21,7 @@ pub fn get_settings(coord: CoordinatorState<'_>) -> UserPreferences {
 }
 
 #[tauri::command]
-pub fn set_settings(
-    coord: CoordinatorState<'_>,
-    prefs: UserPreferences,
-) -> Result<(), String> {
+pub fn set_settings(coord: CoordinatorState<'_>, prefs: UserPreferences) -> Result<(), String> {
     coord.prefs().set(prefs).map_err(|e| e.to_string())?;
     coord.update_hotkey_binding();
     Ok(())
@@ -199,8 +196,7 @@ pub fn check_microphone_permission() -> PermissionStatus {
 
 #[tauri::command]
 pub fn request_microphone_permission(app: AppHandle) -> PermissionStatus {
-    crate::show_main_window(&app);
-    permissions::request_microphone()
+    crate::request_microphone_from_foreground(&app)
 }
 
 /// 跳到 macOS 系统设置的指定隐私面板。pane: "accessibility" | "microphone".
@@ -209,8 +205,12 @@ pub fn open_system_settings(pane: String) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
         let url = match pane.as_str() {
-            "accessibility" => "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
-            "microphone" => "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
+            "accessibility" => {
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+            }
+            "microphone" => {
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
+            }
             _ => "x-apple.systempreferences:com.apple.preference.security?Privacy",
         };
         std::process::Command::new("open")
@@ -230,9 +230,12 @@ pub fn open_system_settings(pane: String) -> Result<(), String> {
 /// 与 Swift `MicrophonePermission.request()` 同语义：只信系统权限回调，
 /// 不用 cpal stream 成功与否伪造授权状态。
 #[tauri::command]
-pub fn trigger_microphone_prompt() -> Result<(), String> {
-    let status = permissions::request_microphone();
-    if matches!(status, PermissionStatus::Granted | PermissionStatus::NotApplicable) {
+pub fn trigger_microphone_prompt(app: AppHandle) -> Result<(), String> {
+    let status = crate::request_microphone_from_foreground(&app);
+    if matches!(
+        status,
+        PermissionStatus::Granted | PermissionStatus::NotApplicable
+    ) {
         Ok(())
     } else {
         Err(format!("microphone permission is {status:?}"))

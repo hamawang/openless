@@ -14,6 +14,7 @@ cd "$(dirname "$0")/.."
 
 APP="src-tauri/target/release/bundle/macos/OpenLess.app"
 INFO="$APP/Contents/Info.plist"
+DMG_DIR="src-tauri/target/release/bundle/dmg"
 INSTALL="${INSTALL:-1}"
 
 if [ -z "${APPLE_CERTIFICATE:-}" ] && [ -z "${APPLE_SIGNING_IDENTITY:-}" ]; then
@@ -28,13 +29,26 @@ npm run tauri build
 
 echo "▶ 校验 Info.plist / 签名"
 /usr/libexec/PlistBuddy -c "Print :NSMicrophoneUsageDescription" "$INFO" >/dev/null
+codesign -d --entitlements :- "$APP" 2>/dev/null | grep -q "com.apple.security.device.audio-input"
 codesign --verify --deep --strict --verbose=2 "$APP" 2>&1 | tail -2
 
 echo "▶ 清理发布产物扩展属性"
 # 这只能保证 CI/本机构建产物本身干净；浏览器下载仍可能重新加 quarantine。
 # 用户免手工 xattr 的根本方案是 Developer ID 签名 + Apple notarization。
 xattr -cr "$APP" 2>/dev/null || true
-find src-tauri/target/release/bundle/dmg -maxdepth 1 -name '*.dmg' -exec xattr -c {} \; 2>/dev/null || true
+find "$DMG_DIR" -maxdepth 1 -name '*.dmg' -exec xattr -c {} \; 2>/dev/null || true
+
+echo "▶ 校验 quarantine 属性"
+if xattr -pr com.apple.quarantine "$APP" >/dev/null 2>&1; then
+  echo "✗ $APP 仍包含 com.apple.quarantine"
+  exit 1
+fi
+while IFS= read -r dmg; do
+  if xattr -p com.apple.quarantine "$dmg" >/dev/null 2>&1; then
+    echo "✗ $dmg 仍包含 com.apple.quarantine"
+    exit 1
+  fi
+done < <(find "$DMG_DIR" -maxdepth 1 -name '*.dmg' -print)
 
 if [ "$INSTALL" = "1" ]; then
   echo "▶ 装到 /Applications"

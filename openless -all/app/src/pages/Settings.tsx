@@ -4,12 +4,15 @@
 
 import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { Icon } from '../components/Icon';
+import { APP_VERSION_LABEL } from '../lib/appVersion';
 import {
   checkAccessibilityPermission,
   checkMicrophonePermission,
   getSettings,
+  openSystemSettings,
   readCredential,
   requestAccessibilityPermission,
+  requestMicrophonePermission,
   setCredential,
   setSettings,
 } from '../lib/ipc';
@@ -18,13 +21,19 @@ import { Btn, Card, PageHeader, Pill } from './_atoms';
 
 interface SettingsProps {
   embedded?: boolean;
+  initialSection?: SettingsSectionId;
 }
 
-type SectionId = '录音' | '提供商' | '快捷键' | '权限' | '关于';
+export type SettingsSectionId = '录音' | '提供商' | '快捷键' | '权限' | '关于';
 
-export function Settings({ embedded = false }: SettingsProps) {
-  const [section, setSection] = useState<SectionId>('录音');
-  const sections: SectionId[] = ['录音', '提供商', '快捷键', '权限', '关于'];
+export function Settings({ embedded = false, initialSection = '录音' }: SettingsProps) {
+  const [section, setSection] = useState<SettingsSectionId>(initialSection);
+  const sections: SettingsSectionId[] = ['录音', '提供商', '快捷键', '权限', '关于'];
+
+  useEffect(() => {
+    setSection(initialSection);
+  }, [initialSection]);
+
   return (
     <>
       {!embedded && (
@@ -374,6 +383,20 @@ function PermissionsSection() {
     refresh();
   };
 
+  const reRequestMicrophone = async () => {
+    if (microphone === 'denied' || microphone === 'restricted') {
+      await openSystemSettings('microphone');
+      refresh();
+      return;
+    }
+    const status = await requestMicrophonePermission();
+    setMicrophone(status);
+    if (status === 'denied' || status === 'restricted') {
+      await openSystemSettings('microphone');
+    }
+    refresh();
+  };
+
   return (
     <Card>
       <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>权限</div>
@@ -381,7 +404,14 @@ function PermissionsSection() {
         OpenLess 需要以下系统权限才能正常工作。授权后通常需要完全退出 App 重启一次才生效。
       </div>
       <SettingRow label="麦克风" desc="用于捕获你的语音输入。">
-        <PermissionPill status={microphone} />
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <PermissionPill status={microphone} />
+          {microphone !== 'granted' && microphone !== 'notApplicable' && microphone !== 'loading' && (
+            <Btn variant="ghost" size="sm" onClick={reRequestMicrophone}>
+              {microphone === 'denied' || microphone === 'restricted' ? '打开系统设置' : '授权'}
+            </Btn>
+          )}
+        </div>
       </SettingRow>
       <SettingRow label="辅助功能" desc="用于监听全局快捷键并将识别结果写入光标位置。">
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -430,7 +460,7 @@ function AboutSection() {
         >OL</div>
         <div>
           <div style={{ fontSize: 16, fontWeight: 600 }}>OpenLess</div>
-          <div style={{ fontSize: 12, color: 'var(--ol-ink-3)' }}>自然说话，完美书写 · v0.6.2 (Build 384)</div>
+          <div style={{ fontSize: 12, color: 'var(--ol-ink-3)' }}>自然说话，完美书写 · {APP_VERSION_LABEL}</div>
         </div>
       </div>
       <SettingRow label="检查更新"><Btn variant="ghost" size="sm">检查</Btn></SettingRow>

@@ -92,23 +92,42 @@ function WinTitleBar({ title }: WinTitleBarProps) {
         zIndex: 5,
       }}
     >
-      <div style={{ flex: 1, display: 'flex', alignItems: 'center', padding: '0 14px', gap: 10 }}>
+      <div
+        data-tauri-drag-region
+        style={{ flex: 1, display: 'flex', alignItems: 'center', padding: '0 14px', gap: 10 }}
+      >
         <img src="AppIcon.png" alt="" style={{ width: 14, height: 14, borderRadius: 3 }} />
         <span style={{ fontSize: 12, color: 'var(--ol-ink-3)', fontWeight: 500 }}>{title}</span>
       </div>
       <div style={{ display: 'flex' }}>
-        <button style={winBtnStyle}>
+        <button style={winBtnStyle} title="最小化" onClick={() => runWindowsWindowAction('minimize')}>
           <svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 5h10" stroke="currentColor" strokeWidth="1" /></svg>
         </button>
-        <button style={winBtnStyle}>
+        <button style={winBtnStyle} title="最大化" onClick={() => runWindowsWindowAction('toggleMaximize')}>
           <svg width="10" height="10" viewBox="0 0 10 10"><rect x="0.5" y="0.5" width="9" height="9" stroke="currentColor" strokeWidth="1" fill="none" /></svg>
         </button>
-        <button style={winBtnStyle}>
+        <button style={winCloseBtnStyle} title="关闭" onClick={() => runWindowsWindowAction('close')}>
           <svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 0L10 10M10 0L0 10" stroke="currentColor" strokeWidth="1" /></svg>
         </button>
       </div>
     </div>
   );
+}
+
+async function runWindowsWindowAction(action: 'minimize' | 'toggleMaximize' | 'close') {
+  try {
+    const { getCurrentWindow } = await import('@tauri-apps/api/window');
+    const currentWindow = getCurrentWindow();
+    if (action === 'minimize') {
+      await currentWindow.minimize();
+    } else if (action === 'toggleMaximize') {
+      await currentWindow.toggleMaximize();
+    } else {
+      await currentWindow.close();
+    }
+  } catch (error) {
+    console.warn(`[window] Windows title button ${action} failed`, error);
+  }
 }
 
 const winBtnStyle: CSSProperties = {
@@ -121,4 +140,9 @@ const winBtnStyle: CSSProperties = {
   justifyContent: 'center',
   color: 'var(--ol-ink-3)',
   cursor: 'default',
+};
+
+const winCloseBtnStyle: CSSProperties = {
+  ...winBtnStyle,
+  color: 'var(--ol-ink-3)',
 };

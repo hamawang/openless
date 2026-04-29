@@ -4,7 +4,7 @@
 //
 // Ported verbatim from design_handoff_openless/variants.jsx::FloatingShell.
 
-import { type ComponentType } from 'react';
+import { useEffect, useState, type ComponentType } from 'react';
 import { Icon } from './Icon';
 import { WindowChrome, detectOS, type OS } from './WindowChrome';
 import { SettingsModal } from './SettingsModal';
@@ -12,7 +12,14 @@ import { Overview } from '../pages/Overview';
 import { History } from '../pages/History';
 import { Vocab } from '../pages/Vocab';
 import { Style } from '../pages/Style';
+import { APP_VERSION_LABEL } from '../lib/appVersion';
+import { getCredentials } from '../lib/ipc';
 import { OL_DATA } from '../lib/mockData';
+import {
+  PROVIDER_SETUP_PROMPT_SEEN_KEY,
+  shouldShowProviderSetupPrompt,
+} from '../lib/providerSetup';
+import type { SettingsSectionId } from '../pages/Settings';
 import { useAppState, type AppTab } from '../state/useAppState';
 
 interface NavItem {
@@ -46,7 +53,38 @@ export function FloatingShell({ os: osProp, initialTab = 'overview', initialSett
 
 function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initialTab: AppTab; initialSettings: boolean }) {
   const { currentTab, setCurrentTab, settingsOpen, setSettingsOpen } = useAppState(initialTab, initialSettings);
+  const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSectionId | undefined>();
+  const [providerPromptOpen, setProviderPromptOpen] = useState(false);
   const Page = (NAV.find((n) => n.id === currentTab) ?? NAV[0]).cmp;
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const credentials = await getCredentials();
+      const promptSeenValue = window.localStorage.getItem(PROVIDER_SETUP_PROMPT_SEEN_KEY);
+      if (!cancelled && shouldShowProviderSetupPrompt(credentials, promptSeenValue)) {
+        setProviderPromptOpen(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const rememberProviderPrompt = () => {
+    window.localStorage.setItem(PROVIDER_SETUP_PROMPT_SEEN_KEY, '1');
+    setProviderPromptOpen(false);
+  };
+
+  const openSettings = (section?: SettingsSectionId) => {
+    setSettingsInitialSection(section);
+    setSettingsOpen(true);
+  };
+
+  const openProviderSettings = () => {
+    rememberProviderPrompt();
+    openSettings('提供商');
+  };
 
   return (
     <div style={{ flex: 1, position: 'relative', display: 'flex', flexDirection: 'column', minHeight: 0, paddingTop: os === 'mac' ? 36 : 0 }}>
@@ -84,7 +122,7 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
               marginLeft: 'auto', padding: '1px 6px', fontSize: 9.5, fontWeight: 600,
               borderRadius: 4, background: 'rgba(0,0,0,0.06)', color: 'var(--ol-ink-3)',
               letterSpacing: '0.04em',
-            }}>v1.0</span>
+            }}>{APP_VERSION_LABEL}</span>
           </div>
 
           {/* nav */}
@@ -195,19 +233,119 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
 
         <FooterIcon name="user" tip="账户" />
         <FooterIcon name="mail" tip="反馈" />
-        <FooterIcon name="settings" tip="设置" active={settingsOpen} onClick={() => setSettingsOpen(true)} />
+        <FooterIcon name="settings" tip="设置" active={settingsOpen} onClick={() => openSettings()} />
         <FooterIcon name="help" tip="帮助" />
 
         <div style={{ flex: 1 }} />
 
-        <span style={{ fontFamily: 'var(--ol-font-sans)' }}>版本 v1.0.0</span>
+        <span style={{ fontFamily: 'var(--ol-font-sans)' }}>版本 {APP_VERSION_LABEL}</span>
         <a style={{ color: 'var(--ol-blue)', marginLeft: 8, textDecoration: 'none', fontWeight: 500 }}>检查更新</a>
       </div>
 
       {/* Settings modal — rendered inside this window */}
       {settingsOpen &&
-        <SettingsModal os={os} onClose={() => setSettingsOpen(false)} />
+        <SettingsModal
+          key={settingsInitialSection ?? 'default'}
+          os={os}
+          initialSettingsSection={settingsInitialSection}
+          onClose={() => setSettingsOpen(false)}
+        />
       }
+
+      {providerPromptOpen && (
+        <ProviderSetupPrompt
+          onLater={rememberProviderPrompt}
+          onOpenSettings={openProviderSettings}
+        />
+      )}
+    </div>
+  );
+}
+
+function ProviderSetupPrompt({ onLater, onOpenSettings }: { onLater: () => void; onOpenSettings: () => void }) {
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        inset: 0,
+        zIndex: 70,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 28,
+        background: 'rgba(15,17,22,0.28)',
+        backdropFilter: 'blur(2px)',
+        WebkitBackdropFilter: 'blur(2px)',
+      }}
+    >
+      <div
+        style={{
+          width: 360,
+          borderRadius: 12,
+          background: 'var(--ol-surface)',
+          border: '0.5px solid rgba(0,0,0,.08)',
+          boxShadow: '0 24px 70px -24px rgba(15,17,22,.38), 0 0 0 0.5px rgba(0,0,0,.06)',
+          padding: 20,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+          <div
+            style={{
+              width: 34,
+              height: 34,
+              borderRadius: 8,
+              background: 'rgba(37,99,235,0.10)',
+              color: 'var(--ol-blue)',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexShrink: 0,
+            }}
+          >
+            <Icon name="settings" size={17} />
+          </div>
+          <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--ol-ink)' }}>设置语音提供商</div>
+        </div>
+        <div style={{ fontSize: 12.5, color: 'var(--ol-ink-3)', lineHeight: 1.55 }}>
+          还没有配置 ASR 或 LLM 提供商，语音输入和润色暂时无法正常工作。
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
+          <button
+            onClick={onLater}
+            style={{
+              height: 32,
+              padding: '0 13px',
+              borderRadius: 8,
+              border: '0.5px solid var(--ol-line-strong)',
+              background: 'var(--ol-surface)',
+              color: 'var(--ol-ink-3)',
+              fontFamily: 'inherit',
+              fontSize: 12.5,
+              fontWeight: 500,
+              cursor: 'default',
+            }}
+          >
+            稍后
+          </button>
+          <button
+            onClick={onOpenSettings}
+            style={{
+              height: 32,
+              padding: '0 14px',
+              borderRadius: 8,
+              border: 0,
+              background: 'var(--ol-ink)',
+              color: '#fff',
+              fontFamily: 'inherit',
+              fontSize: 12.5,
+              fontWeight: 500,
+              cursor: 'default',
+            }}
+          >
+            去设置
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

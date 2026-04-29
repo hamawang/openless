@@ -61,13 +61,19 @@ impl Recorder {
         level_handler: Arc<dyn Fn(f32) + Send + Sync>,
     ) -> Result<Self, RecorderError> {
         let status = permissions::check_microphone();
-        if !matches!(status, PermissionStatus::Granted | PermissionStatus::NotApplicable) {
+        if !matches!(
+            status,
+            PermissionStatus::Granted | PermissionStatus::NotApplicable
+        ) {
             let requested = permissions::request_microphone();
             if !matches!(
                 requested,
                 PermissionStatus::Granted | PermissionStatus::NotApplicable
             ) {
-                log::warn!("[recorder] microphone permission not granted: {:?}", requested);
+                log::warn!(
+                    "[recorder] microphone permission not granted: {:?}",
+                    requested
+                );
                 return Err(RecorderError::PermissionDenied);
             }
         }
@@ -359,12 +365,7 @@ fn downmix_to_mono(interleaved: &[f32], channels: usize) -> Vec<f32> {
 /// 算法说明：把上一回调的尾样本作为本回调起点，避免缝隙；用浮点
 /// `phase` 记录"已经走到上一帧的多少位置"，每输出一个目标样本前进
 /// `step = src_sr / dst_sr`。
-fn resample_to_target(
-    samples: &[f32],
-    src_sr: u32,
-    dst_sr: u32,
-    state: &StreamState,
-) -> Vec<f32> {
+fn resample_to_target(samples: &[f32], src_sr: u32, dst_sr: u32, state: &StreamState) -> Vec<f32> {
     if samples.is_empty() {
         return Vec::new();
     }

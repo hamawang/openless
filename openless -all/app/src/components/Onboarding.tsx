@@ -64,6 +64,9 @@ export function Onboarding({ onComplete }: OnboardingProps) {
       } else {
         const status = await requestMicrophonePermission();
         setMicrophone(status);
+        if (status === 'denied' || status === 'restricted') {
+          await openSystemSettings('microphone');
+        }
       }
     } finally {
       setBusy(false);

@@ -21,7 +21,11 @@ mod polish;
 mod recorder;
 mod types;
 
+#[cfg(target_os = "macos")]
+use std::sync::mpsc;
 use std::sync::Arc;
+#[cfg(target_os = "macos")]
+use std::time::Duration;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, LogicalPosition, Manager, RunEvent, Runtime};
@@ -51,7 +55,9 @@ pub fn run() {
             if let Some(main) = app.get_webview_window("main") {
                 #[cfg(target_os = "macos")]
                 {
-                    use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState};
+                    use window_vibrancy::{
+                        apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState,
+                    };
                     if let Err(e) = apply_vibrancy(
                         &main,
                         NSVisualEffectMaterial::HudWindow,
@@ -99,7 +105,11 @@ pub fn run() {
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
-                    if let TrayIconEvent::Click { button: MouseButton::Left, .. } = event {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        ..
+                    } = event
+                    {
                         show_main_window(tray.app_handle());
                     }
                 })
@@ -164,9 +174,7 @@ fn init_file_logger() {
     let log_dir = log_dir_path();
     let _ = std::fs::create_dir_all(&log_dir);
     let log_file = log_dir.join("openless.log");
-    let config = ConfigBuilder::new()
-        .set_time_format_rfc3339()
-        .build();
+    let config = ConfigBuilder::new().set_time_format_rfc3339().build();
     let mut loggers: Vec<Box<dyn simplelog::SharedLogger>> = vec![TermLogger::new(
         LevelFilter::Info,
         config.clone(),
@@ -224,6 +232,14 @@ pub(crate) fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
     activate_app(app);
 }
 
+pub(crate) fn request_microphone_from_foreground<R: Runtime>(
+    app: &AppHandle<R>,
+) -> permissions::PermissionStatus {
+    show_main_window(app);
+    wait_for_app_activation(app);
+    permissions::request_microphone()
+}
+
 fn hide_main_window<R: Runtime>(app: &AppHandle<R>) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.hide();
@@ -269,8 +285,33 @@ fn activate_app<R: Runtime>(app: &AppHandle<R>) {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn activate_app<R: Runtime>(_app: &AppHandle<R>) {
+fn activate_app<R: Runtime>(_app: &AppHandle<R>) {}
+
+#[cfg(target_os = "macos")]
+fn wait_for_app_activation<R: Runtime>(app: &AppHandle<R>) {
+    let (tx, rx) = mpsc::channel();
+    let _ = app.run_on_main_thread(move || {
+        use objc2::msg_send;
+        use objc2::runtime::{AnyClass, AnyObject, Bool};
+
+        unsafe {
+            let Some(cls) = AnyClass::get("NSApplication") else {
+                let _ = tx.send(());
+                return;
+            };
+            let ns_app: *mut AnyObject = msg_send![cls, sharedApplication];
+            if !ns_app.is_null() {
+                let _: () = msg_send![ns_app, activateIgnoringOtherApps: Bool::YES];
+            }
+        }
+        let _ = tx.send(());
+    });
+    let _ = rx.recv_timeout(Duration::from_millis(800));
+    std::thread::sleep(Duration::from_millis(150));
 }
+
+#[cfg(not(target_os = "macos"))]
+fn wait_for_app_activation<R: Runtime>(_app: &AppHandle<R>) {}
 
 /// 把 capsule 窗口移到屏幕底部居中，与 Swift `CapsuleWindowController.repositionToBottomCenter` 同效。
 /// 留 80pt 给 macOS Dock；Windows 任务栏一般在底部 48pt 以内，整体也合适。

@@ -4,7 +4,8 @@
 
 import { useEffect, useState, type CSSProperties } from 'react';
 import { Icon } from './Icon';
-import { Settings as SettingsContent } from '../pages/Settings';
+import { APP_VERSION_LABEL } from '../lib/appVersion';
+import { Settings as SettingsContent, type SettingsSectionId } from '../pages/Settings';
 import { Row } from './ui/Row';
 import { SegSimple } from './ui/SegSimple';
 import { SwitchLite } from './ui/SwitchLite';
@@ -14,6 +15,7 @@ import type { OS } from './WindowChrome';
 interface SettingsModalProps {
   os: OS;
   onClose: () => void;
+  initialSettingsSection?: SettingsSectionId;
 }
 
 type ModalSectionId = '账户' | '设置' | '个性化' | '关于';
@@ -28,7 +30,7 @@ interface ModalGroup {
   items: ModalNavItem[];
 }
 
-export function SettingsModal({ os: _os, onClose }: SettingsModalProps) {
+export function SettingsModal({ os: _os, onClose, initialSettingsSection }: SettingsModalProps) {
   const [section, setSection] = useState<ModalSectionId>('设置');
   const groups: ModalGroup[] = [
     { items: [{ id: '账户', icon: 'user' }, { id: '设置', icon: 'settings' }, { id: '个性化', icon: 'sparkle' }, { id: '关于', icon: 'info' }] },
@@ -119,7 +121,7 @@ export function SettingsModal({ os: _os, onClose }: SettingsModalProps) {
 
           <h2 style={{ margin: '0 0 18px', fontSize: 22, fontWeight: 600, letterSpacing: '-0.02em' }}>{section}</h2>
 
-          {section === '设置' && <SettingsContent embedded />}
+          {section === '设置' && <SettingsContent embedded initialSection={initialSettingsSection} />}
           {section === '账户' && <AccountSection />}
           {section === '个性化' && <PersonalizeSection />}
           {section === '关于' && <AboutMini />}
@@ -222,7 +224,7 @@ function AboutMini() {
         <img src="AppIcon.png" alt="" style={{ width: 56, height: 56, borderRadius: 13, boxShadow: '0 4px 10px rgba(0,0,0,.10), 0 0 0 0.5px rgba(0,0,0,.06)' }} />
         <div>
           <div style={{ fontSize: 17, fontWeight: 600 }}>OpenLess</div>
-          <div style={{ fontSize: 12, color: 'var(--ol-ink-3)' }}>自然说话，完美书写 · v1.0.0 (Build 412)</div>
+          <div style={{ fontSize: 12, color: 'var(--ol-ink-3)' }}>自然说话，完美书写 · {APP_VERSION_LABEL}</div>
         </div>
       </div>
       <Row label="检查更新"><button style={btnGhost}>检查</button></Row>
