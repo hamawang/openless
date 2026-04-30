@@ -58,6 +58,12 @@ fn copy_to_clipboard(text: &str) -> bool {
 
 #[cfg(target_os = "macos")]
 fn simulate_paste() -> Result<(), String> {
+    if !matches!(
+        crate::permissions::check_accessibility(),
+        crate::permissions::PermissionStatus::Granted
+    ) {
+        return Err("accessibility permission is not granted".into());
+    }
     macos::post_cmd_v()
 }
 
