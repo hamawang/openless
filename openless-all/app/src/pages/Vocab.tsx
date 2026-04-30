@@ -3,7 +3,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { addVocab, listVocab, removeVocab, setVocabEnabled } from '../lib/ipc';
+import { addVocab, isTauri, listVocab, removeVocab, setVocabEnabled } from '../lib/ipc';
 import type { DictionaryEntry } from '../lib/types';
 import { Btn, Card, PageHeader } from './_atoms';
 
@@ -30,6 +30,23 @@ export function Vocab() {
 
   useEffect(() => {
     refresh();
+    // 订阅后端 vocab:updated：每段口述结束、record_hits 触发后由 coordinator 推送。
+    // Vocab 页面打开期间能即时看到命中数累加，无需切到其他 tab 再切回。
+    if (!isTauri) return;
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    (async () => {
+      const { listen } = await import('@tauri-apps/api/event');
+      const handle = await listen('vocab:updated', () => {
+        void refresh();
+      });
+      if (cancelled) handle();
+      else unlisten = handle;
+    })();
+    return () => {
+      cancelled = true;
+      if (unlisten) unlisten();
+    };
   }, []);
 
   const onAdd = async () => {
@@ -83,6 +100,7 @@ export function Vocab() {
                 borderRadius: 8, fontSize: 13,
                 fontFamily: 'inherit', outline: 'none',
                 background: 'var(--ol-surface-2)',
+                transition: 'border-color 0.12s ease-out, box-shadow 0.12s ease-out, background 0.12s ease-out',
               }}
             />
             <Btn variant="primary" icon="plus" onClick={onAdd}>{t('common.add')}</Btn>
@@ -108,6 +126,12 @@ export function Vocab() {
           ))}
         </div>
       </Card>
+      <style>{`
+        @keyframes ol-chip-in {
+          from { opacity: 0; transform: scale(.92); }
+          to   { opacity: 1; transform: scale(1); }
+        }
+      `}</style>
     </>
   );
 }
@@ -132,6 +156,8 @@ function VocabChip({ entry, onRemove, onToggle }: VocabChipProps) {
         opacity: enabled ? 1 : 0.55,
         fontSize: 12, color: 'var(--ol-ink)',
         fontFamily: 'var(--ol-font-mono)',
+        transition: 'background 0.15s ease-out, opacity 0.15s ease-out, border-color 0.15s ease-out',
+        animation: 'ol-chip-in 0.18s ease-out',
       }}
     >
       <button

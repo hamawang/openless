@@ -142,6 +142,7 @@ const winBtnStyle: CSSProperties = {
   justifyContent: 'center',
   color: 'var(--ol-ink-3)',
   cursor: 'default',
+  transition: 'background 0.12s ease-out, color 0.12s ease-out',
 };
 
 const winCloseBtnStyle: CSSProperties = {

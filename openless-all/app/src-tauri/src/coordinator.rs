@@ -37,6 +37,11 @@ enum SessionPhase {
     Starting,
     Listening,
     Processing,
+    /// 已经过了最后一次 cancel 检查、即将 / 正在调用 inserter.insert 的窗口。
+    /// cancel_session 在此阶段拒绝介入：Cmd+V 模拟点击已开始或已发出，
+    /// 无法撤销，硬把 cancelled=true 也救不回来，只会让 UI 出现 cancelled
+    /// 但实际还是插入了的诡异状态。详见 PR 修 Codex audit HIGH #2。
+    Inserting,
 }
 
 enum ActiveAsr {
@@ -47,6 +52,12 @@ enum ActiveAsr {
 struct SessionState {
     phase: SessionPhase,
     started_at: Instant,
+    /// Starting 阶段（ASR 握手中）按下 stop 边沿（toggle 第二次按 / hold 松开）→
+    /// 等握手完成 phase=Listening 后立刻 end_session，不丢边沿。issue #51。
+    pending_stop: bool,
+    /// 用户在 Processing 阶段按 Esc 取消：end_session 在 polish/insert 检查点跳过插入 +
+    /// 跳过 history.append。issue #52。
+    cancelled: bool,
 }
 
 impl Default for SessionState {
@@ -54,6 +65,8 @@ impl Default for SessionState {
         Self {
             phase: SessionPhase::Idle,
             started_at: Instant::now(),
+            pending_stop: false,
+            cancelled: false,
         }
     }
 }
@@ -261,6 +274,12 @@ async fn handle_pressed(inner: &Arc<Inner>) {
         (HotkeyMode::Hold, SessionPhase::Idle) => {
             let _ = begin_session(inner).await;
         }
+        // Toggle 模式 Starting 阶段第二次按 → 用户想停。
+        // 不能直接 end_session（ASR session 还没建好），存边沿，握手完成后立即触发。
+        (HotkeyMode::Toggle, SessionPhase::Starting) => {
+            inner.state.lock().pending_stop = true;
+            log::info!("[coord] toggle stop edge during Starting — queued");
+        }
         _ => {}
     }
 }
@@ -270,8 +289,16 @@ async fn handle_released(inner: &Arc<Inner>) {
     let phase = inner.state.lock().phase;
     log::info!("[coord] hotkey released (mode={mode:?}, phase={phase:?})");
     if mode == HotkeyMode::Hold {
-        if phase == SessionPhase::Listening {
-            let _ = end_session(inner).await;
+        match phase {
+            SessionPhase::Listening => {
+                let _ = end_session(inner).await;
+            }
+            // Hold 模式 Starting 阶段松开 → 用户想停。同上：握手完成后再 end。
+            SessionPhase::Starting => {
+                inner.state.lock().pending_stop = true;
+                log::info!("[coord] hold release edge during Starting — queued");
+            }
+            _ => {}
         }
     }
 }
@@ -286,6 +313,9 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
         }
         state.phase = SessionPhase::Starting;
         state.started_at = Instant::now();
+        // 新会话清掉旧 pending_stop / cancelled，避免上一会话遗留触发奇怪行为
+        state.pending_stop = false;
+        state.cancelled = false;
     }
 
     #[cfg(any(debug_assertions, test))]
@@ -307,6 +337,7 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
             None,
         );
         inner.state.lock().phase = SessionPhase::Idle;
+        schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
         return Err(message);
     }
 
@@ -335,7 +366,17 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
                 None,
             );
             inner.state.lock().phase = SessionPhase::Idle;
+            schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
             return Err(e.to_string());
+        }
+        // open_session.await 期间用户可能按了 Esc / 改变心意。如果 cancel_session
+        // 已触发（cancelled=true 或 phase 被改回 Idle），别再装 ASR，直接善后。
+        // audit HIGH #1。
+        if cancel_raced_during_starting(inner) {
+            log::info!("[coord] cancel raced during ASR open_session — aborting begin");
+            asr.cancel();
+            inner.state.lock().phase = SessionPhase::Idle;
+            return Ok(());
         }
         let c: Arc<dyn crate::recorder::AudioConsumer> = Arc::new(AsrBridge {
             asr: Arc::clone(&asr),
@@ -345,31 +386,82 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
     };
 
     let inner_for_level = Arc::clone(inner);
+    // 节流：电平回调本身约 185 Hz（cpal 默认音频块），全部转发到前端会让 CSS
+    // transition 互相覆盖、视觉上"被平均"成静止。限制为 ~30 Hz（33ms 最少间隔），
+    // 配合 CSS 短 transition 让每次 emit 完整可见。
+    let last_emit_at = Arc::new(Mutex::new(None::<Instant>));
+    const LEVEL_EMIT_MIN_INTERVAL_MS: u64 = 33;
     let level_handler: Arc<dyn Fn(f32) + Send + Sync> = Arc::new(move |level| {
         let phase = inner_for_level.state.lock().phase;
-        if phase == SessionPhase::Listening || phase == SessionPhase::Starting {
-            let elapsed = inner_for_level
-                .state
-                .lock()
-                .started_at
-                .elapsed()
-                .as_millis() as u64;
-            emit_capsule(
-                &inner_for_level,
-                CapsuleState::Recording,
-                level,
-                elapsed,
-                None,
-                None,
-            );
+        if phase != SessionPhase::Listening && phase != SessionPhase::Starting {
+            return;
         }
+        let now = Instant::now();
+        {
+            let mut last = last_emit_at.lock();
+            if let Some(prev) = *last {
+                if now.duration_since(prev).as_millis() < LEVEL_EMIT_MIN_INTERVAL_MS as u128 {
+                    return;
+                }
+            }
+            *last = Some(now);
+        }
+        let elapsed = inner_for_level
+            .state
+            .lock()
+            .started_at
+            .elapsed()
+            .as_millis() as u64;
+        emit_capsule(
+            &inner_for_level,
+            CapsuleState::Recording,
+            level,
+            elapsed,
+            None,
+            None,
+        );
     });
 
     match Recorder::start(consumer, level_handler) {
         Ok(rec) => {
-            *inner.recorder.lock() = Some(rec);
-            inner.state.lock().phase = SessionPhase::Listening;
-            log::info!("[coord] session started (asr={})", active_asr);
+            // audit HIGH #1：转 Listening 之前在同一 lock 内检查 cancel race。
+            // 之前是无条件 phase=Listening，会把 cancel_session 在 await 期间设的 Idle
+            // 反向覆盖回 Listening → 用户的 cancel 边沿被吞掉。
+            let outcome = {
+                let mut state = inner.state.lock();
+                if state.cancelled || state.phase != SessionPhase::Starting {
+                    BeginOutcome::CancelRaced
+                } else {
+                    state.phase = SessionPhase::Listening;
+                    let pending = std::mem::replace(&mut state.pending_stop, false);
+                    if pending {
+                        BeginOutcome::PendingStop
+                    } else {
+                        BeginOutcome::Started
+                    }
+                }
+            };
+            match outcome {
+                BeginOutcome::CancelRaced => {
+                    log::info!("[coord] cancel raced during recorder start — aborting begin");
+                    rec.stop();
+                    if let Some(asr) = inner.asr.lock().take() {
+                        match asr {
+                            ActiveAsr::Volcengine(v) => v.cancel(),
+                            ActiveAsr::Whisper(w) => w.cancel(),
+                        }
+                    }
+                    inner.state.lock().phase = SessionPhase::Idle;
+                }
+                BeginOutcome::Started | BeginOutcome::PendingStop => {
+                    *inner.recorder.lock() = Some(rec);
+                    log::info!("[coord] session started (asr={})", active_asr);
+                    if matches!(outcome, BeginOutcome::PendingStop) {
+                        log::info!("[coord] applying pending_stop edge → end_session immediately");
+                        let _ = end_session(inner).await;
+                    }
+                }
+            }
         }
         Err(e) => {
             log::error!("[coord] recorder start failed: {e}");
@@ -388,6 +480,7 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
                 None,
             );
             inner.state.lock().phase = SessionPhase::Idle;
+            schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
             return Err(e.to_string());
         }
     }
@@ -438,6 +531,7 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
                         None,
                     );
                     inner.state.lock().phase = SessionPhase::Idle;
+                    schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
                     return Err(e.to_string());
                 }
             }
@@ -455,10 +549,18 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
                     None,
                 );
                 inner.state.lock().phase = SessionPhase::Idle;
+                schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
                 return Err(e.to_string());
             }
         },
     };
+
+    // ASR 完成后 cancel 检查：用户在 transcribe 进行中按 Esc 时，这里就会命中。
+    if inner.state.lock().cancelled {
+        log::info!("[coord] cancel detected after ASR — discarding transcript");
+        inner.state.lock().phase = SessionPhase::Idle;
+        return Ok(());
+    }
 
     emit_capsule(inner, CapsuleState::Polishing, 0.0, elapsed, None, None);
 
@@ -467,8 +569,44 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     let hotword_strs = enabled_phrases(inner);
     let polished = polish_or_passthrough(&raw, mode, &hotword_strs).await;
 
+    // 原子化最后一次 cancel 检查 + 转 Inserting：
+    // 在同一 lock 内决定「丢弃」还是「进入 Inserting」。一旦设到 Inserting，
+    // cancel_session 就拒绝介入（Cmd+V 已发出，撤销不掉）。这是 audit HIGH #2 的修复，
+    // 之前 check 与 inserter.insert 之间有窗口期。
+    let proceed_to_insert = {
+        let mut state = inner.state.lock();
+        if state.cancelled {
+            state.phase = SessionPhase::Idle;
+            false
+        } else {
+            state.phase = SessionPhase::Inserting;
+            true
+        }
+    };
+    if !proceed_to_insert {
+        log::info!("[coord] cancel detected before insert — discarding output (chars={})", polished.chars().count());
+        return Ok(());
+    }
+
     let status = inner.inserter.insert(&polished);
     let inserted_chars = polished.chars().count() as u32;
+
+    // 累计每条 enabled 词条在最终文本中的命中次数。
+    // 用 polished（最终插入的文本）扫描，与用户实际看到的输出一致。
+    let total_hits: u64 = match inner.vocab.record_hits(&polished) {
+        Ok(n) => n,
+        Err(e) => {
+            log::error!("[coord] record_hits failed: {e}");
+            0
+        }
+    };
+    // 词汇本页面在打开时通常需要立即看到 hits 增长，否则用户得手动切走再切回来才刷新。
+    // 命中数 > 0 时通知前端：Vocab 页面订阅 vocab:updated 即时 listVocab() 重新加载。
+    if total_hits > 0 {
+        if let Some(app) = inner.app.lock().clone() {
+            let _ = app.emit("vocab:updated", total_hits);
+        }
+    }
 
     let session = DictationSession {
         id: Uuid::new_v4().to_string(),
@@ -481,7 +619,9 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
         insert_status: status,
         error_code: None,
         duration_ms: Some(raw.duration_ms),
-        dictionary_entry_count: Some(hotword_strs.len() as u32),
+        // 历史详情页的"X 个热词"显示：用本次实际命中次数（每个匹配实例算一次），
+        // 比"启用词条总数"更能反映本段口述命中了多少。u64 → u32 截断对单段听写足够。
+        dictionary_entry_count: Some(total_hits.min(u32::MAX as u64) as u32),
     };
     if let Err(e) = inner.history.append(session) {
         log::error!("[coord] history append failed: {e}");
@@ -507,12 +647,7 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     );
 
     inner.state.lock().phase = SessionPhase::Idle;
-
-    let inner_clone = Arc::clone(inner);
-    async_runtime::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(700)).await;
-        emit_capsule(&inner_clone, CapsuleState::Idle, 0.0, 0, None, None);
-    });
+    schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
 
     Ok(())
 }
@@ -522,6 +657,17 @@ fn cancel_session(inner: &Arc<Inner>) {
     if phase == SessionPhase::Idle {
         return;
     }
+    // Inserting 阶段已经过了最后一次 cancel 检查 + 锁内转换，inserter.insert 即将
+    // 或正在执行 → Cmd+V 已发出无法撤销。这里硬设 cancelled=true 只会让 UI 显示
+    // "已取消" 但文本仍被插入，与用户预期相反。直接拒绝，让本次 session 走完。
+    if phase == SessionPhase::Inserting {
+        log::info!("[coord] cancel ignored — already in Inserting phase, can't undo paste");
+        return;
+    }
+    // Processing 阶段 cancel 不能直接干掉 in-flight polish task（已经 await 了），
+    // 但可以打 cancelled 标记，让 end_session 在插入前检查并丢弃结果。
+    inner.state.lock().cancelled = true;
+
     if let Some(rec) = inner.recorder.lock().take() {
         rec.stop();
     }
@@ -531,9 +677,14 @@ fn cancel_session(inner: &Arc<Inner>) {
             ActiveAsr::Whisper(w) => w.cancel(),
         }
     }
-    inner.state.lock().phase = SessionPhase::Idle;
+    // Processing 阶段保持 phase=Processing 让 end_session 自己走完检查 + 收尾；
+    // 其他阶段直接转 Idle。
+    if phase != SessionPhase::Processing {
+        inner.state.lock().phase = SessionPhase::Idle;
+    }
     emit_capsule(inner, CapsuleState::Cancelled, 0.0, 0, None, None);
-    log::info!("[coord] session cancelled");
+    log::info!("[coord] session cancelled (was {phase:?})");
+    schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
 }
 
 // ─────────────────────────── helpers ───────────────────────────
@@ -687,6 +838,41 @@ fn enabled_phrases(inner: &Arc<Inner>) -> Vec<String> {
         .filter(|e| e.enabled)
         .map(|e| e.phrase)
         .collect()
+}
+
+/// 终止态（Done / Cancelled / Error）后延迟 N ms 把胶囊改回 Idle，让浮窗自动消失。
+/// 用户点 ✕ / ✓ / 中途出错 / 按 Esc 都走这里，统一 2 秒。
+const CAPSULE_AUTO_HIDE_DELAY_MS: u64 = 2000;
+
+/// begin_session 中各 await 之间的 cancel race 检查结果。
+enum BeginOutcome {
+    /// 正常进入 Listening。
+    Started,
+    /// Starting 阶段积累了 pending_stop 边沿，应立即 end_session（hold 快速松开 / toggle 快速双击）。
+    PendingStop,
+    /// 期间 cancel_session 触发（cancelled=true 或 phase 被外部改回 Idle）。
+    /// 必须回滚 recorder + ASR 资源，不进 Listening。
+    CancelRaced,
+}
+
+/// 检查 begin_session 的 await 间隙是否被 cancel_session 打断。
+/// 必须在持有 state lock 的瞬间读，结果一拿就过期，所以用 helper 名字提醒只在
+/// 「准备做下一步副作用前」用。
+fn cancel_raced_during_starting(inner: &Arc<Inner>) -> bool {
+    let state = inner.state.lock();
+    state.cancelled || state.phase != SessionPhase::Starting
+}
+
+fn schedule_capsule_idle(inner: &Arc<Inner>, delay_ms: u64) {
+    let inner_clone = Arc::clone(inner);
+    async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+        // 仅在仍然 Idle 时（即用户没在这 2s 内重新触发）才 hide。
+        // 否则可能把新启动的 Recording 状态意外覆盖回 Idle。
+        if inner_clone.state.lock().phase == SessionPhase::Idle {
+            emit_capsule(&inner_clone, CapsuleState::Idle, 0.0, 0, None, None);
+        }
+    });
 }
 
 fn emit_capsule(

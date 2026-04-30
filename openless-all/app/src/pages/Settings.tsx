@@ -74,6 +74,7 @@ export function Settings({ embedded = false, initialSection = 'recording' }: Set
                 background: section === s ? 'rgba(0,0,0,0.04)' : 'transparent',
                 border: 0, borderRadius: 8, fontFamily: 'inherit', fontWeight: section === s ? 600 : 500,
                 cursor: 'default',
+                transition: 'background 0.12s ease-out, color 0.12s ease-out',
               }}
             >
               {t(`settings.sections.${s}`)}
@@ -170,6 +171,7 @@ function RecordingSection() {
                 color: prefs.hotkey.mode === v ? 'var(--ol-ink)' : 'var(--ol-ink-3)',
                 boxShadow: prefs.hotkey.mode === v ? '0 1px 2px rgba(0,0,0,.08)' : 'none',
                 cursor: 'default',
+                transition: 'background 0.12s ease-out, color 0.12s ease-out, box-shadow 0.12s ease-out',
               }}
             >
               {l}
@@ -197,6 +199,7 @@ function Toggle({ on, onToggle }: { on: boolean; onToggle?: (next: boolean) => v
         position: 'relative', width: 32, height: 18, borderRadius: 999, border: 0,
         background: on ? 'var(--ol-blue)' : 'rgba(0,0,0,0.15)',
         cursor: 'default',
+        transition: 'background 0.15s ease-out',
       }}
     >
       <span
@@ -222,9 +225,10 @@ type LlmPresetId = typeof LLM_PRESETS[number]['id'];
 
 const ASR_DEFAULT_RESOURCE_ID = 'volc.bigasr.sauc.duration';
 
+// SiliconFlow ASR 暂未在后端实现（coordinator.rs 只路由 whisper / volcengine）。
+// 在后端接入前不暴露给用户，避免选了之后必然失败。重新启用见 issue #58 的 follow-up。
 const ASR_PRESETS = [
   { id: 'volcengine',  nameKey: 'asrVolcengine'  },
-  { id: 'siliconflow', nameKey: 'asrSiliconflow' },
   { id: 'whisper',     nameKey: 'asrWhisper'     },
 ] as const;
 
@@ -317,14 +321,6 @@ function ProvidersSection() {
             <CredentialField key={`${asrProvider}:access_key`} label="Access Key" account="volcengine.access_key" mono mask />
             <CredentialField key={`${asrProvider}:resource_id`} label="Resource ID" account="volcengine.resource_id" mono
               placeholder={ASR_DEFAULT_RESOURCE_ID} defaultValue={ASR_DEFAULT_RESOURCE_ID} />
-          </>
-        ) : asrProvider === 'siliconflow' ? (
-          <>
-            <CredentialField key={`${asrProvider}:api_key`} label="API Key" account="asr.api_key" mono mask />
-            <CredentialField key={`${asrProvider}:endpoint`} label="Base URL" account="asr.endpoint"
-              placeholder="https://api.siliconflow.cn/v1" defaultValue="https://api.siliconflow.cn/v1" />
-            <CredentialField key={`${asrProvider}:model`} label="Model" account="asr.model"
-              placeholder="FunAudioLLM/SenseVoiceSmall" defaultValue="FunAudioLLM/SenseVoiceSmall" />
           </>
         ) : (
           <>
@@ -443,6 +439,7 @@ const inputStyle: CSSProperties = {
   fontFamily: 'inherit', outline: 'none',
   background: 'var(--ol-surface-2)',
   width: '100%', maxWidth: 360,
+  transition: 'background 0.12s ease-out, border-color 0.12s ease-out',
 };
 const iconBtnStyle: CSSProperties = {
   width: 32, height: 32,
@@ -450,6 +447,7 @@ const iconBtnStyle: CSSProperties = {
   borderRadius: 8, background: 'var(--ol-surface)',
   display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
   color: 'var(--ol-ink-3)', cursor: 'default', flexShrink: 0,
+  transition: 'background 0.12s ease-out, border-color 0.12s ease-out, color 0.12s ease-out',
 };
 
 function ShortcutsSection() {

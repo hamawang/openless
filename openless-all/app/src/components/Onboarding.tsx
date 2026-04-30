@@ -244,6 +244,7 @@ function PermissionStep({ index, title, desc, status, actionLabel, onAction, dis
           color: granted ? 'var(--ol-ink-3)' : '#fff',
           cursor: disabled ? 'not-allowed' : 'default',
           opacity: disabled && !granted ? 0.6 : 1,
+          transition: 'background 0.15s ease-out, color 0.15s ease-out, opacity 0.15s ease-out, transform 0.08s ease-out',
         }}
       >
         {actionLabel}

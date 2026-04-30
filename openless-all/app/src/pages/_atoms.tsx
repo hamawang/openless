@@ -128,6 +128,7 @@ export function Btn({ children, variant = 'ghost', size = 'md', icon, style, onC
         boxShadow: v.sh,
         fontFamily: 'inherit', fontWeight: 500,
         cursor: 'default',
+        transition: 'background 0.12s ease-out, color 0.12s ease-out, border-color 0.12s ease-out, box-shadow 0.12s ease-out, transform 0.08s ease-out',
         ...sizes[size],
         ...style,
       }}

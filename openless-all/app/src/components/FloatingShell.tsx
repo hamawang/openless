@@ -150,7 +150,8 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
                     color: active ? 'var(--ol-ink)' : 'var(--ol-ink-3)',
                     fontFamily: 'inherit', fontSize: 13, fontWeight: active ? 600 : 500,
                     boxShadow: active ? '0 1px 2px rgba(0,0,0,.05), 0 0 0 0.5px rgba(0,0,0,.06)' : 'none',
-                    cursor: 'default', transition: 'background .12s, color .12s',
+                    cursor: 'default',
+                    transition: 'background 0.12s ease-out, color 0.12s ease-out, box-shadow 0.12s ease-out',
                     textAlign: 'left',
                   }}>
 
@@ -220,11 +221,19 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
             }}
           >
             <div style={{ padding: '24px 28px 32px', flex: 1, minHeight: 0, overflow: 'auto' }}>
-              {currentTab === 'overview' ? (
-                <Overview onOpenHistory={() => setCurrentTab('history')} />
-              ) : (
-                <Page />
-              )}
+              {/* key={currentTab} 让每次切换重挂这棵子树 → ol-page-fade keyframe 重新触发 */}
+              <div
+                key={currentTab}
+                style={{
+                  animation: 'ol-page-fade 0.18s ease-out',
+                }}
+              >
+                {currentTab === 'overview' ? (
+                  <Overview onOpenHistory={() => setCurrentTab('history')} />
+                ) : (
+                  <Page />
+                )}
+              </div>
             </div>
           </main>
         </div>
@@ -265,6 +274,7 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
             fontSize: 11,
             cursor: 'default',
             padding: 0,
+            transition: 'opacity 0.12s ease-out',
           }}
         >
           {t('shell.footer.checkUpdates')}
@@ -287,6 +297,19 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
           onOpenSettings={openProviderSettings}
         />
       )}
+
+      {/* tab 切换 + provider prompt 公用的入场关键帧 */}
+      <style>{`
+        @keyframes ol-page-fade {
+          from { opacity: 0; transform: translateY(4px); }
+          to   { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes ol-prompt-fade { from { opacity: 0 } to { opacity: 1 } }
+        @keyframes ol-prompt-pop {
+          from { opacity: 0; transform: translateY(6px) scale(.97); }
+          to   { opacity: 1; transform: translateY(0) scale(1); }
+        }
+      `}</style>
     </div>
   );
 }
@@ -306,6 +329,7 @@ function ProviderSetupPrompt({ onLater, onOpenSettings }: { onLater: () => void;
         background: 'rgba(15,17,22,0.28)',
         backdropFilter: 'blur(2px)',
         WebkitBackdropFilter: 'blur(2px)',
+        animation: 'ol-prompt-fade 0.18s ease-out',
       }}
     >
       <div
@@ -316,6 +340,7 @@ function ProviderSetupPrompt({ onLater, onOpenSettings }: { onLater: () => void;
           border: '0.5px solid rgba(0,0,0,.08)',
           boxShadow: '0 24px 70px -24px rgba(15,17,22,.38), 0 0 0 0.5px rgba(0,0,0,.06)',
           padding: 20,
+          animation: 'ol-prompt-pop 0.22s cubic-bezier(.2,.9,.3,1.1)',
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
@@ -353,6 +378,7 @@ function ProviderSetupPrompt({ onLater, onOpenSettings }: { onLater: () => void;
               fontSize: 12.5,
               fontWeight: 500,
               cursor: 'default',
+              transition: 'background 0.12s ease-out, border-color 0.12s ease-out',
             }}
           >
             {t('shell.providerPrompt.later')}
@@ -370,6 +396,7 @@ function ProviderSetupPrompt({ onLater, onOpenSettings }: { onLater: () => void;
               fontSize: 12.5,
               fontWeight: 500,
               cursor: 'default',
+              transition: 'background 0.12s ease-out, transform 0.08s ease-out',
             }}
           >
             {t('shell.providerPrompt.openSettings')}
@@ -398,6 +425,7 @@ function FooterIcon({ name, tip, active, onClick }: FooterIconProps) {
         color: active ? 'var(--ol-ink)' : 'var(--ol-ink-4)',
         display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
         cursor: 'default',
+        transition: 'background 0.12s ease-out, color 0.12s ease-out',
       }}>
       <Icon name={name} size={15} />
     </button>

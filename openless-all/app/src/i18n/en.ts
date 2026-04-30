@@ -141,7 +141,7 @@ export const en: typeof zhCN = {
     modes: {
       raw: { name: 'Raw', desc: 'Only adds punctuation and natural breaks — no rewriting or expansion.', sample: "Keeps spoken cadence; fillers like 'um' or 'you know' get dropped, but sentences stay intact." },
       light: { name: 'Light polish', desc: 'Drops fillers, adds punctuation, and produces sendable natural prose.', sample: "Makes the transcript flow well without sounding scripted — your tone and habits remain." },
-      structured: { name: 'Structured', desc: 'Auto-organizes into a numbered outline when you cover several topics or steps.', sample: '1. Topic one\n   1) Point a\n   2) Point b\n2. Topic two\n   1) Point c' },
+      structured: { name: 'Structured', desc: 'Auto-organizes into a numbered outline when you cover several topics or steps.', sample: '1. Topic one\na. Point\nb. Point\n2. Topic two\na. Point\nb. Point' },
       formal: { name: 'Formal', desc: 'Email and workplace tone — more complete, more professional.', sample: 'Detects greetings/sign-offs in email contexts; avoids empty pleasantries.' },
     },
   },
