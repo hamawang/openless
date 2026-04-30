@@ -90,14 +90,17 @@ OpenLess does one thing: **turn speech into usable written text (especially AI p
 | [Lazy](https://heylazy.com) | Closed-source notes / capture tool | Not a notes container — inserts straight into any input field |
 | [Superwhisper](https://superwhisper.com) | Closed-source macOS, subscription | Open source; cloud ASR today, local ASR on the roadmap |
 
-## Status (v1.1)
+## Status (v1.2)
 
 - Tauri 2 + Rust backend + React/TS frontend. macOS 12+, Windows 10+.
-- Toggle-style recording: press to start, press again to stop. `Esc` cancels.
-- Volcengine streaming ASR + Ark / DeepSeek-compatible chat-completions for polish.
+- **Toggle and push-to-talk** recording modes. `Esc` cancels at any phase, including polish/insert.
+- Volcengine streaming ASR + OpenAI Whisper-compatible batch ASR; Ark / DeepSeek / OpenAI-compatible chat-completions for polish.
 - 4 output modes: raw, light polish, structured (**AI prompt mode**), formal.
 - Main window: Overview / History / Vocab / Style / Settings. Persistent tray icon. Mini status capsule floating on screen.
-- Dictionary entries injected as Volcengine ASR `context.hotwords` and as semantic hints during polish.
+- **Bilingual UI** — Settings → Language switches between 简体中文 and English (auto-detects on first launch).
+- **In-app auto-update** — Settings → About → Check button; signed updater artifacts via Tauri updater plugin.
+- **Single-instance lock** — prevents two OpenLess processes from racing the same hotkey edge.
+- Dictionary entries injected as Volcengine ASR `context.hotwords` and as semantic hints during polish; hits accumulate per session.
 - Platform-native global hotkey: CGEventTap on macOS, low-level keyboard hook (`WH_KEYBOARD_LL`) on Windows.
 
 ## Download & install (end users)
@@ -147,13 +150,6 @@ Logs: `~/Library/Logs/OpenLess/openless.log` (macOS) / `%LOCALAPPDATA%\OpenLess\
 
 **Windows build** — see [`openless-all/README.md`](openless-all/README.md) for MSVC vs GNU/MinGW routes.
 
-**Swift (legacy, Sparkle updates only):**
-
-```bash
-swift build && swift test
-./scripts/build-app.sh
-```
-
 ## Credentials
 
 Credentials live in the local Keychain (service = `com.openless.app`). A plaintext JSON file at `~/.openless/credentials.json` (mode 0600, dir 0700) is kept as a dev-mode fallback when Keychain is unavailable.
@@ -197,7 +193,7 @@ The main window is organized as Home / History / Dictionary / Settings. The Dict
 
 ## Architecture
 
-The active implementation is Tauri 2 (`openless-all/app/`). The Swift/SwiftPM codebase under `Sources/` is legacy and still serves Sparkle auto-updates for existing users.
+The active implementation is Tauri 2 (`openless-all/app/`). Auto-updates ride on the Tauri updater plugin; signed updater artifacts are produced by CI on every `v*-tauri` tag.
 
 **Tauri backend (Rust)** — each module depends only on `types.rs`:
 
@@ -224,7 +220,8 @@ See [CLAUDE.md](CLAUDE.md) for invariants and module-wiring rules.
 
 Planned but not yet shipped:
 
-- Local ASR (Whisper integration in progress; currently Volcengine cloud only).
+- Dictation translation mode: hold a separate hotkey, speak in your language, insert in target language ([#43](../../issues/43)).
+- Cross-session style memory: polish learns user's tone over time ([#46](../../issues/46)).
 - Snippets (no UI / trigger logic yet).
 - History enhancements: copy button, search, re-polish, re-insert.
 - "Paste last result" hotkey.
@@ -235,8 +232,7 @@ Planned but not yet shipped:
 - Bump version in `openless-all/app/package.json`, `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml`.
 - Run `INSTALL=0 ./scripts/build-mac.sh` and confirm the `.app` launches.
 - Verify on a clean macOS box: permission flow, hotkey, recording, ASR, polish, insertion, clipboard fallback.
-- Push a `v<version>-tauri` tag — CI builds and signs the macOS `.dmg` + Windows `.msi`.
-- **Swift legacy release** (for Sparkle users): `./scripts/release.sh <version>` — see [CLAUDE.md](CLAUDE.md) for the full flow.
+- Push a `v<version>-tauri` tag — CI builds + signs the updater artifacts and the macOS `.dmg` + Windows `.msi`. The updater needs `TAURI_SIGNING_PRIVATE_KEY` repo secret (matching the pubkey in `tauri.conf.json`).
 
 ## License
 
