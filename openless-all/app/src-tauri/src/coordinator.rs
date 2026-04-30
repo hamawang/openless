@@ -794,7 +794,10 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
         }
     };
     if !proceed_to_insert {
-        log::info!("[coord] cancel detected before insert — discarding output (chars={})", polished.chars().count());
+        log::info!(
+            "[coord] cancel detected before insert — discarding output (chars={})",
+            polished.chars().count()
+        );
         return Ok(());
     }
 
@@ -915,6 +918,15 @@ fn hotkey_injection_dry_run_enabled() -> bool {
 
 fn ensure_microphone_permission(inner: &Arc<Inner>) -> Result<(), String> {
     use crate::permissions::{self, PermissionStatus};
+
+    #[cfg(target_os = "windows")]
+    {
+        let _ = inner;
+        if permissions::windows_microphone_access_explicitly_denied() {
+            return Err("需要麦克风权限，当前状态: Denied".to_string());
+        }
+        return Ok(());
+    }
 
     let status = permissions::check_microphone();
     if matches!(
@@ -1143,6 +1155,35 @@ mod tests {
         let state = coordinator.inner.state.lock();
         assert_eq!(state.phase, SessionPhase::Starting);
         assert!(state.pending_stop);
+    }
+
+    #[tokio::test]
+    async fn repeated_pressed_edge_during_hold_session_does_not_restart() {
+        let coordinator = Coordinator::new();
+        coordinator
+            .inner
+            .prefs
+            .set(crate::types::UserPreferences {
+                hotkey: crate::types::HotkeyBinding {
+                    trigger: HotkeyTrigger::RightControl,
+                    mode: HotkeyMode::Hold,
+                },
+                ..Default::default()
+            })
+            .unwrap();
+        coordinator.inner.state.lock().phase = SessionPhase::Listening;
+        coordinator
+            .inner
+            .hotkey_trigger_held
+            .store(true, Ordering::SeqCst);
+
+        handle_pressed_edge(&coordinator.inner).await;
+
+        assert_eq!(
+            coordinator.inner.state.lock().phase,
+            SessionPhase::Listening
+        );
+        assert!(coordinator.inner.hotkey_trigger_held.load(Ordering::SeqCst));
     }
 }
 
