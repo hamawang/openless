@@ -470,6 +470,16 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     let status = inner.inserter.insert(&polished);
     let inserted_chars = polished.chars().count() as u32;
 
+    // 累计每条 enabled 词条在最终文本中的命中次数。
+    // 用 polished（最终插入的文本）扫描，与用户实际看到的输出一致。
+    let total_hits: u64 = match inner.vocab.record_hits(&polished) {
+        Ok(n) => n,
+        Err(e) => {
+            log::error!("[coord] record_hits failed: {e}");
+            0
+        }
+    };
+
     let session = DictationSession {
         id: Uuid::new_v4().to_string(),
         created_at: Utc::now().to_rfc3339(),
@@ -481,7 +491,9 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
         insert_status: status,
         error_code: None,
         duration_ms: Some(raw.duration_ms),
-        dictionary_entry_count: Some(hotword_strs.len() as u32),
+        // 历史详情页的"X 个热词"显示：用本次实际命中次数（每个匹配实例算一次），
+        // 比"启用词条总数"更能反映本段口述命中了多少。u64 → u32 截断对单段听写足够。
+        dictionary_entry_count: Some(total_hits.min(u32::MAX as u64) as u32),
     };
     if let Err(e) = inner.history.append(session) {
         log::error!("[coord] history append failed: {e}");

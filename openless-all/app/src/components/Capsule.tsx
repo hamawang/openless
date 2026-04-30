@@ -56,8 +56,9 @@ function AudioBars({ level }: AudioBarsProps) {
             borderRadius: 999,
             background: 'var(--ol-blue)',
             opacity: 0.82,
-            // Swift spring(response: 0.18, damping: 0.7) 的 cubic-bezier 近似
-            transition: 'height 0.18s cubic-bezier(.5, 1.7, .5, 1)',
+            // 注：原版用 cubic-bezier(.5, 1.7, .5, 1) 近似 Swift 弹簧，但 overshoot 与 ~100Hz 电平
+            // 更新叠加会出现可见抖动。改为非 overshoot 的 ease-out，单次稍硬但稳定不抽搐。
+            transition: 'height 0.12s cubic-bezier(.4, 0, .2, 1)',
           }}
         />
       ))}

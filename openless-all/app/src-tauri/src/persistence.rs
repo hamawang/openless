@@ -522,6 +522,43 @@ impl DictionaryStore {
         self.write_locked(&entries)
     }
 
+    /// 扫描一段最终文本，对每个 enabled 词条按出现次数累加 `hits`。
+    ///
+    /// 匹配是大小写不敏感的子串扫描：「Hello hello HELLO」算 3 次。
+    /// 返回本次累加的总命中数，方便调用方记录到 history.dictionary_entry_count。
+    pub fn record_hits(&self, text: &str) -> Result<u64> {
+        if text.is_empty() {
+            return Ok(0);
+        }
+        let _guard = self.lock.lock();
+        let mut entries = self.read_locked()?;
+        if entries.is_empty() {
+            return Ok(0);
+        }
+        let haystack = text.to_lowercase();
+        let mut total: u64 = 0;
+        let mut changed = false;
+        for entry in entries.iter_mut() {
+            if !entry.enabled {
+                continue;
+            }
+            let needle = entry.phrase.trim().to_lowercase();
+            if needle.is_empty() {
+                continue;
+            }
+            let count = count_occurrences(&haystack, &needle);
+            if count > 0 {
+                entry.hits = entry.hits.saturating_add(count);
+                total = total.saturating_add(count);
+                changed = true;
+            }
+        }
+        if changed {
+            self.write_locked(&entries)?;
+        }
+        Ok(total)
+    }
+
     fn read_locked(&self) -> Result<Vec<DictionaryEntry>> {
         read_or_default::<Vec<DictionaryEntry>>(&self.path)
     }
@@ -530,6 +567,23 @@ impl DictionaryStore {
         let json = serde_json::to_vec_pretty(entries).context("encode vocab failed")?;
         atomic_write(&self.path, &json)
     }
+}
+
+/// 统计 `needle` 在 `haystack` 中的非重叠出现次数。两侧调用前都应已转小写。
+fn count_occurrences(haystack: &str, needle: &str) -> u64 {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return 0;
+    }
+    let mut count: u64 = 0;
+    let mut start = 0usize;
+    while let Some(pos) = haystack[start..].find(needle) {
+        count = count.saturating_add(1);
+        start = start + pos + needle.len();
+        if start >= haystack.len() {
+            break;
+        }
+    }
+    count
 }
 
 // ───────────────────────── CredentialsVault ─────────────────────────
