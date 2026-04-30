@@ -143,6 +143,7 @@ function CircleButton({ variant, enabled, onClick }: CircleButtonProps) {
         flexShrink: 0,
         padding: 0,
         boxShadow: '0 1px 2px rgba(0, 0, 0, 0.06)',
+        transition: 'opacity 0.15s ease-out, background 0.12s ease-out, transform 0.08s ease-out',
       }}
     >
       {isCancel ? (

@@ -119,6 +119,7 @@ export function History() {
                     background: filter === f.id ? 'var(--ol-ink)' : 'transparent',
                     color: filter === f.id ? '#fff' : 'var(--ol-ink-3)',
                     cursor: 'default', fontFamily: 'inherit', fontWeight: 500,
+                    transition: 'background 0.12s ease-out, color 0.12s ease-out, border-color 0.12s ease-out',
                   }}
                 >{f.label}</button>
               ))}
@@ -142,6 +143,7 @@ export function History() {
                   background: selectedId === s.id ? 'rgba(37,99,235,0.06)' : 'transparent',
                   boxShadow: selectedId === s.id ? 'inset 2px 0 0 var(--ol-blue)' : 'none',
                   cursor: 'default', fontFamily: 'inherit', marginBottom: 1,
+                  transition: 'background 0.12s ease-out, box-shadow 0.12s ease-out',
                 }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>

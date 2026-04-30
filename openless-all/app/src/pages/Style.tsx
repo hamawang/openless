@@ -86,7 +86,7 @@ export function Style() {
               style={{
                 position: 'relative', width: 36, height: 20, borderRadius: 999, border: 0,
                 background: masterEnabled ? 'var(--ol-blue)' : 'rgba(0,0,0,0.15)',
-                cursor: 'default', transition: 'background .15s',
+                cursor: 'default', transition: 'background 0.15s ease-out',
               }}
             >
               <span
@@ -115,6 +115,7 @@ export function Style() {
                 boxShadow: isDefault ? '0 0 0 3px var(--ol-blue-ring), var(--ol-shadow-sm)' : 'var(--ol-shadow-sm)',
                 opacity: isEnabled ? 1 : 0.55,
                 position: 'relative',
+                transition: 'border-color 0.15s ease-out, box-shadow 0.15s ease-out, opacity 0.15s ease-out',
               }}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
@@ -152,6 +153,7 @@ export function Style() {
                       position: 'relative', width: 30, height: 18, borderRadius: 999, border: 0,
                       background: isEnabled ? 'var(--ol-blue)' : 'rgba(0,0,0,0.15)',
                       cursor: 'default',
+                      transition: 'background 0.15s ease-out',
                     }}
                   >
                     <span style={{

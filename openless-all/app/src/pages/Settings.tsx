@@ -74,6 +74,7 @@ export function Settings({ embedded = false, initialSection = 'recording' }: Set
                 background: section === s ? 'rgba(0,0,0,0.04)' : 'transparent',
                 border: 0, borderRadius: 8, fontFamily: 'inherit', fontWeight: section === s ? 600 : 500,
                 cursor: 'default',
+                transition: 'background 0.12s ease-out, color 0.12s ease-out',
               }}
             >
               {t(`settings.sections.${s}`)}
@@ -170,6 +171,7 @@ function RecordingSection() {
                 color: prefs.hotkey.mode === v ? 'var(--ol-ink)' : 'var(--ol-ink-3)',
                 boxShadow: prefs.hotkey.mode === v ? '0 1px 2px rgba(0,0,0,.08)' : 'none',
                 cursor: 'default',
+                transition: 'background 0.12s ease-out, color 0.12s ease-out, box-shadow 0.12s ease-out',
               }}
             >
               {l}
@@ -197,6 +199,7 @@ function Toggle({ on, onToggle }: { on: boolean; onToggle?: (next: boolean) => v
         position: 'relative', width: 32, height: 18, borderRadius: 999, border: 0,
         background: on ? 'var(--ol-blue)' : 'rgba(0,0,0,0.15)',
         cursor: 'default',
+        transition: 'background 0.15s ease-out',
       }}
     >
       <span
@@ -443,6 +446,7 @@ const inputStyle: CSSProperties = {
   fontFamily: 'inherit', outline: 'none',
   background: 'var(--ol-surface-2)',
   width: '100%', maxWidth: 360,
+  transition: 'background 0.12s ease-out, border-color 0.12s ease-out',
 };
 const iconBtnStyle: CSSProperties = {
   width: 32, height: 32,
@@ -450,6 +454,7 @@ const iconBtnStyle: CSSProperties = {
   borderRadius: 8, background: 'var(--ol-surface)',
   display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
   color: 'var(--ol-ink-3)', cursor: 'default', flexShrink: 0,
+  transition: 'background 0.12s ease-out, border-color 0.12s ease-out, color 0.12s ease-out',
 };
 
 function ShortcutsSection() {
