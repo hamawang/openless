@@ -10,7 +10,12 @@ import { Settings as SettingsContent, type SettingsSectionId } from '../pages/Se
 import { Row } from './ui/Row';
 import { SegSimple } from './ui/SegSimple';
 import { SwitchLite } from './ui/SwitchLite';
-import { SelectLite } from './ui/SelectLite';
+import {
+  FOLLOW_SYSTEM,
+  getLocalePreference,
+  setLocalePreference,
+  type SupportedLocale,
+} from '../i18n';
 import type { OS } from './WindowChrome';
 
 interface SettingsModalProps {
@@ -198,7 +203,7 @@ function PersonalizeSection() {
         />
       </Row>
       <Row label={t('modal.personalize.language')}>
-        <SelectLite value={t('settings.language.zh')} />
+        <LanguagePicker />
       </Row>
       <Row label={t('modal.personalize.blur')} desc={t('modal.personalize.blurDesc')}>
         <div style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
@@ -255,3 +260,33 @@ const btnGhost: CSSProperties = {
   background: '#fff', color: 'var(--ol-ink-2)',
   cursor: 'default', fontFamily: 'inherit',
 };
+
+// 真正可用的语言切换器 —— 用原生 <select>，与 Settings → Language 分区共享同一份 localStorage 偏好。
+function LanguagePicker() {
+  const { t } = useTranslation();
+  const [pref, setPref] = useState<SupportedLocale | typeof FOLLOW_SYSTEM>(getLocalePreference());
+
+  const apply = async (next: SupportedLocale | typeof FOLLOW_SYSTEM) => {
+    setPref(next);
+    await setLocalePreference(next);
+  };
+
+  return (
+    <select
+      value={pref}
+      onChange={e => apply(e.target.value as SupportedLocale | typeof FOLLOW_SYSTEM)}
+      style={{
+        height: 32, padding: '0 10px',
+        border: '0.5px solid var(--ol-line-strong)',
+        borderRadius: 8, fontSize: 12.5,
+        fontFamily: 'inherit', outline: 'none',
+        background: 'var(--ol-surface-2)',
+        minWidth: 200, cursor: 'default',
+      }}
+    >
+      <option value={FOLLOW_SYSTEM}>{t('settings.language.followSystem')}</option>
+      <option value="zh-CN">{t('settings.language.zh')}</option>
+      <option value="en">{t('settings.language.en')}</option>
+    </select>
+  );
+}
