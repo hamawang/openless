@@ -184,7 +184,7 @@ export function handleWindowHotkeyEvent(
   code: string,
   repeat: boolean,
 ): Promise<void> {
-  return invokeOrMock('handle_window_hotkey_event', { eventType, key, code, repeat }, () => undefined);
+  return invokeOrMock('handle_window_hotkey_event', { event_type: eventType, key, code, repeat }, () => undefined);
 }
 
 // ── Polish ─────────────────────────────────────────────────────────────

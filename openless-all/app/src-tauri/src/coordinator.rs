@@ -702,7 +702,7 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     let prefs = inner.prefs.get();
     let mode = prefs.default_mode;
     let hotword_strs = enabled_phrases(inner);
-    let polished = polish_or_passthrough(&raw, mode, &hotword_strs).await;
+    let (polished, polish_error) = polish_or_passthrough(&raw, mode, &hotword_strs).await;
 
     // 原子化最后一次 cancel 检查 + 转 Inserting：
     // 在同一 lock 内决定「丢弃」还是「进入 Inserting」。一旦设到 Inserting，
@@ -743,6 +743,10 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
         }
     }
 
+    // polish 失败时在 history 里标记 polishFailed，让用户能在历史详情看到为什么这次输出
+    // 不是预期的 mode 风格。即使失败也不丢词 — final_text 仍是原文（保留"用户的话不丢"语义）。
+    let error_code = polish_error.as_ref().map(|_| "polishFailed".to_string());
+
     let session = DictationSession {
         id: Uuid::new_v4().to_string(),
         created_at: Utc::now().to_rfc3339(),
@@ -752,7 +756,7 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
         app_bundle_id: None,
         app_name: None,
         insert_status: status,
-        error_code: None,
+        error_code,
         duration_ms: Some(raw.duration_ms),
         // 历史详情页的"X 个热词"显示：用本次实际命中次数（每个匹配实例算一次），
         // 比"启用词条总数"更能反映本段口述命中了多少。u64 → u32 截断对单段听写足够。
@@ -762,14 +766,19 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
         log::error!("[coord] history append failed: {e}");
     }
 
-    let done_message = match status {
-        InsertStatus::Inserted => None,
-        InsertStatus::CopiedFallback => Some(if cfg!(target_os = "windows") {
-            "已复制，请 Ctrl+V".to_string()
-        } else {
-            "已复制，请粘贴".to_string()
-        }),
-        InsertStatus::Failed => Some("插入失败".to_string()),
+    let done_message = if polish_error.is_some() {
+        // polish 失败优先告知用户，即使 insert 成功也要让用户知道这版是原文
+        Some("润色失败，已插入原文".to_string())
+    } else {
+        match status {
+            InsertStatus::Inserted => None,
+            InsertStatus::CopiedFallback => Some(if cfg!(target_os = "windows") {
+                "已复制，请 Ctrl+V".to_string()
+            } else {
+                "已复制，请粘贴".to_string()
+            }),
+            InsertStatus::Failed => Some("插入失败".to_string()),
+        }
     };
 
     emit_capsule(
@@ -876,19 +885,22 @@ fn ensure_asr_credentials() -> Result<(), String> {
     }
 }
 
+/// 润色文本；失败时返回原文 + 失败原因，调用方据此弹错误胶囊 + 写历史 error_code。
+/// 之前固定返回 String，调用方拿不到失败信号 → 用户感知"为什么风格设置没生效"。issue #57。
 async fn polish_or_passthrough(
     raw: &RawTranscript,
     mode: PolishMode,
     hotwords: &[String],
-) -> String {
+) -> (String, Option<String>) {
     if mode == PolishMode::Raw {
-        return raw.text.clone();
+        return (raw.text.clone(), None);
     }
     match polish_text(&raw.text, mode, hotwords).await {
-        Ok(s) => s,
+        Ok(s) => (s, None),
         Err(e) => {
-            log::error!("[coord] polish failed, falling back to raw: {e}");
-            raw.text.clone()
+            let reason = e.to_string();
+            log::error!("[coord] polish failed, falling back to raw: {reason}");
+            (raw.text.clone(), Some(reason))
         }
     }
 }

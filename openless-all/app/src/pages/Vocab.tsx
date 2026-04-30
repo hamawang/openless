@@ -71,8 +71,15 @@ export function Vocab() {
 
   const onToggle = async (entry: DictionaryEntry) => {
     const next = !entry.enabled;
+    // 乐观更新 UI；后端失败时回滚 + 让用户看到错误，避免 UI 显示「已禁用」但 ASR/polish
+    // 仍在注入此词条造成的诡异状态。issue #60。
     setEntries(prev => prev.map(e => (e.id === entry.id ? { ...e, enabled: next } : e)));
-    await setVocabEnabled(entry.id, next);
+    try {
+      await setVocabEnabled(entry.id, next);
+    } catch (err) {
+      setEntries(prev => prev.map(e => (e.id === entry.id ? { ...e, enabled: entry.enabled } : e)));
+      setError(err instanceof Error ? err.message : String(err));
+    }
   };
 
   return (
