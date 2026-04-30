@@ -283,5 +283,52 @@ pub fn trigger_microphone_prompt(app: AppHandle) -> Result<(), String> {
 
 // ─────────────────────────── unused but exported (silences dead_code) ───────────────────────────
 
+#[tauri::command]
+pub fn is_debug_ui_key_events_enabled() -> bool {
+    std::env::var("OPENLESS_DEBUG_UI_KEY_EVENTS")
+        .ok()
+        .as_deref()
+        == Some("1")
+}
+
+#[tauri::command]
+pub fn debug_log_ui_key_event(
+    event_type: String,
+    key: String,
+    code: String,
+    ctrl: bool,
+    alt: bool,
+    shift: bool,
+    meta: bool,
+    repeat: bool,
+) {
+    if !is_debug_ui_key_events_enabled() {
+        return;
+    }
+    log::info!(
+        "[ui-key] type={} key={} code={} ctrl={} alt={} shift={} meta={} repeat={}",
+        event_type,
+        key.replace(' ', "_"),
+        code.replace(' ', "_"),
+        ctrl,
+        alt,
+        shift,
+        meta,
+        repeat
+    );
+}
+
+#[tauri::command]
+pub async fn handle_window_hotkey_event(
+    coord: CoordinatorState<'_>,
+    event_type: String,
+    key: String,
+    code: String,
+    repeat: bool,
+) -> Result<(), String> {
+    coord.handle_window_hotkey_event(&event_type, &key, &code, repeat)
+        .await
+}
+
 #[allow(dead_code)]
 fn _ensure_snapshot_used(_: CredentialsSnapshot) {}

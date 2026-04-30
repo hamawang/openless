@@ -3,7 +3,14 @@ import { Capsule } from './components/Capsule';
 import { FloatingShell } from './components/FloatingShell';
 import { Onboarding } from './components/Onboarding';
 import { detectOS } from './components/WindowChrome';
-import { checkAccessibilityPermission, checkMicrophonePermission, isTauri } from './lib/ipc';
+import {
+  checkAccessibilityPermission,
+  checkMicrophonePermission,
+  debugLogUiKeyEvent,
+  handleWindowHotkeyEvent,
+  isDebugUiKeyEventsEnabled,
+  isTauri,
+} from './lib/ipc';
 import { HotkeySettingsProvider } from './state/HotkeySettingsContext';
 
 interface AppProps {
@@ -50,6 +57,59 @@ export function App({ isCapsule }: AppProps) {
     })();
     return () => {
       cancelled = true;
+    };
+  }, [os]);
+
+  useEffect(() => {
+    if (!isTauri) return;
+    let disposed = false;
+    let detach: (() => void) | null = null;
+
+    void isDebugUiKeyEventsEnabled().then(enabled => {
+      if (!enabled || disposed) return;
+      const onKeyboardEvent = (event: KeyboardEvent) => {
+        void debugLogUiKeyEvent({
+          eventType: event.type,
+          key: event.key,
+          code: event.code,
+          ctrl: event.ctrlKey,
+          alt: event.altKey,
+          shift: event.shiftKey,
+          meta: event.metaKey,
+          repeat: event.repeat,
+        });
+      };
+      window.addEventListener('keydown', onKeyboardEvent, true);
+      window.addEventListener('keyup', onKeyboardEvent, true);
+      detach = () => {
+        window.removeEventListener('keydown', onKeyboardEvent, true);
+        window.removeEventListener('keyup', onKeyboardEvent, true);
+      };
+    });
+
+    return () => {
+      disposed = true;
+      detach?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isTauri || os !== 'win') return;
+
+    const onKeyboardEvent = (event: KeyboardEvent) => {
+      void handleWindowHotkeyEvent({
+        eventType: event.type,
+        key: event.key,
+        code: event.code,
+        repeat: event.repeat,
+      });
+    };
+
+    window.addEventListener('keydown', onKeyboardEvent, true);
+    window.addEventListener('keyup', onKeyboardEvent, true);
+    return () => {
+      window.removeEventListener('keydown', onKeyboardEvent, true);
+      window.removeEventListener('keyup', onKeyboardEvent, true);
     };
   }, [os]);
 
