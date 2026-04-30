@@ -6,14 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 OpenLess is a menu-bar/tray voice-input layer. Hold or toggle a global hotkey, speak, and the dictated text is polished and inserted at the current cursor in any app. Product principles, state machine, and module list live in `docs/openless-development.md` and `docs/openless-overall-logic.md` — read those before changing product behavior.
 
-The repository contains **two parallel implementations** of the same product:
+The active codebase lives at `openless-all/app/` and is **Tauri 2 + Rust backend + React/TS frontend**, targeting macOS 12+ and Windows. The legacy Swift implementation (Sources/, Tests/, Package.swift, appcast.xml, Sparkle pipeline) was removed in commit `34d2823`; do not resurrect it.
 
-| Path | Stack | Status |
-| --- | --- | --- |
-| `Sources/`, `Tests/`, `Package.swift`, `scripts/`, `appcast.xml` | SwiftPM macOS-only (macOS 15+, Swift 5.9) | Legacy. Still ships Sparkle updates for `v*` tags so old users keep auto-updating. |
-| `openless-all/app/` (no space) | Tauri 2 + Rust backend + React/TS frontend, macOS 12+ and Windows | **Active**. All current development happens here. |
-
-The Tauri port is a faithful module-for-module rewrite of the Swift app. **The Swift original is the behavior authority — when Rust and TS disagree, Swift wins.** When porting, open the Rust file and the matching `Sources/OpenLess<X>/...` Swift file side by side. UI must match `openless-all/design_handoff_openless/*.jsx` pixel-for-pixel; the JSX is reference-only, never imported.
+UI must match `openless-all/design_handoff_openless/*.jsx` pixel-for-pixel; the JSX is reference-only, never imported.
 
 ## Build, Run, Test
 
@@ -56,40 +51,29 @@ Logs: `~/Library/Logs/OpenLess/openless.log` (macOS) / `%LOCALAPPDATA%\OpenLess\
 
 There is no test runner wired in for the frontend. `src/lib/providerSetup.test.ts` is a hand-rolled assertion script — run with `npx tsx src/lib/providerSetup.test.ts` if you need it. Rust side has no `cargo test` targets yet; behavior is verified by running the app.
 
-### Swift (legacy — only touch for Sparkle releases)
-
-```bash
-swift build
-swift test
-swift test --filter OpenLessCoreTests.PolishModeTests/<method>
-
-./scripts/build-app.sh              # build .app, ad-hoc sign, embed Sparkle, reset TCC
-RESET_TCC=0 ./scripts/build-app.sh  # keep TCC approvals
-./scripts/release.sh <version>      # bump build-app.sh, sign zip, append appcast.xml, tag, gh release
-```
-
-Logs: `~/Library/Logs/OpenLess/OpenLess.log`.
-
 ## Architecture
 
-`DictationCoordinator` (Swift) / `coordinator::Coordinator` (Rust) is the **single owner of session state**. Hotkey edges drive a small phase enum (`Idle → Starting → Listening → Processing`); recorder, ASR, polish, insertion, and history are wired here and nowhere else. Library/module code never calls across modules — they each depend only on shared types.
+`coordinator::Coordinator` is the **single owner of session state**. Hotkey edges drive a small phase enum (`Idle → Starting → Listening → Processing`); recorder, ASR, polish, insertion, and history are wired here and nowhere else. Library/module code never calls across modules — they each depend only on shared types.
 
 ```
-Swift (Sources/OpenLess*)        Rust (openless-all/app/src-tauri/src)        Purpose
-─────────────────────────        ──────────────────────────────────────        ────────────────────────────────
-OpenLessCore                     types.rs                                      Pure value types: DictationSession, PolishMode, HotkeyBinding, errors
-OpenLessHotkey                   hotkey.rs                                     Global hotkey monitor (modifier-key edges)
-OpenLessRecorder                 recorder.rs                                   Mic → 16 kHz mono Int16 PCM, RMS callback
-OpenLessASR                      asr/{mod,frame,volcengine,whisper}.rs         ASR providers: Volcengine streaming WebSocket + Whisper HTTP
-OpenLessPolish                   polish.rs                                     OpenAI-compatible chat completions (Ark / DeepSeek / etc.)
-OpenLessInsertion                insertion.rs                                  AX focused-element write → clipboard + Cmd+V → copy-only fallback
-OpenLessPersistence              persistence.rs                                History/preferences/vocab JSON + Keychain credentials
-OpenLessUI                       src/components/Capsule.tsx                    Capsule view + state enum
-OpenLessApp / DictationCoord.    coordinator.rs + commands.rs + lib.rs         State machine, IPC surface, tray icon, window plumbing
-                                 permissions.rs                                TCC checks (Accessibility / Microphone)
-                                 src/ (React)                                  Main window UI: Overview / History / Vocab / Style / Settings
-                                 src/pages/_atoms.tsx                          Recoil atoms — global frontend state
-                                 src/state/HotkeySettingsContext.tsx           HotkeySettings React context (capability + binding from backend)
+Rust (openless-all/app/src-tauri/src)        Purpose
+──────────────────────────────────────        ────────────────────────────────
+types.rs                                      Pure value types: DictationSession, PolishMode, HotkeyBinding, errors
+hotkey.rs                                     Global hotkey monitor (modifier-key edges)
+recorder.rs                                   Mic → 16 kHz mono Int16 PCM, RMS callback
+asr/{mod,frame,volcengine,whisper}.rs         ASR providers: Volcengine streaming WebSocket + Whisper HTTP
+polish.rs                                     OpenAI-compatible chat completions (Ark / DeepSeek / etc.)
+insertion.rs                                  AX focused-element write → clipboard + Cmd+V → copy-only fallback
+persistence.rs                                History/preferences/vocab JSON + Keychain credentials
+coordinator.rs + commands.rs + lib.rs         State machine, IPC surface, tray icon, window plumbing
+permissions.rs                                TCC checks (Accessibility / Microphone)
+
+Frontend (openless-all/app/src)
+src/components/Capsule.tsx                    Capsule view + state enum
+src/ (React)                                  Main window UI: Overview / History / Vocab / Style / Settings
+src/i18n/                                     react-i18next init + zh-CN / en resources
+src/pages/_atoms.tsx                          Recoil atoms — global frontend state
+src/state/HotkeySettingsContext.tsx           HotkeySettings React context (capability + binding from backend)
 ```
 
 ### Dictation pipeline
@@ -107,40 +91,31 @@ Invariants:
 
 ### Permissions, credentials, on-disk state
 
-- **Bundle ID `com.openless.app`** is shared between Swift and Tauri builds (hard-coded in `scripts/build-app.sh`, `openless-all/app/src-tauri/tauri.conf.json`, and `CredentialsVault.serviceName`). Changing it breaks Keychain lookups *and* every existing TCC grant.
-- **TCC**: Microphone + Accessibility + AppleEvents. Both apps declare `NSMicrophoneUsageDescription` / `NSAccessibilityUsageDescription` / `NSAppleEventsUsageDescription` in their Info.plist. Tauri's lives at `openless-all/app/src-tauri/Info.plist`. After a fresh build that resets TCC, the app must be **fully quit and relaunched** after granting Accessibility before the global hotkey tap installs.
-- **Credentials** live in Keychain under accounts in `CredentialAccount` (`volcengine.app_key`, `volcengine.access_key`, `volcengine.resource_id`, `ark.api_key`, `ark.model_id`, `ark.endpoint`). The Rust port additionally reads the legacy plaintext fallback at `~/.openless/credentials.json` so users who configured the Swift app keep their creds without re-entering. Never hard-code keys.
+- **Bundle ID `com.openless.app`** is hard-coded in `openless-all/app/src-tauri/tauri.conf.json` and `CredentialsVault.serviceName`. Changing it breaks Keychain lookups *and* every existing TCC grant.
+- **TCC**: Microphone + Accessibility + AppleEvents. `NSMicrophoneUsageDescription` / `NSAccessibilityUsageDescription` / `NSAppleEventsUsageDescription` live in `openless-all/app/src-tauri/Info.plist`. After a fresh build that resets TCC, the app must be **fully quit and relaunched** after granting Accessibility before the global hotkey tap installs.
+- **Credentials** live in Keychain under accounts in `CredentialAccount` (`volcengine.app_key`, `volcengine.access_key`, `volcengine.resource_id`, `ark.api_key`, `ark.model_id`, `ark.endpoint`). The plaintext fallback at `~/.openless/credentials.json` is read on first launch so legacy users keep their creds without re-entering. Never hard-code keys.
 - **Per-user data**:
-  - macOS: `~/Library/Application Support/OpenLess/{history.json, preferences.json, dictionary.json}` — same paths as the Swift app, capped at 200 history entries. **Do not rename `dictionary.json` to `vocab.json`** (drops user data).
+  - macOS: `~/Library/Application Support/OpenLess/{history.json, preferences.json, dictionary.json}` — capped at 200 history entries. **Do not rename `dictionary.json` to `vocab.json`** (drops user data).
   - Windows: `%APPDATA%\OpenLess\`
-  - Linux: `$XDG_DATA_HOME/OpenLess` (Tauri only)
+  - Linux: `$XDG_DATA_HOME/OpenLess`
 
-### Release pipelines
+### Release pipeline
 
-Two separate flows, by design:
+Push a `v*-tauri` tag → `.github/workflows/release-tauri.yml` builds macOS arm64 `.dmg` and Windows x64 `.msi`. macOS Developer ID signing + notarization runs only when `APPLE_CERTIFICATE` / `APPLE_CERTIFICATE_PASSWORD` / `APPLE_ID` / `APPLE_PASSWORD` / `APPLE_TEAM_ID` secrets are set; otherwise it falls back to ad-hoc signing with a CI warning.
 
-- **Swift (Sparkle, old users):** `scripts/release.sh <version>` bumps `build-app.sh`, builds the `.app`, ditto-zips it, signs with Sparkle EdDSA private key (Keychain item, not in repo), appends `<item>` to `appcast.xml`, commits, tags `v<version>`, pushes, and creates the GitHub Release. The public EdDSA key in `build-app.sh` (`SPARKLE_PUBLIC_KEY`) and the appcast URL `https://raw.githubusercontent.com/appergb/openless/main/appcast.xml` are baked into shipped clients — changing either strands existing users.
-- **Tauri (cross-platform):** push a `v*-tauri` tag → `.github/workflows/release-tauri.yml` builds macOS arm64 `.dmg` and Windows x64 `.msi`. macOS Developer ID signing + notarization runs only when `APPLE_CERTIFICATE` / `APPLE_CERTIFICATE_PASSWORD` / `APPLE_ID` / `APPLE_PASSWORD` / `APPLE_TEAM_ID` secrets are set; otherwise it falls back to ad-hoc signing with a CI warning. Tauri tags use `-tauri` suffix specifically to not collide with Swift `vX.Y.Z` tags.
-
-When bumping versions, update **both** `version` fields: `openless-all/app/package.json` and `openless-all/app/src-tauri/tauri.conf.json` (and `Cargo.toml`). For Swift releases, bump `APP_VERSION` *and* `BUILD_NUMBER` in `scripts/build-app.sh`.
+When bumping versions, update **both** `version` fields: `openless-all/app/package.json` and `openless-all/app/src-tauri/tauri.conf.json` (and `Cargo.toml`).
 
 ## Repo conventions
 
-- **Comments, log messages, user-facing strings, and most docs are in Simplified Chinese.** Match that when editing existing strings; new internal type/API names stay in English.
-- **macOS hotkey monitor must use native `CGEventTap`, never `rdev`.** `rdev` synchronously calls `TSMGetInputSourceProperty` from non-main threads, which macOS 14+ aborts via `dispatch_assert_queue_fail` → SIGTRAP. The Swift impl uses CGEventTap; the Rust impl uses CGEventTap on macOS and `rdev` only on Linux/Windows. Don't unify them.
-- **Don't `NSApp.activate` on the dictation path** — it steals focus and breaks insertion. The Tauri equivalent: only call `set_activation_policy(Regular)` + `activateIgnoringOtherApps` from `show_main_window` / mic-permission prompts, never from `start_dictation`.
-- All public Swift API surface is `Sendable`; UI/coordinator is `@MainActor`; audio/ASR/insertion classes that bridge C APIs are `@unchecked Sendable` with explicit locks. The Rust port mirrors this with `Arc<Mutex<...>>` (parking_lot) wrappers — keep the locking discipline when adding fields.
-- Swift libraries depend only on `OpenLessCore`. Rust modules depend only on `types.rs`. New cross-module wiring goes in `DictationCoordinator` / `coordinator.rs`, not in the leaf modules.
+- **Comments, log messages, user-facing strings, and most docs are in Simplified Chinese.** UI strings additionally route through `react-i18next` (`src/i18n/{zh-CN,en}.ts`) so we ship English alongside; `zh-CN.ts` is source of truth.
+- **macOS hotkey monitor must use native `CGEventTap`, never `rdev`.** `rdev` synchronously calls `TSMGetInputSourceProperty` from non-main threads, which macOS 14+ aborts via `dispatch_assert_queue_fail` → SIGTRAP. macOS uses CGEventTap; `rdev` is only used on Linux/Windows.
+- **Don't `NSApp.activate` on the dictation path** — it steals focus and breaks insertion. Only call `set_activation_policy(Regular)` + `activateIgnoringOtherApps` from `show_main_window` / mic-permission prompts, never from `start_dictation`.
+- Rust modules wrap shared mutable state with `Arc<Mutex<...>>` (parking_lot). Keep that locking discipline when adding fields.
+- Rust modules depend only on `types.rs`. New cross-module wiring goes in `coordinator.rs`, not in the leaf modules.
 
 ### Adding a new module
 
-Tauri (preferred):
 1. Add a `<name>.rs` (or directory) under `openless-all/app/src-tauri/src/`, importing only from `types`.
 2. Register it in `lib.rs` (`mod <name>;`).
 3. Wire it into `coordinator.rs` and expose any frontend-callable surface via `commands.rs` + `invoke_handler!`.
 4. Add the matching TS wrapper in `openless-all/app/src/lib/ipc.ts` (with a mock branch for browser dev).
-
-Swift (only if also patching the legacy app):
-1. Add target in `Package.swift` under `Sources/OpenLess<Name>`, depending only on `OpenLessCore`.
-2. Add it to `OpenLessApp`'s dependency list and wire it in `DictationCoordinator`.
-3. Add `Tests/OpenLess<Name>Tests` for pure logic.
