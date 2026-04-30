@@ -14,6 +14,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
@@ -35,6 +36,12 @@ const VOCAB_FILE: &str = "dictionary.json";
 /// 让用户在 Swift 版填过的凭据无需重输。
 const LEGACY_CREDS_DIR: &str = ".openless";
 const LEGACY_CREDS_FILE: &str = "credentials.json";
+
+static CREDENTIALS_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn credentials_lock() -> &'static Mutex<()> {
+    CREDENTIALS_LOCK.get_or_init(|| Mutex::new(()))
+}
 
 // ───────────────────────── path helpers ─────────────────────────
 
@@ -657,10 +664,12 @@ impl CredentialsVault {
     pub const SERVICE_NAME: &'static str = "com.openless.app";
 
     pub fn get(account: CredentialAccount) -> Result<Option<String>> {
+        let _guard = credentials_lock().lock();
         Ok(lookup_account(&load_credentials(), account))
     }
 
     pub fn set(account: CredentialAccount, value: &str) -> Result<()> {
+        let _guard = credentials_lock().lock();
         let mut root = load_credentials();
         let v = if value.is_empty() {
             None
@@ -672,28 +681,33 @@ impl CredentialsVault {
     }
 
     pub fn remove(account: CredentialAccount) -> Result<()> {
+        let _guard = credentials_lock().lock();
         let mut root = load_credentials();
         write_account(&mut root, account, None);
         save_credentials(&root)
     }
 
     pub fn get_active_asr() -> String {
+        let _guard = credentials_lock().lock();
         load_credentials().active.asr
     }
 
     pub fn set_active_asr_provider(id: &str) -> Result<()> {
+        let _guard = credentials_lock().lock();
         let mut root = load_credentials();
         root.active.asr = id.to_string();
         save_credentials(&root)
     }
 
     pub fn set_active_llm_provider(id: &str) -> Result<()> {
+        let _guard = credentials_lock().lock();
         let mut root = load_credentials();
         root.active.llm = id.to_string();
         save_credentials(&root)
     }
 
     pub fn snapshot() -> CredentialsSnapshot {
+        let _guard = credentials_lock().lock();
         let root = load_credentials();
         CredentialsSnapshot {
             volcengine_app_key: lookup_account(&root, CredentialAccount::VolcengineAppKey),
