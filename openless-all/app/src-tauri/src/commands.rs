@@ -163,6 +163,12 @@ pub fn cancel_dictation(coord: CoordinatorState<'_>) {
     coord.cancel_dictation();
 }
 
+#[cfg(debug_assertions)]
+#[tauri::command]
+pub async fn inject_hotkey_click_for_dev(coord: CoordinatorState<'_>) -> Result<(), String> {
+    coord.inject_hotkey_click_for_dev().await
+}
+
 #[tauri::command]
 pub async fn repolish(
     coord: CoordinatorState<'_>,

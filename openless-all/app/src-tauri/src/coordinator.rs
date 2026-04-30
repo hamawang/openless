@@ -154,6 +154,15 @@ impl Coordinator {
         cancel_session(&self.inner);
     }
 
+    #[cfg(any(debug_assertions, test))]
+    pub async fn inject_hotkey_click_for_dev(&self) -> Result<(), String> {
+        log::info!("[coord] dev hotkey injection started");
+        handle_pressed(&self.inner).await;
+        handle_released(&self.inner).await;
+        cancel_session(&self.inner);
+        Ok(())
+    }
+
     pub async fn repolish(&self, raw_text: String, mode: PolishMode) -> Result<String, String> {
         let hotwords = enabled_phrases(&self.inner);
         polish_text(&raw_text, mode, &hotwords)
@@ -241,6 +250,7 @@ fn hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEvent>) {
 async fn handle_pressed(inner: &Arc<Inner>) {
     let mode = inner.prefs.get().hotkey.mode;
     let phase = inner.state.lock().phase;
+    log::info!("[coord] hotkey pressed (mode={mode:?}, phase={phase:?})");
     match (mode, phase) {
         (HotkeyMode::Toggle, SessionPhase::Idle) => {
             let _ = begin_session(inner).await;
@@ -257,8 +267,9 @@ async fn handle_pressed(inner: &Arc<Inner>) {
 
 async fn handle_released(inner: &Arc<Inner>) {
     let mode = inner.prefs.get().hotkey.mode;
+    let phase = inner.state.lock().phase;
+    log::info!("[coord] hotkey released (mode={mode:?}, phase={phase:?})");
     if mode == HotkeyMode::Hold {
-        let phase = inner.state.lock().phase;
         if phase == SessionPhase::Listening {
             let _ = end_session(inner).await;
         }
@@ -277,9 +288,24 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
         state.started_at = Instant::now();
     }
 
+    #[cfg(any(debug_assertions, test))]
+    if hotkey_injection_dry_run_enabled() {
+        emit_capsule(inner, CapsuleState::Recording, 0.0, 0, None, None);
+        inner.state.lock().phase = SessionPhase::Listening;
+        log::info!("[coord] session started (hotkey-injection dry-run)");
+        return Ok(());
+    }
+
     if let Err(message) = ensure_microphone_permission(inner) {
         log::warn!("[coord] microphone permission gate failed: {message}");
-        emit_capsule(inner, CapsuleState::Error, 0.0, 0, Some(message.clone()), None);
+        emit_capsule(
+            inner,
+            CapsuleState::Error,
+            0.0,
+            0,
+            Some(message.clone()),
+            None,
+        );
         inner.state.lock().phase = SessionPhase::Idle;
         return Err(message);
     }
@@ -311,8 +337,9 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
             inner.state.lock().phase = SessionPhase::Idle;
             return Err(e.to_string());
         }
-        let c: Arc<dyn crate::recorder::AudioConsumer> =
-            Arc::new(AsrBridge { asr: Arc::clone(&asr) });
+        let c: Arc<dyn crate::recorder::AudioConsumer> = Arc::new(AsrBridge {
+            asr: Arc::clone(&asr),
+        });
         *inner.asr.lock() = Some(ActiveAsr::Volcengine(asr));
         c
     };
@@ -511,6 +538,11 @@ fn cancel_session(inner: &Arc<Inner>) {
 
 // ─────────────────────────── helpers ───────────────────────────
 
+#[cfg(any(debug_assertions, test))]
+fn hotkey_injection_dry_run_enabled() -> bool {
+    std::env::var_os("OPENLESS_HOTKEY_INJECTION_DRY_RUN").is_some()
+}
+
 fn ensure_microphone_permission(inner: &Arc<Inner>) -> Result<(), String> {
     use crate::permissions::{self, PermissionStatus};
 
@@ -624,6 +656,26 @@ fn enabled_hotwords(inner: &Arc<Inner>) -> Vec<DictionaryHotword> {
             enabled: e.enabled,
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn hotkey_injection_gate_logs_pressed_and_cancels() {
+        let _ = env_logger::builder()
+            .filter_level(log::LevelFilter::Info)
+            .is_test(false)
+            .try_init();
+        std::env::set_var("OPENLESS_HOTKEY_INJECTION_DRY_RUN", "1");
+
+        let coordinator = Coordinator::new();
+        coordinator.inject_hotkey_click_for_dev().await.unwrap();
+
+        assert_eq!(coordinator.inner.state.lock().phase, SessionPhase::Idle);
+        std::env::remove_var("OPENLESS_HOTKEY_INJECTION_DRY_RUN");
+    }
 }
 
 fn enabled_phrases(inner: &Arc<Inner>) -> Vec<String> {

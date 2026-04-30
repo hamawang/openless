@@ -139,6 +139,8 @@ pub fn run() {
             commands::start_dictation,
             commands::stop_dictation,
             commands::cancel_dictation,
+            #[cfg(debug_assertions)]
+            commands::inject_hotkey_click_for_dev,
             commands::repolish,
             commands::set_default_polish_mode,
             commands::set_style_enabled,

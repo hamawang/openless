@@ -89,6 +89,18 @@ Generated GNU artifacts:
 - `%TEMP%\openless-windows-gnu\src-tauri\target\x86_64-pc-windows-gnu\release\bundle\msi\OpenLess_*_x64_en-US.msi`
 - `%TEMP%\openless-windows-gnu\src-tauri\target\x86_64-pc-windows-gnu\release\bundle\nsis\OpenLess_*_x64-setup.exe`
 
+### Hotkey Injection Gate
+
+Use this gate before/after Windows hotkey changes when a physical keyboard
+regression is unavailable. It injects a dev/test-only hotkey click through the
+coordinator `handle_pressed` / `handle_released` path, asserts the log contains
+`[coord] hotkey pressed`, and cancels the dry-run session automatically.
+
+```powershell
+cd app
+npm run check:hotkey-injection
+```
+
 ### Windows Runtime Notes
 
 - Windows does not need the macOS Accessibility permission. Use Settings ->
