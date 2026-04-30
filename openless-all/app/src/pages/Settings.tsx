@@ -295,10 +295,10 @@ function ProvidersSection() {
             ))}
           </select>
         </SettingRow>
-        <CredentialField key={`${llmProvider}:api_key`} label="API Key" account="ark.api_key" mono mask />
-        <CredentialField key={`${llmProvider}:endpoint`} label="Base URL" account="ark.endpoint"
+        <CredentialField key={`${llmProvider}:api_key`} label={t('settings.providers.apiKeyLabel')} account="ark.api_key" mono mask />
+        <CredentialField key={`${llmProvider}:endpoint`} label={t('settings.providers.baseUrlLabel')} account="ark.endpoint"
           placeholder={preset.baseUrl || 'https://your-endpoint/v1'} />
-        <CredentialField key={`${llmProvider}:model`} label="Model" account="ark.model_id"
+        <CredentialField key={`${llmProvider}:model`} label={t('settings.providers.modelLabel')} account="ark.model_id"
           placeholder={preset.modelPlaceholder || 'model-name'} mono />
       </Card>
 
@@ -320,17 +320,17 @@ function ProvidersSection() {
         </SettingRow>
         {asrProvider === 'volcengine' ? (
           <>
-            <CredentialField key={`${asrProvider}:app_key`} label="App Key" account="volcengine.app_key" mono mask />
-            <CredentialField key={`${asrProvider}:access_key`} label="Access Key" account="volcengine.access_key" mono mask />
-            <CredentialField key={`${asrProvider}:resource_id`} label="Resource ID" account="volcengine.resource_id" mono
+            <CredentialField key={`${asrProvider}:app_key`} label={t('settings.providers.appKeyLabel')} account="volcengine.app_key" mono mask />
+            <CredentialField key={`${asrProvider}:access_key`} label={t('settings.providers.accessKeyLabel')} account="volcengine.access_key" mono mask />
+            <CredentialField key={`${asrProvider}:resource_id`} label={t('settings.providers.resourceIdLabel')} account="volcengine.resource_id" mono
               placeholder={ASR_DEFAULT_RESOURCE_ID} defaultValue={ASR_DEFAULT_RESOURCE_ID} />
           </>
         ) : (
           <>
-            <CredentialField key={`${asrProvider}:api_key`} label="API Key" account="asr.api_key" mono mask />
-            <CredentialField key={`${asrProvider}:endpoint`} label="Base URL" account="asr.endpoint"
+            <CredentialField key={`${asrProvider}:api_key`} label={t('settings.providers.apiKeyLabel')} account="asr.api_key" mono mask />
+            <CredentialField key={`${asrProvider}:endpoint`} label={t('settings.providers.baseUrlLabel')} account="asr.endpoint"
               placeholder="https://api.openai.com/v1" defaultValue="https://api.openai.com/v1" />
-            <CredentialField key={`${asrProvider}:model`} label="Model" account="asr.model"
+            <CredentialField key={`${asrProvider}:model`} label={t('settings.providers.modelLabel')} account="asr.model"
               placeholder="whisper-1" />
           </>
         )}

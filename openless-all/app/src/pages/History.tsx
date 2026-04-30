@@ -151,7 +151,7 @@ export function History() {
                     {formatTime(s.createdAt)}
                   </span>
                   <span style={{ fontSize: 10, color: 'var(--ol-ink-4)', fontFamily: 'var(--ol-font-mono)' }}>
-                    {formatDuration(s.durationMs)}
+                    {formatDuration(s.durationMs, t)}
                   </span>
                 </div>
                 <div style={{ fontSize: 12, color: 'var(--ol-ink-2)', lineHeight: 1.45, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
@@ -170,7 +170,7 @@ export function History() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                   <span style={{ fontSize: 13, fontFamily: 'var(--ol-font-mono)', color: 'var(--ol-ink-3)' }}>{formatTime(item.createdAt)}</span>
                   <Pill size="sm" tone="default">{MODE_LABEL[item.mode]}</Pill>
-                  <span style={{ fontSize: 11, color: 'var(--ol-ink-4)' }}>{formatDuration(item.durationMs)}</span>
+                  <span style={{ fontSize: 11, color: 'var(--ol-ink-4)' }}>{formatDuration(item.durationMs, t)}</span>
                 </div>
                 <div style={{ display: 'flex', gap: 6 }}>
                   <Btn icon="copy" variant="ghost" size="sm" onClick={onCopy}>{t('common.copy')}</Btn>
@@ -227,9 +227,9 @@ function formatTime(iso: string): string {
   return `${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-function formatDuration(ms: number | null): string {
+function formatDuration(ms: number | null, t: ReturnType<typeof useTranslation>['t']): string {
   if (ms == null || ms <= 0) return '—';
   const sec = ms / 1000;
-  if (sec < 60) return `${sec.toFixed(1)}s`;
-  return `${(sec / 60).toFixed(1)}m`;
+  if (sec < 60) return t('common.durationSeconds', { value: sec.toFixed(1) });
+  return t('common.durationMinutes', { value: (sec / 60).toFixed(1) });
 }

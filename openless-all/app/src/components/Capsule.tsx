@@ -119,11 +119,12 @@ interface CircleButtonProps {
 }
 
 function CircleButton({ variant, enabled, onClick }: CircleButtonProps) {
+  const { t } = useTranslation();
   const isCancel = variant === 'cancel';
   return (
     <button
       onClick={enabled ? onClick : undefined}
-      aria-label={isCancel ? 'cancel' : 'confirm'}
+      aria-label={isCancel ? t('common.cancel') : t('settings.shortcuts.confirm')}
       disabled={!enabled}
       style={{
         width: 28,

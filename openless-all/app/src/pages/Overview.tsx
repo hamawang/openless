@@ -112,8 +112,8 @@ export function Overview({ onOpenHistory }: OverviewProps) {
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 18 }}>
         <Metric icon="hash" label={t('overview.metricChars')} value={metrics.charsToday.toLocaleString()} trend={t('overview.metricSegments', { count: metrics.segmentsToday })} />
-        <Metric icon="mic" label={t('overview.metricDuration')} value={formatDuration(metrics.totalDurationMs)} trend="" />
-        <Metric icon="clock" label={t('overview.metricAvg')} value={formatDuration(metrics.avgLatencyMs)} trend={metrics.segmentsToday > 0 ? t('overview.metricAvgTrend') : t('overview.metricNoData')} />
+        <Metric icon="mic" label={t('overview.metricDuration')} value={formatDuration(metrics.totalDurationMs, t)} trend="" />
+        <Metric icon="clock" label={t('overview.metricAvg')} value={formatDuration(metrics.avgLatencyMs, t)} trend={metrics.segmentsToday > 0 ? t('overview.metricAvgTrend') : t('overview.metricNoData')} />
         <Metric icon="bolt" label={t('overview.metricTotal')} value={String(history.length)} trend={t('overview.metricTotalTrend')} accent />
       </div>
 
@@ -241,6 +241,7 @@ function WeekChart({ data }: { data: number[] }) {
 }
 
 function RecentRow({ session, modeLabel }: { session: DictationSession; modeLabel: Record<PolishMode, string> }) {
+  const { t } = useTranslation();
   return (
     <div style={{ padding: '12px 18px', borderBottom: '0.5px solid var(--ol-line-soft)', display: 'flex', gap: 12, alignItems: 'flex-start' }}>
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 4, minWidth: 60 }}>
@@ -253,7 +254,7 @@ function RecentRow({ session, modeLabel }: { session: DictationSession; modeLabe
         {session.finalText.split('\n')[0]}
       </div>
       <span style={{ fontSize: 10.5, color: 'var(--ol-ink-4)', fontFamily: 'var(--ol-font-mono)' }}>
-        {formatDuration(session.durationMs ?? 0)}
+        {formatDuration(session.durationMs ?? 0, t)}
       </span>
     </div>
   );
@@ -269,10 +270,10 @@ function formatTime(iso: string): string {
   return `${d.getMonth() + 1}/${d.getDate()}`;
 }
 
-function formatDuration(ms: number): string {
+function formatDuration(ms: number, t: ReturnType<typeof useTranslation>['t']): string {
   if (ms <= 0) return '—';
   const sec = ms / 1000;
-  if (sec < 60) return `${sec.toFixed(1)}s`;
+  if (sec < 60) return t('common.durationSeconds', { value: sec.toFixed(1) });
   return `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
 }
 

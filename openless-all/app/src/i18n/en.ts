@@ -24,6 +24,8 @@ export const en: typeof zhCN = {
     copied: 'Copied',
     operationFailed: 'Operation failed',
     add: 'Add',
+    durationSeconds: '{{value}}s',
+    durationMinutes: '{{value}}m',
   },
   capsule: {
     thinking: 'Thinking…',
@@ -193,6 +195,12 @@ export const en: typeof zhCN = {
       },
       fillDefault: 'Fill default value',
       readFailed: 'Read failed',
+      apiKeyLabel: 'API Key',
+      baseUrlLabel: 'Base URL',
+      modelLabel: 'Model',
+      appKeyLabel: 'App Key',
+      accessKeyLabel: 'Access Key',
+      resourceIdLabel: 'Resource ID',
     },
     shortcuts: {
       title: 'Shortcut reference',

@@ -22,6 +22,8 @@ export const zhCN = {
     copied: '已复制',
     operationFailed: '操作失败',
     add: '添加',
+    durationSeconds: '{{value}} 秒',
+    durationMinutes: '{{value}} 分钟',
   },
   capsule: {
     thinking: '正在思考中',
@@ -191,6 +193,12 @@ export const zhCN = {
       },
       fillDefault: '填入默认值',
       readFailed: '读取失败',
+      apiKeyLabel: 'API 密钥',
+      baseUrlLabel: '接口地址',
+      modelLabel: '模型',
+      appKeyLabel: 'App Key（应用密钥）',
+      accessKeyLabel: 'Access Key（访问密钥）',
+      resourceIdLabel: '资源 ID',
     },
     shortcuts: {
       title: '快捷键速查',
