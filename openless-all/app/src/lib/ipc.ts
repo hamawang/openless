@@ -178,6 +178,15 @@ export function cancelDictation(): Promise<void> {
   return invokeOrMock('cancel_dictation', undefined, () => undefined);
 }
 
+export function handleWindowHotkeyEvent(
+  eventType: 'keydown' | 'keyup',
+  key: string,
+  code: string,
+  repeat: boolean,
+): Promise<void> {
+  return invokeOrMock('handle_window_hotkey_event', { eventType, key, code, repeat }, () => undefined);
+}
+
 // ── Polish ─────────────────────────────────────────────────────────────
 export function repolish(rawText: string, mode: PolishMode): Promise<string> {
   return invokeOrMock('repolish', { rawText, mode }, () => rawText);

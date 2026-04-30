@@ -3,7 +3,12 @@ import { Capsule } from './components/Capsule';
 import { FloatingShell } from './components/FloatingShell';
 import { Onboarding } from './components/Onboarding';
 import { detectOS } from './components/WindowChrome';
-import { checkAccessibilityPermission, checkMicrophonePermission, isTauri } from './lib/ipc';
+import {
+  checkAccessibilityPermission,
+  checkMicrophonePermission,
+  handleWindowHotkeyEvent,
+  isTauri,
+} from './lib/ipc';
 import { HotkeySettingsProvider } from './state/HotkeySettingsContext';
 
 interface AppProps {
@@ -53,6 +58,28 @@ export function App({ isCapsule }: AppProps) {
     };
   }, [os]);
 
+  useEffect(() => {
+    if (!isTauri || os !== 'win') return;
+    const forwardKey = (event: KeyboardEvent) => {
+      if (!isWindowHotkeyCandidate(event)) return;
+      console.debug(
+        `[ui-key] type=${event.type} key=${event.key} code=${event.code} repeat=${event.repeat}`,
+      );
+      void handleWindowHotkeyEvent(
+        event.type as 'keydown' | 'keyup',
+        event.key,
+        event.code,
+        event.repeat,
+      ).catch(error => console.warn('[window-hotkey] forward failed', error));
+    };
+    window.addEventListener('keydown', forwardKey, true);
+    window.addEventListener('keyup', forwardKey, true);
+    return () => {
+      window.removeEventListener('keydown', forwardKey, true);
+      window.removeEventListener('keyup', forwardKey, true);
+    };
+  }, [os]);
+
   if (gate === 'checking') {
     return <StartupShell />;
   }
@@ -60,6 +87,18 @@ export function App({ isCapsule }: AppProps) {
     <HotkeySettingsProvider>
       {gate === 'onboarding' ? <Onboarding onComplete={() => setGate('ready')} /> : <FloatingShell />}
     </HotkeySettingsProvider>
+  );
+}
+
+function isWindowHotkeyCandidate(event: KeyboardEvent): boolean {
+  return (
+    event.key === 'Escape' ||
+    event.code === 'ControlRight' ||
+    event.code === 'ControlLeft' ||
+    event.code === 'AltRight' ||
+    event.code === 'AltLeft' ||
+    event.code === 'MetaRight' ||
+    event.code === 'Fn'
   );
 }
 

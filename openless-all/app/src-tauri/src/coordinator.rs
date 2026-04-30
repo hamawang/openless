@@ -5,6 +5,7 @@
 //! insertion, persists history, emits `capsule:state` events to the capsule
 //! window.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::Instant;
@@ -86,6 +87,7 @@ struct Inner {
     recorder: Mutex<Option<Recorder>>,
     hotkey: Mutex<Option<HotkeyMonitor>>,
     hotkey_status: Mutex<HotkeyStatus>,
+    hotkey_trigger_held: AtomicBool,
 }
 
 impl Coordinator {
@@ -109,6 +111,7 @@ impl Coordinator {
                 recorder: Mutex::new(None),
                 hotkey: Mutex::new(None),
                 hotkey_status: Mutex::new(HotkeyStatus::default()),
+                hotkey_trigger_held: AtomicBool::new(false),
             }),
         }
     }
@@ -165,6 +168,16 @@ impl Coordinator {
 
     pub fn cancel_dictation(&self) {
         cancel_session(&self.inner);
+    }
+
+    pub async fn handle_window_hotkey_event(
+        &self,
+        event_type: String,
+        key: String,
+        code: String,
+        repeat: bool,
+    ) -> Result<(), String> {
+        handle_window_hotkey_event(&self.inner, event_type, key, code, repeat).await
     }
 
     #[cfg(any(debug_assertions, test))]
@@ -248,15 +261,22 @@ fn hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEvent>) {
         let inner_cloned = Arc::clone(&inner);
         match evt {
             HotkeyEvent::Pressed => {
-                async_runtime::spawn(async move { handle_pressed(&inner_cloned).await });
+                async_runtime::spawn(async move { handle_pressed_edge(&inner_cloned).await });
             }
             HotkeyEvent::Released => {
-                async_runtime::spawn(async move { handle_released(&inner_cloned).await });
+                async_runtime::spawn(async move { handle_released_edge(&inner_cloned).await });
             }
             HotkeyEvent::Cancelled => {
                 cancel_session(&inner_cloned);
             }
         }
+    }
+}
+
+async fn handle_pressed_edge(inner: &Arc<Inner>) {
+    let was_held = inner.hotkey_trigger_held.swap(true, Ordering::SeqCst);
+    if !was_held {
+        handle_pressed(inner).await;
     }
 }
 
@@ -284,6 +304,13 @@ async fn handle_pressed(inner: &Arc<Inner>) {
     }
 }
 
+async fn handle_released_edge(inner: &Arc<Inner>) {
+    let was_held = inner.hotkey_trigger_held.swap(false, Ordering::SeqCst);
+    if was_held {
+        handle_released(inner).await;
+    }
+}
+
 async fn handle_released(inner: &Arc<Inner>) {
     let mode = inner.prefs.get().hotkey.mode;
     let phase = inner.state.lock().phase;
@@ -300,6 +327,67 @@ async fn handle_released(inner: &Arc<Inner>) {
             }
             _ => {}
         }
+    }
+}
+
+async fn handle_window_hotkey_event(
+    inner: &Arc<Inner>,
+    event_type: String,
+    key: String,
+    code: String,
+    repeat: bool,
+) -> Result<(), String> {
+    if event_type == "keydown" && key == "Escape" {
+        cancel_session(inner);
+        return Ok(());
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (inner, event_type, key, code, repeat);
+        return Ok(());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let trigger = inner.prefs.get().hotkey.trigger;
+        if !window_key_matches_trigger(trigger, &key, &code) {
+            return Ok(());
+        }
+
+        match event_type.as_str() {
+            "keydown" => {
+                if repeat {
+                    return Ok(());
+                }
+                log::info!(
+                    "[window-hotkey] pressed trigger={trigger:?} code={code} repeat={repeat}"
+                );
+                handle_pressed_edge(inner).await;
+            }
+            "keyup" => {
+                log::info!("[window-hotkey] released trigger={trigger:?} code={code}");
+                handle_released_edge(inner).await;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn window_key_matches_trigger(trigger: crate::types::HotkeyTrigger, key: &str, code: &str) -> bool {
+    use crate::types::HotkeyTrigger;
+
+    match trigger {
+        HotkeyTrigger::RightControl => key == "Control" && code == "ControlRight",
+        HotkeyTrigger::LeftControl => key == "Control" && code == "ControlLeft",
+        HotkeyTrigger::RightOption | HotkeyTrigger::RightAlt => {
+            (key == "Alt" || key == "AltGraph") && code == "AltRight"
+        }
+        HotkeyTrigger::LeftOption => (key == "Alt" || key == "AltGraph") && code == "AltRight",
+        HotkeyTrigger::RightCommand => key == "Meta" && code == "MetaRight",
+        HotkeyTrigger::Fn => key == "Control" && code == "ControlRight",
     }
 }
 
@@ -880,6 +968,7 @@ fn enabled_hotwords(inner: &Arc<Inner>) -> Vec<DictionaryHotword> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::HotkeyTrigger;
 
     #[tokio::test]
     async fn hotkey_injection_gate_logs_pressed_and_cancels() {
@@ -894,6 +983,38 @@ mod tests {
 
         assert_eq!(coordinator.inner.state.lock().phase, SessionPhase::Idle);
         std::env::remove_var("OPENLESS_HOTKEY_INJECTION_DRY_RUN");
+    }
+
+    #[test]
+    fn window_key_matcher_mirrors_windows_trigger_aliases() {
+        let cases = [
+            (HotkeyTrigger::RightControl, "Control", "ControlRight"),
+            (HotkeyTrigger::LeftControl, "Control", "ControlLeft"),
+            (HotkeyTrigger::RightOption, "Alt", "AltRight"),
+            (HotkeyTrigger::RightAlt, "AltGraph", "AltRight"),
+            (HotkeyTrigger::RightCommand, "Meta", "MetaRight"),
+            // Mirrors Windows trigger_to_vk_code aliases.
+            (HotkeyTrigger::LeftOption, "Alt", "AltRight"),
+            (HotkeyTrigger::Fn, "Control", "ControlRight"),
+        ];
+        for (trigger, key, code) in cases {
+            assert!(
+                window_key_matches_trigger(trigger, key, code),
+                "{trigger:?} should match {key}/{code}"
+            );
+        }
+
+        assert!(!window_key_matches_trigger(
+            HotkeyTrigger::RightControl,
+            "Control",
+            "ControlLeft"
+        ));
+        assert!(!window_key_matches_trigger(
+            HotkeyTrigger::LeftOption,
+            "Alt",
+            "AltLeft"
+        ));
+        assert!(!window_key_matches_trigger(HotkeyTrigger::Fn, "Fn", "Fn"));
     }
 }
 
