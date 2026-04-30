@@ -1,27 +1,10 @@
-// Capsule.tsx — 1:1 移植 `Sources/OpenLessUI/CapsuleView.swift`。
-//
-// Swift 原版用的是 macOS 的 `.ultraThinMaterial` + 白色描边（macOS 26 用 Liquid Glass），
-// **不是**深色 pill —— design_handoff_openless/capsule.jsx 那个 dark pill 是早期设计稿，
-// Swift 实际产品迁到了系统磨砂材质上。
-//
-// 视觉规格（与 Swift 同步）：
-//   - 总尺寸 176×42 pill
-//   - 浅色磨砂背景 (white 0.62 alpha + backdrop blur 28px) + 白色 1px 边框 (alpha 0.34)
-//   - 左/右 28×28 圆形按钮：cancel 用半透明 thinMaterial 风、confirm 用 white 0.92
-//   - 中间 84pt 宽 slot：根据状态切换 audio bars / dots+text / 状态文字
-//
-// 状态语义对齐 Swift CapsuleState：
-//   listening   → 5 根 audio bars [.55,.85,1,.85,.55] base 4pt + level*14pt
-//   processing  → 3 个跳动的圆点 + "正在思考中"
-//   inserted    → "已插入"
-//   cancelled   → "已取消"
-//   copied      → "已复制 ⌘V"
-//   error(msg)  → 红字
-//
-// 控件可用性：仅 listening 时 cancel/confirm 才能点（与 Swift `isControlEnabled` 一致）。
-
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { detectOS, type OS } from './WindowChrome';
+import {
+  getCapsuleMessageLayout,
+  getCapsulePillMetrics,
+} from '../lib/capsuleLayout';
 import { invokeOrMock, isTauri } from '../lib/ipc';
 import type { CapsulePayload, CapsuleState } from '../lib/types';
 
@@ -29,7 +12,6 @@ interface AudioBarsProps {
   level: number;
 }
 
-/// 5 根 envelope 条；level=0 时全收到 4pt 基线 → 视觉静止；level↑ → 中间最高条往上拔。
 function AudioBars({ level }: AudioBarsProps) {
   const envelope = [0.55, 0.85, 1.0, 0.85, 0.55];
   const base = 4;
@@ -56,8 +38,6 @@ function AudioBars({ level }: AudioBarsProps) {
             borderRadius: 999,
             background: 'var(--ol-blue)',
             opacity: 0.82,
-            // 后端节流到 ~30 Hz（33ms），CSS 用 0.06s linear 让每次 emit 在下一次到达前
-            // 已经完整跳到目标高度 → 视觉上是 30 帧/s 的"跳动"动画，不会被叠加平均成静止。
             transition: 'height 0.06s linear',
           }}
         />
@@ -66,7 +46,6 @@ function AudioBars({ level }: AudioBarsProps) {
   );
 }
 
-/// 3 个圆点错相位脉动；总宽 20pt，与 Swift ProgressDots 一致。
 function ProcessingDots() {
   return (
     <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4, width: 20 }}>
@@ -88,23 +67,30 @@ function ProcessingDots() {
 }
 
 interface CenterTextProps {
+  os: OS;
+  kind: 'default' | 'processing' | 'error';
   text: string;
   color?: string;
 }
 
-function CenterText({ text, color = 'var(--ol-ink-3)' }: CenterTextProps) {
+function CenterText({ os, kind, text, color = 'var(--ol-ink-3)' }: CenterTextProps) {
+  const metrics = getCapsulePillMetrics(os);
+  const layout = getCapsuleMessageLayout(os, kind);
   return (
     <span
       style={{
         fontSize: 11,
         fontWeight: 500,
         color,
-        width: 84,
+        width: metrics.textWidth,
         textAlign: 'center',
-        lineHeight: 1,
-        whiteSpace: 'nowrap',
+        lineHeight: layout.allowWrap ? 1.2 : 1,
+        whiteSpace: layout.allowWrap ? 'normal' : 'nowrap',
         overflow: 'hidden',
         textOverflow: 'ellipsis',
+        display: '-webkit-box',
+        WebkitBoxOrient: 'vertical',
+        WebkitLineClamp: layout.lineClamp,
       }}
     >
       {text}
@@ -129,7 +115,6 @@ function CircleButton({ variant, enabled, onClick }: CircleButtonProps) {
         width: 28,
         height: 28,
         borderRadius: 999,
-        // Swift cancel: .thinMaterial; confirm: white(0.92)
         background: isCancel ? 'rgba(255, 255, 255, 0.55)' : 'rgba(255, 255, 255, 0.92)',
         backdropFilter: isCancel ? 'blur(12px) saturate(160%)' : 'none',
         WebkitBackdropFilter: isCancel ? 'blur(12px) saturate(160%)' : 'none',
@@ -147,12 +132,10 @@ function CircleButton({ variant, enabled, onClick }: CircleButtonProps) {
       }}
     >
       {isCancel ? (
-        // SF Symbol "xmark" 等价
         <svg width="11" height="11" viewBox="0 0 11 11">
           <path d="M1.5 1.5l8 8M9.5 1.5l-8 8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
         </svg>
       ) : (
-        // SF Symbol "checkmark" 等价
         <svg width="13" height="13" viewBox="0 0 13 13">
           <path d="M2 6.5l3.2 3.5L11 3.5" stroke="currentColor" strokeWidth="1.7" fill="none" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
@@ -162,6 +145,7 @@ function CircleButton({ variant, enabled, onClick }: CircleButtonProps) {
 }
 
 interface PillProps {
+  os: OS;
   state: CapsuleState;
   level: number;
   insertedChars: number;
@@ -170,9 +154,10 @@ interface PillProps {
   onConfirm: () => void;
 }
 
-function Pill({ state, level, insertedChars, message, onCancel, onConfirm }: PillProps) {
+function Pill({ os, state, level, insertedChars, message, onCancel, onConfirm }: PillProps) {
   const { t } = useTranslation();
-  // 与 Swift `isControlEnabled` 同语义：只有 listening 时 cancel/confirm 才可点。
+  const metrics = getCapsulePillMetrics(os);
+  const processingLayout = getCapsuleMessageLayout(os, 'processing');
   const enabled = state === 'recording';
 
   let center: JSX.Element;
@@ -183,32 +168,56 @@ function Pill({ state, level, insertedChars, message, onCancel, onConfirm }: Pil
     case 'transcribing':
     case 'polishing':
       center = (
-        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, width: 84, justifyContent: 'center' }}>
+        <div
+          style={{
+            display: 'inline-flex',
+            flexDirection: os === 'win' ? 'column' : 'row',
+            alignItems: 'center',
+            gap: os === 'win' ? 4 : 6,
+            width: metrics.textWidth,
+            justifyContent: 'center',
+          }}
+        >
           <ProcessingDots />
-          <span style={{ fontSize: 10.5, fontWeight: 500, color: 'var(--ol-ink-2)' }}>
+          <span
+            style={{
+              fontSize: 10.5,
+              fontWeight: 500,
+              color: 'var(--ol-ink-2)',
+              textAlign: 'center',
+              lineHeight: processingLayout.allowWrap ? 1.15 : 1,
+              whiteSpace: processingLayout.allowWrap ? 'normal' : 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              display: '-webkit-box',
+              WebkitBoxOrient: 'vertical',
+              WebkitLineClamp: processingLayout.lineClamp,
+            }}
+          >
             {t('capsule.thinking')}
           </span>
         </div>
       );
       break;
     case 'done':
-      center = <CenterText text={message || t('capsule.inserted', { count: insertedChars })} />;
+      center = <CenterText os={os} kind="default" text={message || t('capsule.inserted', { count: insertedChars })} />;
       break;
     case 'cancelled':
-      center = <CenterText text={t('capsule.cancelled')} />;
+      center = <CenterText os={os} kind="default" text={t('capsule.cancelled')} />;
       break;
     case 'error':
-      center = <CenterText text={message || t('capsule.error')} color="var(--ol-err)" />;
+      center = <CenterText os={os} kind="error" text={message || t('capsule.error')} color="var(--ol-err)" />;
       break;
     default:
       center = <AudioBars level={0} />;
   }
 
-  // 玻璃整体随电平做微缩放 + 投影增强，让"说话时整个胶囊在呼吸"。
-  // 仅在录音态联动；其他态保持静止。系数控制在 ≤2%，不破坏 176×42 的视觉规格。
   const ambient = state === 'recording' ? Math.min(1, Math.max(0, level)) : 0;
-  const scale = 1 + ambient * 0.018;
+  const scale = os === 'win' ? 1 : 1 + ambient * 0.018;
   const shadowAlpha = 0.20 + ambient * 0.10;
+  const dropShadow = os === 'win'
+    ? `drop-shadow(0 12px 24px rgba(0, 0, 0, ${(0.15 + ambient * 0.06).toFixed(3)}))`
+    : 'none';
 
   return (
     <div
@@ -218,24 +227,23 @@ function Pill({ state, level, insertedChars, message, onCancel, onConfirm }: Pil
         justifyContent: 'space-between',
         gap: 8,
         padding: '0 8px',
-        width: 176,
-        height: 42,
+        width: metrics.width,
+        height: metrics.height,
         borderRadius: 999,
-        // Swift `.ultraThinMaterial` + InputBarChrome 的浅色磨砂效果
         background: 'rgba(255, 255, 255, 0.62)',
         backdropFilter: 'blur(28px) saturate(180%)',
         WebkitBackdropFilter: 'blur(28px) saturate(180%)',
         border: '1px solid rgba(255, 255, 255, 0.55)',
-        boxShadow:
-          `0 18px 50px -10px rgba(0, 0, 0, ${shadowAlpha.toFixed(3)}),` +
-          ' 0 0 0 0.5px rgba(0, 0, 0, 0.08),' +
-          ' inset 0 0.5px 0 rgba(255, 255, 255, 0.55)',
+        boxShadow: os === 'win'
+          ? '0 0 0 0.5px rgba(0, 0, 0, 0.08), inset 0 0.5px 0 rgba(255, 255, 255, 0.55)'
+          : `0 18px 50px -10px rgba(0, 0, 0, ${shadowAlpha.toFixed(3)}), 0 0 0 0.5px rgba(0, 0, 0, 0.08), inset 0 0.5px 0 rgba(255, 255, 255, 0.55)`,
         color: 'var(--ol-ink)',
         fontFamily: 'var(--ol-font-sans)',
         transform: `scale(${scale.toFixed(4)})`,
         transformOrigin: 'center',
         transition: 'transform 0.06s linear, box-shadow 0.06s linear',
         willChange: 'transform, box-shadow',
+        filter: dropShadow,
       }}
     >
       <CircleButton variant="cancel" enabled={enabled} onClick={onCancel} />
@@ -248,7 +256,7 @@ function Pill({ state, level, insertedChars, message, onCancel, onConfirm }: Pil
 }
 
 export function Capsule() {
-  // 浏览器 dev 默认显示 listening；Tauri 进来后由后端 idle 覆盖。
+  const os = detectOS();
   const [state, setState] = useState<CapsuleState>(isTauri ? 'idle' : 'recording');
   const [level, setLevel] = useState<number>(isTauri ? 0 : 0.6);
   const [insertedChars, setInsertedChars] = useState<number>(0);
@@ -279,11 +287,11 @@ export function Capsule() {
   const onCancel = () => {
     void invokeOrMock<void>('cancel_dictation', undefined, () => undefined);
   };
+
   const onConfirm = () => {
     void invokeOrMock<void>('stop_dictation', undefined, () => undefined);
   };
 
-  // idle 状态视觉上隐藏（panel 也会被后端 hide）；保留容器避免 React 卸载抖动。
   if (state === 'idle') {
     return <div style={{ width: 0, height: 0 }} />;
   }
@@ -297,10 +305,11 @@ export function Capsule() {
         alignItems: 'center',
         justifyContent: 'center',
         background: 'transparent',
-        animation: 'capsule-in .22s cubic-bezier(.2,.9,.3,1.1)',
+        animation: os === 'win' ? 'none' : 'capsule-in .22s cubic-bezier(.2,.9,.3,1.1)',
       }}
     >
       <Pill
+        os={os}
         state={state}
         level={level}
         insertedChars={insertedChars}
