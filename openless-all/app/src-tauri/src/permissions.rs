@@ -251,6 +251,10 @@ mod platform {
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
     use cpal::{SampleFormat, StreamConfig};
     use std::time::Duration;
+    #[cfg(target_os = "windows")]
+    use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
+    #[cfg(target_os = "windows")]
+    use winreg::RegKey;
 
     /// Windows / Linux 不存在 macOS 那种 Accessibility 概念；rdev 直接监听键盘。
     pub fn check_accessibility() -> PermissionStatus {
@@ -288,6 +292,18 @@ mod platform {
 
     pub fn request_microphone() -> PermissionStatus {
         check_microphone()
+    }
+
+    pub fn windows_microphone_access_explicitly_denied() -> bool {
+        #[cfg(target_os = "windows")]
+        {
+            windows_microphone_registry_denied()
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            false
+        }
     }
 
     fn classify_audio_probe_error(message: String) -> PermissionStatus {
@@ -365,30 +381,46 @@ mod platform {
     }
 
     fn registry_value_is_deny(path: &str) -> bool {
-        let output = match std::process::Command::new("reg")
-            .args(["query", path, "/v", "Value"])
-            .output()
+        #[cfg(target_os = "windows")]
         {
-            Ok(output) => output,
-            Err(err) => {
-                log::warn!("[mic] reg query failed for {path}: {err}");
+            let Some((root, subkey)) = path.split_once('\\') else {
                 return false;
-            }
-        };
+            };
 
-        if !output.status.success() {
-            return false;
+            let hive = match root {
+                "HKCU" => RegKey::predef(HKEY_CURRENT_USER),
+                "HKLM" => RegKey::predef(HKEY_LOCAL_MACHINE),
+                _ => return false,
+            };
+
+            match hive.open_subkey(subkey) {
+                Ok(key) => match key.get_value::<String, _>("Value") {
+                    Ok(value) => value.eq_ignore_ascii_case("Deny"),
+                    Err(_) => false,
+                },
+                Err(_) => false,
+            }
         }
 
-        String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .any(|line| line.contains("REG_SZ") && line.split_whitespace().any(|part| part == "Deny"))
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = path;
+            false
+        }
     }
 }
 
 pub use platform::{
     check_accessibility, check_microphone, request_accessibility, request_microphone,
 };
+
+#[cfg(target_os = "windows")]
+pub use platform::windows_microphone_access_explicitly_denied;
+
+#[cfg(not(target_os = "windows"))]
+pub fn windows_microphone_access_explicitly_denied() -> bool {
+    false
+}
 
 /// 兼容老调用：startup 时主动弹 Accessibility 框。
 pub fn request_accessibility_with_prompt(_prompt: bool) -> bool {

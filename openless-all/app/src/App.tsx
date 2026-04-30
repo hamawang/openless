@@ -60,14 +60,8 @@ export function App({ isCapsule }: AppProps) {
 
   useEffect(() => {
     if (!isTauri || os !== 'win') return;
-    const pressedKeys = new Map<string, string>();
     const forwardKey = (event: KeyboardEvent) => {
       if (!isWindowHotkeyCandidate(event)) return;
-      if (event.type === 'keydown' && event.key !== 'Escape') {
-        pressedKeys.set(event.code, event.key);
-      } else if (event.type === 'keyup') {
-        pressedKeys.delete(event.code);
-      }
       void handleWindowHotkeyEvent(
         event.type as 'keydown' | 'keyup',
         event.key,
@@ -75,29 +69,11 @@ export function App({ isCapsule }: AppProps) {
         event.repeat,
       ).catch(error => console.warn('[window-hotkey] forward failed', error));
     };
-    const releasePressedKeys = () => {
-      if (pressedKeys.size === 0) return;
-      const pending = Array.from(pressedKeys.entries());
-      pressedKeys.clear();
-      for (const [code, key] of pending) {
-        void handleWindowHotkeyEvent('keyup', key, code, false).catch(error =>
-          console.warn('[window-hotkey] release fallback failed', error),
-        );
-      }
-    };
-    const releaseOnHidden = () => {
-      if (document.visibilityState === 'hidden') releasePressedKeys();
-    };
     window.addEventListener('keydown', forwardKey, true);
     window.addEventListener('keyup', forwardKey, true);
-    window.addEventListener('blur', releasePressedKeys);
-    document.addEventListener('visibilitychange', releaseOnHidden);
     return () => {
       window.removeEventListener('keydown', forwardKey, true);
       window.removeEventListener('keyup', forwardKey, true);
-      window.removeEventListener('blur', releasePressedKeys);
-      document.removeEventListener('visibilitychange', releaseOnHidden);
-      releasePressedKeys();
     };
   }, [os]);
 

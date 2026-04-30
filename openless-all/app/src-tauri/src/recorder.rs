@@ -20,8 +20,6 @@ use cpal::{SampleFormat, StreamConfig};
 use parking_lot::Mutex;
 use thiserror::Error;
 
-use crate::permissions::{self, PermissionStatus};
-
 /// 目标采样率（与 Swift 端常量一致；不要改）。
 const TARGET_SAMPLE_RATE: u32 = 16_000;
 /// 每多少个回调打一次诊断日志。
@@ -60,24 +58,6 @@ impl Recorder {
         consumer: Arc<dyn AudioConsumer>,
         level_handler: Arc<dyn Fn(f32) + Send + Sync>,
     ) -> Result<Self, RecorderError> {
-        let status = permissions::check_microphone();
-        if !matches!(
-            status,
-            PermissionStatus::Granted | PermissionStatus::NotApplicable
-        ) {
-            let requested = permissions::request_microphone();
-            if !matches!(
-                requested,
-                PermissionStatus::Granted | PermissionStatus::NotApplicable
-            ) {
-                log::warn!(
-                    "[recorder] microphone permission not granted: {:?}",
-                    requested
-                );
-                return Err(RecorderError::PermissionDenied);
-            }
-        }
-
         // 启动信号：子线程构造 Stream 完成后通过 startup_tx 报告结果。
         let (startup_tx, startup_rx) = channel::<Result<(), RecorderError>>();
         let stop_flag = Arc::new(AtomicBool::new(false));

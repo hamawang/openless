@@ -42,7 +42,9 @@ pub fn run() {
         // 否则两份 OpenLess（如 /Applications/ + dev build）会各自抓全局热键，
         // 导致按一次键、两个进程同时跑流水线、文本被插入两遍。见 issue #50。
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            log::info!("[single-instance] another instance launched, focusing existing main window");
+            log::info!(
+                "[single-instance] another instance launched, focusing existing main window"
+            );
             show_main_window(app);
         }))
         .plugin(tauri_plugin_shell::init())

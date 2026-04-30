@@ -262,19 +262,46 @@ pub fn open_system_settings(pane: String) -> Result<(), String> {
             .map(|_| ())
             .map_err(|e| e.to_string())
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
     {
+        use windows::core::PCWSTR;
+        use windows::Win32::UI::Shell::ShellExecuteW;
+        use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+        fn wide_null(value: &str) -> Vec<u16> {
+            value.encode_utf16().chain(std::iter::once(0)).collect()
+        }
+
         let uri = match pane.as_str() {
             "microphone" => "ms-settings:privacy-microphone",
             "sound" => "ms-settings:sound",
             "accessibility" => "ms-settings:easeofaccess",
             _ => "ms-settings:",
         };
-        std::process::Command::new("cmd")
-            .args(["/C", "start", "", uri])
-            .spawn()
-            .map(|_| ())
-            .map_err(|e| e.to_string())
+
+        let operation = wide_null("open");
+        let target = wide_null(uri);
+        let result = unsafe {
+            ShellExecuteW(
+                None,
+                PCWSTR(operation.as_ptr()),
+                PCWSTR(target.as_ptr()),
+                PCWSTR::null(),
+                PCWSTR::null(),
+                SW_SHOWNORMAL,
+            )
+        };
+
+        if result.0 as isize <= 32 {
+            Err(format!("ShellExecuteW failed: {}", result.0 as isize))
+        } else {
+            Ok(())
+        }
+    }
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    {
+        let _ = pane;
+        Err("open_system_settings is only supported on macOS and Windows".to_string())
     }
 }
 
