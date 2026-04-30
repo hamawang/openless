@@ -200,10 +200,11 @@ function Toggle({ on, onToggle }: { on: boolean; onToggle?: (next: boolean) => v
 }
 
 const LLM_PRESETS = [
-  { id: 'ark',      name: 'ARK（火山方舟）', baseUrl: 'https://ark.cn-beijing.volces.com/api/v3', modelPlaceholder: 'deepseek-v3-2' },
-  { id: 'deepseek', name: 'DeepSeek',        baseUrl: 'https://api.deepseek.com/v1',             modelPlaceholder: 'deepseek-chat' },
-  { id: 'openai',   name: 'OpenAI',          baseUrl: 'https://api.openai.com/v1',               modelPlaceholder: 'gpt-4o' },
-  { id: 'custom',   name: '自定义',           baseUrl: '',                                        modelPlaceholder: '' },
+  { id: 'ark',          name: 'ARK（火山方舟）', baseUrl: 'https://ark.cn-beijing.volces.com/api/v3', modelPlaceholder: 'deepseek-v3-2' },
+  { id: 'deepseek',     name: 'DeepSeek',        baseUrl: 'https://api.deepseek.com/v1',             modelPlaceholder: 'deepseek-chat' },
+  { id: 'siliconflow',  name: '硅基流动',         baseUrl: 'https://api.siliconflow.cn/v1',           modelPlaceholder: 'Qwen/Qwen2.5-7B-Instruct' },
+  { id: 'openai',       name: 'OpenAI',          baseUrl: 'https://api.openai.com/v1',               modelPlaceholder: 'gpt-4o' },
+  { id: 'custom',       name: '自定义',           baseUrl: '',                                        modelPlaceholder: '' },
 ] as const;
 
 type LlmPresetId = typeof LLM_PRESETS[number]['id'];
@@ -211,8 +212,9 @@ type LlmPresetId = typeof LLM_PRESETS[number]['id'];
 const ASR_DEFAULT_RESOURCE_ID = 'volc.bigasr.sauc.duration';
 
 const ASR_PRESETS = [
-  { id: 'volcengine', name: '火山引擎 bigasr' },
-  { id: 'whisper',    name: 'OpenAI Whisper（兼容）' },
+  { id: 'volcengine',  name: '火山引擎 bigasr' },
+  { id: 'siliconflow', name: '硅基流动 SenseVoice' },
+  { id: 'whisper',     name: 'OpenAI Whisper（兼容）' },
 ] as const;
 
 type AsrPresetId = typeof ASR_PRESETS[number]['id'];
@@ -303,6 +305,14 @@ function ProvidersSection() {
             <CredentialField key={`${asrProvider}:access_key`} label="Access Key" account="volcengine.access_key" mono mask />
             <CredentialField key={`${asrProvider}:resource_id`} label="Resource ID" account="volcengine.resource_id" mono
               placeholder={ASR_DEFAULT_RESOURCE_ID} defaultValue={ASR_DEFAULT_RESOURCE_ID} />
+          </>
+        ) : asrProvider === 'siliconflow' ? (
+          <>
+            <CredentialField key={`${asrProvider}:api_key`} label="API Key" account="asr.api_key" mono mask />
+            <CredentialField key={`${asrProvider}:endpoint`} label="Base URL" account="asr.endpoint"
+              placeholder="https://api.siliconflow.cn/v1" defaultValue="https://api.siliconflow.cn/v1" />
+            <CredentialField key={`${asrProvider}:model`} label="Model" account="asr.model"
+              placeholder="FunAudioLLM/SenseVoiceSmall" defaultValue="FunAudioLLM/SenseVoiceSmall" />
           </>
         ) : (
           <>
@@ -586,6 +596,14 @@ function PermissionPill({ status }: { status: PermissionStatus | 'loading' }) {
 }
 
 function AboutSection() {
+  const [qqCopied, setQqCopied] = useState(false);
+
+  const copyQq = () => {
+    navigator.clipboard?.writeText('1078960553');
+    setQqCopied(true);
+    setTimeout(() => setQqCopied(false), 1500);
+  };
+
   return (
     <Card>
       <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 18 }}>
@@ -603,8 +621,24 @@ function AboutSection() {
         </div>
       </div>
       <SettingRow label="检查更新"><Btn variant="ghost" size="sm" onClick={() => openExternal('https://github.com/appergb/openless/releases')}>打开 Releases</Btn></SettingRow>
+      <SettingRow label="源码"><Btn variant="ghost" size="sm" icon="link" onClick={() => openExternal('https://github.com/appergb/openless')}>GitHub</Btn></SettingRow>
       <SettingRow label="文档"><Btn variant="ghost" size="sm" icon="link" onClick={() => openExternal('https://github.com/appergb/openless#readme')}>README</Btn></SettingRow>
-      <SettingRow label="反馈渠道"><Btn variant="ghost" size="sm" icon="link" onClick={() => openExternal('https://github.com/appergb/openless/issues')}>GitHub Issues</Btn></SettingRow>
+      <SettingRow label="反馈"><Btn variant="ghost" size="sm" icon="link" onClick={() => openExternal('https://github.com/appergb/openless/issues')}>GitHub Issues</Btn></SettingRow>
+      <SettingRow label="社区 QQ 群" desc="使用 QQ 搜索群号加入，或扫码进群。">
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <kbd style={{
+            padding: '4px 10px', fontSize: 12, fontFamily: 'var(--ol-font-mono)',
+            borderRadius: 6, background: 'var(--ol-surface-2)',
+            border: '0.5px solid var(--ol-line-strong)',
+            boxShadow: '0 1px 0 rgba(0,0,0,0.04)',
+            color: 'var(--ol-ink-2)',
+          }}>1078960553</kbd>
+          <button onClick={copyQq} title="复制群号" style={iconBtnStyle}>
+            <Icon name="copy" size={14} />
+          </button>
+          {qqCopied && <span style={{ fontSize: 11, color: 'var(--ol-ok)', whiteSpace: 'nowrap' }}>已复制</span>}
+        </div>
+      </SettingRow>
       <SettingRow label="隐私" desc="所有识别结果仅保存在本机。云端 API 仅用于实时转写与润色，不会保留你的录音。">
         <Pill tone="default">本地优先</Pill>
       </SettingRow>
