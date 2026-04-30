@@ -735,11 +735,19 @@ function LanguageSection() {
 function AboutSection() {
   const { t } = useTranslation();
   const [qqCopied, setQqCopied] = useState(false);
+  const qqCopiedRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (qqCopiedRef.current) clearTimeout(qqCopiedRef.current);
+    };
+  }, []);
 
   const copyQq = () => {
     navigator.clipboard?.writeText('1078960553');
     setQqCopied(true);
-    setTimeout(() => setQqCopied(false), 1500);
+    if (qqCopiedRef.current) clearTimeout(qqCopiedRef.current);
+    qqCopiedRef.current = window.setTimeout(() => setQqCopied(false), 1500);
   };
 
   return (

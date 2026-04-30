@@ -3,7 +3,7 @@
 // 触发条件：App.tsx 启动检查 accessibility + microphone，任一未授权则渲染本组件而非主 Shell。
 // 与 Swift `Sources/OpenLessApp/Onboarding/` 同语义，但简化为单页三步。
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   checkAccessibilityPermission,
@@ -25,6 +25,7 @@ export function Onboarding({ onComplete }: OnboardingProps) {
   const [accessibility, setAccessibility] = useState<PermissionStatus>('notDetermined');
   const [microphone, setMicrophone] = useState<PermissionStatus>('notDetermined');
   const [busy, setBusy] = useState(false);
+  const refreshTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { capability } = useHotkeySettings();
 
   const refresh = async () => {
@@ -48,6 +49,7 @@ export function Onboarding({ onComplete }: OnboardingProps) {
     return () => {
       window.clearInterval(id);
       window.removeEventListener('focus', onFocus);
+      if (refreshTimeoutRef.current) clearTimeout(refreshTimeoutRef.current);
     };
   }, []);
 
@@ -76,7 +78,8 @@ export function Onboarding({ onComplete }: OnboardingProps) {
     } finally {
       setBusy(false);
     }
-    setTimeout(refresh, 800);
+    if (refreshTimeoutRef.current) clearTimeout(refreshTimeoutRef.current);
+    refreshTimeoutRef.current = window.setTimeout(refresh, 800);
   };
 
   return (
