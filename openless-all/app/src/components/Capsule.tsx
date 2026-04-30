@@ -56,9 +56,9 @@ function AudioBars({ level }: AudioBarsProps) {
             borderRadius: 999,
             background: 'var(--ol-blue)',
             opacity: 0.82,
-            // 注：原版用 cubic-bezier(.5, 1.7, .5, 1) 近似 Swift 弹簧，但 overshoot 与 ~100Hz 电平
-            // 更新叠加会出现可见抖动。改为非 overshoot 的 ease-out，单次稍硬但稳定不抽搐。
-            transition: 'height 0.12s cubic-bezier(.4, 0, .2, 1)',
+            // 后端节流到 ~30 Hz（33ms），CSS 用 0.06s linear 让每次 emit 在下一次到达前
+            // 已经完整跳到目标高度 → 视觉上是 30 帧/s 的"跳动"动画，不会被叠加平均成静止。
+            transition: 'height 0.06s linear',
           }}
         />
       ))}
@@ -203,6 +203,12 @@ function Pill({ state, level, insertedChars, message, onCancel, onConfirm }: Pil
       center = <AudioBars level={0} />;
   }
 
+  // 玻璃整体随电平做微缩放 + 投影增强，让"说话时整个胶囊在呼吸"。
+  // 仅在录音态联动；其他态保持静止。系数控制在 ≤2%，不破坏 176×42 的视觉规格。
+  const ambient = state === 'recording' ? Math.min(1, Math.max(0, level)) : 0;
+  const scale = 1 + ambient * 0.018;
+  const shadowAlpha = 0.20 + ambient * 0.10;
+
   return (
     <div
       style={{
@@ -220,11 +226,15 @@ function Pill({ state, level, insertedChars, message, onCancel, onConfirm }: Pil
         WebkitBackdropFilter: 'blur(28px) saturate(180%)',
         border: '1px solid rgba(255, 255, 255, 0.55)',
         boxShadow:
-          '0 18px 50px -10px rgba(0, 0, 0, 0.20),' +
+          `0 18px 50px -10px rgba(0, 0, 0, ${shadowAlpha.toFixed(3)}),` +
           ' 0 0 0 0.5px rgba(0, 0, 0, 0.08),' +
           ' inset 0 0.5px 0 rgba(255, 255, 255, 0.55)',
         color: 'var(--ol-ink)',
         fontFamily: 'var(--ol-font-sans)',
+        transform: `scale(${scale.toFixed(4)})`,
+        transformOrigin: 'center',
+        transition: 'transform 0.06s linear, box-shadow 0.06s linear',
+        willChange: 'transform, box-shadow',
       }}
     >
       <CircleButton variant="cancel" enabled={enabled} onClick={onCancel} />

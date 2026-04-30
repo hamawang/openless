@@ -345,24 +345,40 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
     };
 
     let inner_for_level = Arc::clone(inner);
+    // 节流：电平回调本身约 185 Hz（cpal 默认音频块），全部转发到前端会让 CSS
+    // transition 互相覆盖、视觉上"被平均"成静止。限制为 ~30 Hz（33ms 最少间隔），
+    // 配合 CSS 短 transition 让每次 emit 完整可见。
+    let last_emit_at = Arc::new(Mutex::new(None::<Instant>));
+    const LEVEL_EMIT_MIN_INTERVAL_MS: u64 = 33;
     let level_handler: Arc<dyn Fn(f32) + Send + Sync> = Arc::new(move |level| {
         let phase = inner_for_level.state.lock().phase;
-        if phase == SessionPhase::Listening || phase == SessionPhase::Starting {
-            let elapsed = inner_for_level
-                .state
-                .lock()
-                .started_at
-                .elapsed()
-                .as_millis() as u64;
-            emit_capsule(
-                &inner_for_level,
-                CapsuleState::Recording,
-                level,
-                elapsed,
-                None,
-                None,
-            );
+        if phase != SessionPhase::Listening && phase != SessionPhase::Starting {
+            return;
         }
+        let now = Instant::now();
+        {
+            let mut last = last_emit_at.lock();
+            if let Some(prev) = *last {
+                if now.duration_since(prev).as_millis() < LEVEL_EMIT_MIN_INTERVAL_MS as u128 {
+                    return;
+                }
+            }
+            *last = Some(now);
+        }
+        let elapsed = inner_for_level
+            .state
+            .lock()
+            .started_at
+            .elapsed()
+            .as_millis() as u64;
+        emit_capsule(
+            &inner_for_level,
+            CapsuleState::Recording,
+            level,
+            elapsed,
+            None,
+            None,
+        );
     });
 
     match Recorder::start(consumer, level_handler) {
@@ -479,6 +495,13 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
             0
         }
     };
+    // 词汇本页面在打开时通常需要立即看到 hits 增长，否则用户得手动切走再切回来才刷新。
+    // 命中数 > 0 时通知前端：Vocab 页面订阅 vocab:updated 即时 listVocab() 重新加载。
+    if total_hits > 0 {
+        if let Some(app) = inner.app.lock().clone() {
+            let _ = app.emit("vocab:updated", total_hits);
+        }
+    }
 
     let session = DictationSession {
         id: Uuid::new_v4().to_string(),
