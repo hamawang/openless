@@ -5,8 +5,8 @@
 <h1 align="center">OpenLess</h1>
 
 <p align="center">
-  <strong>Open-source macOS voice input for the AI era.</strong><br/>
-  Press a hotkey, speak, get a usable AI prompt at your cursor.
+  <strong>Open-source voice input for macOS &amp; Windows.</strong><br/>
+  Press a hotkey, speak, get AI-polished text at your cursor.
 </p>
 
 <p align="center">
@@ -16,14 +16,20 @@
 <p align="center">
   <a href="https://github.com/appergb/openless/releases/latest"><img alt="release" src="https://img.shields.io/github/v/release/appergb/openless?style=flat-square&color=2c5282" /></a>
   <a href="https://github.com/appergb/openless/blob/main/LICENSE"><img alt="license" src="https://img.shields.io/github/license/appergb/openless?style=flat-square&color=2f855a" /></a>
-  <img alt="macOS" src="https://img.shields.io/badge/macOS-15%2B-1f425f?style=flat-square" />
-  <img alt="Swift" src="https://img.shields.io/badge/Swift-5.9-orange?style=flat-square" />
+  <img alt="macOS" src="https://img.shields.io/badge/macOS-12%2B-1f425f?style=flat-square" />
+  <img alt="Windows" src="https://img.shields.io/badge/Windows-10%2B-0078d4?style=flat-square" />
+  <img alt="Tauri" src="https://img.shields.io/badge/Tauri-2-24c8db?style=flat-square" />
+  <img alt="Rust" src="https://img.shields.io/badge/Rust-2021-ce422b?style=flat-square" />
   <img alt="Stars" src="https://img.shields.io/github/stars/appergb/openless?style=flat-square&color=805ad5" />
+</p>
+
+<p align="center">
+  <strong>Join our QQ Group: 1078960553</strong>
 </p>
 
 ---
 
-OpenLess is a native macOS voice-input app — a **fully open-source** alternative to commercial tools like [Typeless](https://www.typeless.com/), [Wispr Flow](https://wisprflow.ai), [Lazy](https://heylazy.com), and Superwhisper.
+OpenLess is a cross-platform (macOS & Windows) voice-input app — a **fully open-source** alternative to commercial tools like [Typeless](https://www.typeless.com/), [Wispr Flow](https://wisprflow.ai), [Lazy](https://heylazy.com), and Superwhisper.
 
 Put your cursor in any text field — ChatGPT, Claude, Cursor, Notion, an email draft, a chat box — press one global hotkey and talk. OpenLess records, transcribes, polishes the text in the mode you picked, and inserts the result at the cursor. If insertion is blocked it copies to the clipboard, so the words you spoke don't get lost.
 
@@ -84,60 +90,68 @@ OpenLess does one thing: **turn speech into usable written text (especially AI p
 | [Lazy](https://heylazy.com) | Closed-source notes / capture tool | Not a notes container — inserts straight into any input field |
 | [Superwhisper](https://superwhisper.com) | Closed-source macOS, subscription | Open source; cloud ASR today, local ASR on the roadmap |
 
-## Status (v1.0)
+## Status (v1.1)
 
-- Native Swift / SwiftUI / AppKit, SwiftPM project; macOS 15+.
-- macOS 26+ uses Liquid Glass; older systems fall back to system materials.
+- Tauri 2 + Rust backend + React/TS frontend. macOS 12+, Windows 10+.
 - Toggle-style recording: press to start, press again to stop. `Esc` cancels.
 - Volcengine streaming ASR + Ark / DeepSeek-compatible chat-completions for polish.
 - 4 output modes: raw, light polish, structured (**AI prompt mode**), formal.
-- Main window: Home / History / Dictionary / Settings. Persistent menu bar. Mini status capsule at the bottom of the screen.
-- Dictionary entries are injected as Volcengine ASR `context.hotwords` and as semantic hints during polish.
+- Main window: Overview / History / Vocab / Style / Settings. Persistent tray icon. Mini status capsule floating on screen.
+- Dictionary entries injected as Volcengine ASR `context.hotwords` and as semantic hints during polish.
+- Platform-native global hotkey: CGEventTap on macOS, low-level keyboard hook (`WH_KEYBOARD_LL`) on Windows.
 
 ## Download & install (end users)
 
-Grab `OpenLess-1.0.0.zip` from [Releases](../../releases), unzip to get `OpenLess.app`, drag to `/Applications`.
+Go to [Releases](../../releases) and download:
+- **macOS**: `OpenLess_<version>_aarch64.dmg` — open, drag to `/Applications`
+- **Windows**: `OpenLess_<version>_x64-setup.exe` — run the installer
 
-**Important:** the 1.0 build is ad-hoc signed (no Apple Developer ID + notarization). macOS Gatekeeper will block it with "cannot verify developer". Remove the quarantine attribute once in Terminal:
+On first launch, grant the permissions the app requests:
 
-```bash
-xattr -dr com.apple.quarantine /Applications/OpenLess.app
-```
+**macOS:**
+1. Grant Microphone access.
+2. Grant Accessibility access.
+3. **Quit and reopen the app** — Accessibility only takes effect after a restart.
+4. Open Settings → fill in Volcengine ASR + Ark credentials.
 
-Then double-click to launch. On first launch, in `System Settings → Privacy & Security`:
+**Windows:**
+1. Grant Microphone access when prompted.
+2. Open Settings → Permissions to verify the global hotkey listener is active.
+3. Fill in Volcengine ASR + Ark credentials in Settings.
 
-1. Grant Microphone access to OpenLess.
-2. Grant Accessibility access to OpenLess.
-3. **Quit OpenLess and reopen it.** Accessibility permission only takes effect for the global hotkey after a process restart.
-4. Open the OpenLess home from the Dock → "Settings" → fill in Volcengine ASR + Ark credentials.
-
-Full end-user walkthrough: [USAGE.md](USAGE.md) (Chinese; English version coming).
+Full end-user walkthrough: [USAGE.md](USAGE.md).
 
 ## Build from source (developers)
 
+The active codebase is in `openless -all/app/` (Tauri 2 + Rust + React/TS).
+
 ```bash
-# Library / test build
-swift build
-swift test
+cd "openless -all/app"
+npm ci
 
-# Full .app build (release, ad-hoc signed, resets TCC by default)
-./scripts/build-app.sh
+# Dev: Vite at :1420 + Tauri shell
+npm run tauri dev
 
-# Keep existing TCC approvals
-RESET_TCC=0 ./scripts/build-app.sh
+# macOS release build (signs, installs, resets TCC)
+./scripts/build-mac.sh
+INSTALL=0 ./scripts/build-mac.sh   # build only, skip install
 
-# Launch
-open build/OpenLess.app
+# Rust type-check without full compile
+cargo check --manifest-path src-tauri/Cargo.toml
 
-# Tail logs
-tail -f ~/Library/Logs/OpenLess/OpenLess.log
+# Frontend TS check
+npm run build
 ```
 
-Launch arguments (handled in `AppDelegate.runLaunchActions`):
+Logs: `~/Library/Logs/OpenLess/openless.log` (macOS) / `%LOCALAPPDATA%\OpenLess\Logs\openless.log` (Windows).
+
+**Windows build** — see [`openless -all/README.md`](openless%20-all/README.md) for MSVC vs GNU/MinGW routes.
+
+**Swift (legacy, Sparkle updates only):**
 
 ```bash
-open build/OpenLess.app --args --open-settings
-open build/OpenLess.app --args --start-recording
+swift build && swift test
+./scripts/build-app.sh
 ```
 
 ## Credentials
@@ -183,44 +197,46 @@ The main window is organized as Home / History / Dictionary / Settings. The Dict
 
 ## Architecture
 
-A SwiftPM workspace: 1 executable + 8 libraries. Libraries don't depend on each other — they all depend only on `OpenLessCore`. `OpenLessApp` wires everything together inside `DictationCoordinator`.
+The active implementation is Tauri 2 (`openless -all/app/`). The Swift/SwiftPM codebase under `Sources/` is legacy and still serves Sparkle auto-updates for existing users.
+
+**Tauri backend (Rust)** — each module depends only on `types.rs`:
 
 ```
-OpenLessCore        // Pure value types: DictationSession, PolishMode, HotkeyBinding,
-                    //   AudioConsumer protocol, RawTranscript/FinalText, errors.
-OpenLessHotkey      // CGEventTap-based modifier-key monitor. Requires Accessibility.
-OpenLessRecorder    // AVAudioEngine → 16 kHz mono Int16 PCM, pushed to AudioConsumer.
-OpenLessASR         // Volcengine streaming ASR over WebSocket.
-OpenLessPolish      // Ark / Doubao chat-completions client + mode-driven prompts.
-OpenLessInsertion   // AX focused-element first; clipboard + Cmd+V; copy-only fallback.
-OpenLessPersistence // CredentialsVault (Keychain), HistoryStore, DictionaryStore,
-                    //   UserPreferences.
-OpenLessUI          // SwiftUI capsule view + state enum (no window plumbing).
-OpenLessApp         // AppDelegate, menu bar, settings window, capsule window,
-                    //   DictationCoordinator.
+types.rs         Pure value types: DictationSession, PolishMode, HotkeyBinding, errors
+hotkey.rs        Global hotkey (CGEventTap on macOS, WH_KEYBOARD_LL on Windows, rdev on Linux)
+recorder.rs      Mic → 16 kHz mono Int16 PCM, RMS callback
+asr/             Volcengine streaming ASR (WebSocket) + Whisper HTTP
+polish.rs        OpenAI-compatible chat-completions (Ark / DeepSeek / etc.)
+insertion.rs     AX focused-element → clipboard + Cmd+V → copy-only fallback
+persistence.rs   History / preferences / vocab JSON + Keychain credentials
+permissions.rs   TCC checks (Accessibility / Microphone)
+coordinator.rs   State machine: Idle → Starting → Listening → Processing
+commands.rs      Tauri IPC surface
 ```
 
-The record → transcribe → polish → insert state machine is owned exclusively by `Sources/OpenLessApp/DictationCoordinator.swift`. See [CLAUDE.md](CLAUDE.md) for details.
+**React frontend (`src/`)** — state via Recoil atoms (`pages/_atoms.tsx`); hotkey capability/binding via `HotkeySettingsContext`; all backend calls go through `lib/ipc.ts`.
 
-## Roadmap (post-1.0)
+The dictation pipeline: `hotkey edge → Recorder.start + ASR.openSession → [audio frames] → hotkey edge → Recorder.stop + ASR.sendLastFrame → Polish → Insert → History.save`.
 
-Planned in the requirements docs but not in the 1.0 release:
+See [CLAUDE.md](CLAUDE.md) for invariants and module-wiring rules.
 
-- Local ASR (today only Volcengine cloud).
+## Roadmap
+
+Planned but not yet shipped:
+
+- Local ASR (Whisper integration in progress; currently Volcengine cloud only).
 - Snippets (no UI / trigger logic yet).
 - History enhancements: copy button, search, re-polish, re-insert.
 - "Paste last result" hotkey.
 - Multi-monitor capsule placement on the focused screen.
-- Developer ID signing + notarization + Sparkle auto-update.
 
 ## Maintainer release checklist
 
-- Confirm `.build/`, `build/`, `.DS_Store`, `~/.openless/credentials.json`, and stray screenshots are not committed.
-- Keep `Resources/Brand/openless-app-icon-source.jpg`, `Resources/AppIcon.png`, `Resources/AppIcon.icns`.
-- Run `./scripts/build-app.sh` and confirm `build/OpenLess.app` launches.
+- Bump version in `openless -all/app/package.json`, `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml`.
+- Run `INSTALL=0 ./scripts/build-mac.sh` and confirm the `.app` launches.
 - Verify on a clean macOS box: permission flow, hotkey, recording, ASR, polish, insertion, clipboard fallback.
-- Package with `ditto -c -k --keepParent build/OpenLess.app build/OpenLess-<version>.zip` so ad-hoc signature and xattrs survive.
-- Do Developer ID signing + notarization before any production distribution.
+- Push a `v<version>-tauri` tag — CI builds and signs the macOS `.dmg` + Windows `.msi`.
+- **Swift legacy release** (for Sparkle users): `./scripts/release.sh <version>` — see [CLAUDE.md](CLAUDE.md) for the full flow.
 
 ## License
 

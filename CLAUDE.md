@@ -33,6 +33,19 @@ INSTALL=0 ./scripts/build-mac.sh # build only
 
 # Frontend-only TS check
 npm run build   # = tsc && vite build
+
+# Rust type-check without full compile
+cargo check --manifest-path src-tauri/Cargo.toml
+```
+
+### Windows (cross-check only — no macOS runner in CI)
+
+```powershell
+# Preflight: verify toolchain
+.\scripts\windows-preflight.ps1
+
+# Build (requires Windows host or cross-compile target)
+.\scripts\windows-build-gnu.ps1
 ```
 
 Generated artifacts:
@@ -67,7 +80,7 @@ Swift (Sources/OpenLess*)        Rust (openless -all/app/src-tauri/src)        P
 OpenLessCore                     types.rs                                      Pure value types: DictationSession, PolishMode, HotkeyBinding, errors
 OpenLessHotkey                   hotkey.rs                                     Global hotkey monitor (modifier-key edges)
 OpenLessRecorder                 recorder.rs                                   Mic → 16 kHz mono Int16 PCM, RMS callback
-OpenLessASR                      asr/{mod,frame,volcengine}.rs                 Volcengine streaming ASR over WebSocket
+OpenLessASR                      asr/{mod,frame,volcengine,whisper}.rs         ASR providers: Volcengine streaming WebSocket + Whisper HTTP
 OpenLessPolish                   polish.rs                                     OpenAI-compatible chat completions (Ark / DeepSeek / etc.)
 OpenLessInsertion                insertion.rs                                  AX focused-element write → clipboard + Cmd+V → copy-only fallback
 OpenLessPersistence              persistence.rs                                History/preferences/vocab JSON + Keychain credentials
@@ -75,6 +88,8 @@ OpenLessUI                       src/components/Capsule.tsx                    C
 OpenLessApp / DictationCoord.    coordinator.rs + commands.rs + lib.rs         State machine, IPC surface, tray icon, window plumbing
                                  permissions.rs                                TCC checks (Accessibility / Microphone)
                                  src/ (React)                                  Main window UI: Overview / History / Vocab / Style / Settings
+                                 src/pages/_atoms.tsx                          Recoil atoms — global frontend state
+                                 src/state/HotkeySettingsContext.tsx           HotkeySettings React context (capability + binding from backend)
 ```
 
 ### Dictation pipeline
