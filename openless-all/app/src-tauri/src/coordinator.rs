@@ -59,6 +59,7 @@ struct SessionState {
     /// 用户在 Processing 阶段按 Esc 取消：end_session 在 polish/insert 检查点跳过插入 +
     /// 跳过 history.append。issue #52。
     cancelled: bool,
+    focus_target: Option<usize>,
 }
 
 impl Default for SessionState {
@@ -68,6 +69,7 @@ impl Default for SessionState {
             started_at: Instant::now(),
             pending_stop: false,
             cancelled: false,
+            focus_target: None,
         }
     }
 }
@@ -434,6 +436,7 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
         // 新会话清掉旧 pending_stop / cancelled，避免上一会话遗留触发奇怪行为
         state.pending_stop = false;
         state.cancelled = false;
+        state.focus_target = capture_focus_target();
     }
 
     #[cfg(any(debug_assertions, test))]
@@ -801,6 +804,8 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
         return Ok(());
     }
 
+    let focus_target = inner.state.lock().focus_target;
+    restore_focus_target_if_possible(focus_target);
     let status = inner.inserter.insert(&polished);
     let inserted_chars = polished.chars().count() as u32;
 
@@ -850,6 +855,7 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     } else {
         match status {
             InsertStatus::Inserted => None,
+            InsertStatus::PasteSent => Some("已尝试粘贴".to_string()),
             InsertStatus::CopiedFallback => Some(if cfg!(target_os = "windows") {
                 "已复制，请 Ctrl+V".to_string()
             } else {
@@ -868,7 +874,11 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
         Some(inserted_chars),
     );
 
-    inner.state.lock().phase = SessionPhase::Idle;
+    {
+        let mut state = inner.state.lock();
+        state.phase = SessionPhase::Idle;
+        state.focus_target = None;
+    }
     schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
 
     Ok(())
@@ -902,7 +912,9 @@ fn cancel_session(inner: &Arc<Inner>) {
     // Processing 阶段保持 phase=Processing 让 end_session 自己走完检查 + 收尾；
     // 其他阶段直接转 Idle。
     if phase != SessionPhase::Processing {
-        inner.state.lock().phase = SessionPhase::Idle;
+        let mut state = inner.state.lock();
+        state.phase = SessionPhase::Idle;
+        state.focus_target = None;
     }
     emit_capsule(inner, CapsuleState::Cancelled, 0.0, 0, None, None);
     log::info!("[coord] session cancelled (was {phase:?})");
@@ -1233,6 +1245,95 @@ fn schedule_capsule_idle(inner: &Arc<Inner>, delay_ms: u64) {
     });
 }
 
+#[cfg(target_os = "windows")]
+fn capture_focus_target() -> Option<usize> {
+    use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+
+    let foreground = unsafe { GetForegroundWindow() };
+    if foreground.0.is_null() {
+        None
+    } else {
+        Some(foreground.0 as usize)
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn capture_focus_target() -> Option<usize> {
+    None
+}
+
+#[cfg(target_os = "windows")]
+fn restore_focus_target_if_possible(target: Option<usize>) {
+    use std::ffi::c_void;
+    use std::time::Duration;
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetForegroundWindow, IsIconic, IsWindow, SetForegroundWindow, ShowWindow, SW_RESTORE,
+    };
+
+    let Some(raw_target) = target else { return };
+    let hwnd = HWND(raw_target as *mut c_void);
+    if hwnd.0.is_null() {
+        return;
+    }
+    if !unsafe { IsWindow(hwnd).as_bool() } {
+        return;
+    }
+
+    let foreground = unsafe { GetForegroundWindow() };
+    if foreground == hwnd {
+        return;
+    }
+
+    if unsafe { IsIconic(hwnd).as_bool() } {
+        let _ = unsafe { ShowWindow(hwnd, SW_RESTORE) };
+    }
+    let _ = unsafe { SetForegroundWindow(hwnd) };
+    std::thread::sleep(Duration::from_millis(60));
+}
+
+#[cfg(not(target_os = "windows"))]
+fn restore_focus_target_if_possible(_target: Option<usize>) {}
+
+#[cfg(target_os = "windows")]
+fn show_capsule_window_no_activate() -> bool {
+    use std::iter::once;
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        FindWindowW, SetWindowPos, ShowWindow, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE,
+        SWP_NOSIZE, SWP_SHOWWINDOW, SW_SHOWNOACTIVATE,
+    };
+
+    let title: Vec<u16> = "OpenLess Capsule".encode_utf16().chain(once(0)).collect();
+    let hwnd = match unsafe { FindWindowW(PCWSTR::null(), PCWSTR(title.as_ptr())) } {
+        Ok(hwnd) => hwnd,
+        Err(_) => return false,
+    };
+    if hwnd == HWND::default() || hwnd.0.is_null() {
+        return false;
+    }
+
+    let _ = unsafe { ShowWindow(hwnd, SW_SHOWNOACTIVATE) };
+    let _ = unsafe {
+        SetWindowPos(
+            hwnd,
+            HWND_TOPMOST,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+        )
+    };
+    true
+}
+
+#[cfg(not(target_os = "windows"))]
+fn show_capsule_window_no_activate() -> bool {
+    false
+}
+
 fn emit_capsule(
     inner: &Arc<Inner>,
     state: CapsuleState,
@@ -1255,7 +1356,13 @@ fn emit_capsule(
     if let Some(window) = app.get_webview_window("capsule") {
         let visible = !matches!(state, CapsuleState::Idle);
         if show_capsule && visible {
-            let _ = window.show();
+            if cfg!(target_os = "windows") {
+                if !show_capsule_window_no_activate() {
+                    let _ = window.show();
+                }
+            } else {
+                let _ = window.show();
+            }
             // 胶囊 show() 在 macOS 会调 makeKeyAndOrderFront: 抢走主窗口焦点。
             // 若 OpenLess 已是前台 app，用 makeKeyWindow 还原主窗口（不激活 NSApp）。
             #[cfg(target_os = "macos")]

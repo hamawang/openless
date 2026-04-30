@@ -10,7 +10,12 @@
 //!    → CGEventPost，跟我们这里完全同源。
 //! 3. 其他平台 (Windows/Linux) 仍用 enigo。
 
+use std::time::Duration;
+
 use crate::types::InsertStatus;
+
+#[cfg(not(target_os = "macos"))]
+const CLIPBOARD_RESTORE_DELAY: Duration = Duration::from_millis(150);
 
 pub struct TextInserter;
 
@@ -20,6 +25,16 @@ impl TextInserter {
     }
 
     /// Insert `text` at the current cursor position.
+    #[cfg(not(target_os = "macos"))]
+    pub fn insert(&self, text: &str) -> InsertStatus {
+        if text.is_empty() {
+            return InsertStatus::CopiedFallback;
+        }
+        insert_with_clipboard_restore(text)
+    }
+
+    /// Insert `text` at the current cursor position.
+    #[cfg(target_os = "macos")]
     pub fn insert(&self, text: &str) -> InsertStatus {
         if text.is_empty() {
             return InsertStatus::CopiedFallback;
@@ -41,6 +56,13 @@ impl Default for TextInserter {
     }
 }
 
+#[cfg(not(target_os = "macos"))]
+#[derive(Debug)]
+struct ClipboardRestorePlan {
+    inserted_text: String,
+    previous_text: Option<String>,
+}
+
 fn copy_to_clipboard(text: &str) -> bool {
     let mut clipboard = match arboard::Clipboard::new() {
         Ok(c) => c,
@@ -54,6 +76,93 @@ fn copy_to_clipboard(text: &str) -> bool {
         return false;
     }
     true
+}
+
+#[cfg(not(target_os = "macos"))]
+fn copy_to_clipboard_with_restore_plan(text: &str) -> Result<ClipboardRestorePlan, String> {
+    let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+    let previous_text = match clipboard.get_text() {
+        Ok(existing) => Some(existing),
+        Err(err) => {
+            log::warn!(
+                "[insertion] clipboard get_text failed before overwrite: {}",
+                err
+            );
+            None
+        }
+    };
+    clipboard
+        .set_text(text.to_string())
+        .map_err(|e| e.to_string())?;
+    Ok(ClipboardRestorePlan {
+        inserted_text: text.to_string(),
+        previous_text,
+    })
+}
+
+#[cfg(not(target_os = "macos"))]
+fn insert_with_clipboard_restore(text: &str) -> InsertStatus {
+    let restore_plan = match copy_to_clipboard_with_restore_plan(text) {
+        Ok(plan) => plan,
+        Err(err) => {
+            log::error!("[insertion] clipboard write failed: {}", err);
+            return InsertStatus::Failed;
+        }
+    };
+
+    if let Err(err) = simulate_paste() {
+        log::warn!("[insertion] simulated paste failed: {}", err);
+        return InsertStatus::CopiedFallback;
+    }
+
+    maybe_restore_clipboard(restore_plan);
+    insertion_success_status()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn maybe_restore_clipboard(plan: ClipboardRestorePlan) {
+    if plan.previous_text.is_none() {
+        return;
+    }
+
+    std::thread::sleep(CLIPBOARD_RESTORE_DELAY);
+
+    let mut clipboard = match arboard::Clipboard::new() {
+        Ok(clipboard) => clipboard,
+        Err(err) => {
+            log::warn!(
+                "[insertion] clipboard re-open failed during restore: {}",
+                err
+            );
+            return;
+        }
+    };
+
+    let current_text = match clipboard.get_text() {
+        Ok(current) => Some(current),
+        Err(err) => {
+            log::warn!(
+                "[insertion] clipboard get_text failed during restore: {}",
+                err
+            );
+            None
+        }
+    };
+
+    if !should_restore_clipboard(current_text.as_deref(), &plan.inserted_text) {
+        return;
+    }
+
+    if let Some(previous_text) = plan.previous_text {
+        if let Err(err) = clipboard.set_text(previous_text) {
+            log::warn!("[insertion] clipboard restore failed: {}", err);
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn should_restore_clipboard(current_text: Option<&str>, inserted_text: &str) -> bool {
+    matches!(current_text, Some(current) if current == inserted_text)
 }
 
 #[cfg(target_os = "macos")]
@@ -92,7 +201,7 @@ fn insertion_success_status() -> InsertStatus {
 #[cfg(not(target_os = "macos"))]
 fn insertion_success_status() -> InsertStatus {
     // Windows/Linux 的 Ctrl+V 只能证明粘贴快捷键已发送，不能证明目标控件已接收。
-    InsertStatus::CopiedFallback
+    InsertStatus::PasteSent
 }
 
 // ─────────────────────────── macOS native CGEvent paste ───────────────────────────
@@ -170,5 +279,24 @@ mod macos {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[cfg(not(target_os = "macos"))]
+    fn restore_only_when_clipboard_still_holds_inserted_text() {
+        assert!(should_restore_clipboard(
+            Some("dictated text"),
+            "dictated text"
+        ));
+        assert!(!should_restore_clipboard(
+            Some("user changed clipboard"),
+            "dictated text"
+        ));
+        assert!(!should_restore_clipboard(None, "dictated text"));
     }
 }

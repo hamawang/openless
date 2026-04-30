@@ -4,7 +4,7 @@
 
 export type PolishMode = 'raw' | 'light' | 'structured' | 'formal';
 
-export type InsertStatus = 'inserted' | 'copiedFallback' | 'failed';
+export type InsertStatus = 'inserted' | 'pasteSent' | 'copiedFallback' | 'failed';
 
 export interface DictationSession {
   id: string;

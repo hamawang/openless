@@ -388,8 +388,8 @@ try {
   if ([string]::IsNullOrWhiteSpace($latest.rawTranscript) -or [string]::IsNullOrWhiteSpace($latest.finalText)) {
     throw "Latest history item is missing rawTranscript or finalText."
   }
-  if ($latest.insertStatus -ne "copiedFallback") {
-    throw "Expected Windows insertStatus copiedFallback, got '$($latest.insertStatus)'."
+  if (@("copiedFallback", "pasteSent") -notcontains $latest.insertStatus) {
+    throw "Expected Windows insertStatus copiedFallback or pasteSent, got '$($latest.insertStatus)'."
   }
 
   Focus-Window $inputTarget.Process | Out-Null

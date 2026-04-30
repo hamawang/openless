@@ -32,6 +32,7 @@ impl PolishMode {
 #[serde(rename_all = "camelCase")]
 pub enum InsertStatus {
     Inserted,
+    PasteSent,
     CopiedFallback,
     Failed,
 }

@@ -200,6 +200,8 @@ export function History() {
                 <span>{
                   item.insertStatus === 'inserted'
                     ? t('history.inserted')
+                    : item.insertStatus === 'pasteSent'
+                      ? t('history.pasteSent')
                     : item.insertStatus === 'copiedFallback'
                       ? t('history.copiedFallback', { shortcut: detectOS() === 'win' ? 'Ctrl+V' : '⌘V' })
                       : t('history.insertFailed')

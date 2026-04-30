@@ -116,6 +116,7 @@ export const zhCN = {
     chars: '{{count}} 字',
     vocabHits: '{{count}} 个热词',
     inserted: '已插入',
+    pasteSent: '已尝试粘贴',
     copiedFallback: '已复制(需 {{shortcut}})',
     insertFailed: '插入失败',
     confirmClear: '确定清空全部 {{count}} 条记录？此操作不可恢复。',
