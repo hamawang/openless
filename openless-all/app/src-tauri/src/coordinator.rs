@@ -26,7 +26,7 @@ use crate::persistence::{
 };
 
 use crate::polish::{OpenAICompatibleConfig, OpenAICompatibleLLMProvider};
-use crate::recorder::Recorder;
+use crate::recorder::{Recorder, RecorderError};
 use crate::types::{
     CapsulePayload, CapsuleState, DictationSession, HotkeyCapability, HotkeyMode, HotkeyStatus,
     HotkeyStatusState, InsertStatus, PolishMode,
@@ -583,8 +583,9 @@ fn start_recorder_for_starting(
     });
 
     match Recorder::start(consumer, level_handler) {
-        Ok(rec) => {
+        Ok((rec, runtime_errors)) => {
             *inner.recorder.lock() = Some(rec);
+            spawn_recorder_error_monitor(inner, runtime_errors);
             stop_recorder_if_pending_start_stop(inner);
             log::info!("[coord] recorder started (asr={active_asr}, phase=Starting)");
         }
@@ -611,6 +612,56 @@ fn start_recorder_for_starting(
     }
 
     Ok(())
+}
+
+fn spawn_recorder_error_monitor(inner: &Arc<Inner>, rx: mpsc::Receiver<RecorderError>) {
+    let inner = Arc::clone(inner);
+    std::thread::Builder::new()
+        .name("openless-recorder-error-monitor".into())
+        .spawn(move || {
+            if let Ok(err) = rx.recv() {
+                log::error!("[coord] recorder runtime error: {err}");
+                abort_recording_with_error(&inner, format!("录音中断: {err}"));
+            }
+        })
+        .ok();
+}
+
+fn abort_recording_with_error(inner: &Arc<Inner>, message: String) {
+    let elapsed = {
+        let mut state = inner.state.lock();
+        if state.cancelled
+            || !matches!(
+                state.phase,
+                SessionPhase::Starting | SessionPhase::Listening
+            )
+        {
+            return;
+        }
+        state.cancelled = true;
+        state.phase = SessionPhase::Idle;
+        state.started_at.elapsed().as_millis() as u64
+    };
+
+    if let Some(rec) = inner.recorder.lock().take() {
+        rec.stop();
+    }
+    if let Some(asr) = inner.asr.lock().take() {
+        match asr {
+            ActiveAsr::Volcengine(v) => v.cancel(),
+            ActiveAsr::Whisper(w) => w.cancel(),
+        }
+    }
+
+    emit_capsule(
+        inner,
+        CapsuleState::Error,
+        0.0,
+        elapsed,
+        Some(message),
+        None,
+    );
+    schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
 }
 
 async fn start_recorder_and_enter_listening(
@@ -1155,6 +1206,24 @@ mod tests {
         let state = coordinator.inner.state.lock();
         assert_eq!(state.phase, SessionPhase::Starting);
         assert!(state.pending_stop);
+    }
+
+    #[test]
+    fn recorder_runtime_error_aborts_active_session() {
+        let coordinator = Coordinator::new();
+        {
+            let mut state = coordinator.inner.state.lock();
+            state.phase = SessionPhase::Listening;
+            state.cancelled = false;
+        }
+
+        abort_recording_with_error(&coordinator.inner, "录音中断: stream failed".to_string());
+
+        let state = coordinator.inner.state.lock();
+        assert_eq!(state.phase, SessionPhase::Idle);
+        assert!(state.cancelled);
+        assert!(coordinator.inner.recorder.lock().is_none());
+        assert!(coordinator.inner.asr.lock().is_none());
     }
 
     #[tokio::test]
