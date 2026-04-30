@@ -220,6 +220,54 @@ export function restartApp(): Promise<void> {
   return invokeOrMock('restart_app', undefined, () => undefined);
 }
 
+export function isDebugUiKeyEventsEnabled(): Promise<boolean> {
+  return invokeOrMock('is_debug_ui_key_events_enabled', undefined, () => false);
+}
+
+export function debugLogUiKeyEvent(payload: {
+  eventType: string;
+  key: string;
+  code: string;
+  ctrl: boolean;
+  alt: boolean;
+  shift: boolean;
+  meta: boolean;
+  repeat: boolean;
+}): Promise<void> {
+  return invokeOrMock(
+    'debug_log_ui_key_event',
+    {
+      eventType: payload.eventType,
+      key: payload.key,
+      code: payload.code,
+      ctrl: payload.ctrl,
+      alt: payload.alt,
+      shift: payload.shift,
+      meta: payload.meta,
+      repeat: payload.repeat,
+    },
+    () => undefined,
+  );
+}
+
+export function handleWindowHotkeyEvent(payload: {
+  eventType: string;
+  key: string;
+  code: string;
+  repeat: boolean;
+}): Promise<void> {
+  return invokeOrMock(
+    'handle_window_hotkey_event',
+    {
+      eventType: payload.eventType,
+      key: payload.key,
+      code: payload.code,
+      repeat: payload.repeat,
+    },
+    () => undefined,
+  );
+}
+
 export async function openExternal(url: string): Promise<void> {
   if (!isTauri) {
     window.open(url, '_blank', 'noopener,noreferrer');

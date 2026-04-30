@@ -166,6 +166,9 @@ pub fn run() {
             commands::read_credential,
             commands::set_active_asr_provider,
             commands::set_active_llm_provider,
+            commands::is_debug_ui_key_events_enabled,
+            commands::debug_log_ui_key_event,
+            commands::handle_window_hotkey_event,
             restart_app,
         ])
         .build(tauri::generate_context!())
@@ -175,9 +178,15 @@ pub fn run() {
             RunEvent::Reopen { .. } => show_main_window(app),
             RunEvent::WindowEvent { label, event, .. } => {
                 if label == "main" {
-                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                        api.prevent_close();
-                        hide_main_window(app);
+                    match event {
+                        tauri::WindowEvent::Focused(focused) => {
+                            log::info!("[window] main focused={focused}");
+                        }
+                        tauri::WindowEvent::CloseRequested { api, .. } => {
+                            api.prevent_close();
+                            hide_main_window(app);
+                        }
+                        _ => {}
                     }
                 }
             }

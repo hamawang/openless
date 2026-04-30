@@ -28,7 +28,7 @@ use crate::polish::{OpenAICompatibleConfig, OpenAICompatibleLLMProvider};
 use crate::recorder::Recorder;
 use crate::types::{
     CapsulePayload, CapsuleState, DictationSession, HotkeyCapability, HotkeyMode, HotkeyStatus,
-    HotkeyStatusState, InsertStatus, PolishMode,
+    HotkeyStatusState, HotkeyTrigger, InsertStatus, PolishMode,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -86,6 +86,7 @@ struct Inner {
     recorder: Mutex<Option<Recorder>>,
     hotkey: Mutex<Option<HotkeyMonitor>>,
     hotkey_status: Mutex<HotkeyStatus>,
+    window_hotkey_held: Mutex<bool>,
 }
 
 impl Coordinator {
@@ -109,6 +110,7 @@ impl Coordinator {
                 recorder: Mutex::new(None),
                 hotkey: Mutex::new(None),
                 hotkey_status: Mutex::new(HotkeyStatus::default()),
+                window_hotkey_held: Mutex::new(false),
             }),
         }
     }
@@ -173,6 +175,17 @@ impl Coordinator {
         handle_pressed(&self.inner).await;
         handle_released(&self.inner).await;
         cancel_session(&self.inner);
+        Ok(())
+    }
+
+    pub async fn handle_window_hotkey_event(
+        &self,
+        event_type: &str,
+        key: &str,
+        code: &str,
+        repeat: bool,
+    ) -> Result<(), String> {
+        handle_window_hotkey_event(&self.inner, event_type, key, code, repeat).await;
         Ok(())
     }
 
@@ -257,6 +270,87 @@ fn hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEvent>) {
                 cancel_session(&inner_cloned);
             }
         }
+    }
+}
+
+async fn handle_window_hotkey_event(
+    inner: &Arc<Inner>,
+    event_type: &str,
+    key: &str,
+    code: &str,
+    repeat: bool,
+) {
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (inner, event_type, key, code, repeat);
+        return;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        if event_type == "keydown" && key == "Escape" {
+            log::info!("[window-hotkey] escape cancel from main window");
+            cancel_session(inner);
+            return;
+        }
+
+        let binding = inner.prefs.get().hotkey;
+        if !matches_window_hotkey(binding.trigger, code) {
+            return;
+        }
+
+        if event_type == "keydown" {
+            if repeat {
+                return;
+            }
+            let should_press = {
+                let mut held = inner.window_hotkey_held.lock();
+                if *held {
+                    false
+                } else {
+                    *held = true;
+                    true
+                }
+            };
+            if !should_press {
+                return;
+            }
+            log::info!(
+                "[window-hotkey] pressed trigger={:?} code={} repeat={}",
+                binding.trigger, code, repeat
+            );
+            handle_pressed(inner).await;
+        } else if event_type == "keyup" {
+            let should_release = {
+                let mut held = inner.window_hotkey_held.lock();
+                if !*held {
+                    false
+                } else {
+                    *held = false;
+                    true
+                }
+            };
+            if !should_release {
+                return;
+            }
+            log::info!(
+                "[window-hotkey] released trigger={:?} code={} repeat={}",
+                binding.trigger, code, repeat
+            );
+            handle_released(inner).await;
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn matches_window_hotkey(trigger: HotkeyTrigger, code: &str) -> bool {
+    match trigger {
+        HotkeyTrigger::RightControl => code == "ControlRight",
+        HotkeyTrigger::LeftControl => code == "ControlLeft",
+        HotkeyTrigger::RightOption | HotkeyTrigger::RightAlt => code == "AltRight",
+        HotkeyTrigger::LeftOption => code == "AltLeft",
+        HotkeyTrigger::RightCommand => code == "MetaRight",
+        HotkeyTrigger::Fn => false,
     }
 }
 
