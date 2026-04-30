@@ -1,6 +1,8 @@
 // SettingsModal.tsx — centered sheet with sub-nav on the left.
-// Ported verbatim from design_handoff_openless/variants.jsx::SettingsModal
-// (plus its AccountSection / PersonalizeSection / AboutMini siblings).
+//
+// 设计原则：每个可见控件都必须可用。没有后端支撑的占位（账号 / 主题切换 / 启动项 /
+// 开机自启）已从此弹窗移除，避免 "看似可点实际无效" 的负面体感。
+// 待 backend 就位后再补回（参见 issue #69）。
 
 import { useEffect, useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -8,8 +10,7 @@ import { Icon } from './Icon';
 import { APP_VERSION_LABEL } from '../lib/appVersion';
 import { Settings as SettingsContent, type SettingsSectionId } from '../pages/Settings';
 import { Row } from './ui/Row';
-import { SegSimple } from './ui/SegSimple';
-import { SwitchLite } from './ui/SwitchLite';
+import { openExternal } from '../lib/ipc';
 import {
   FOLLOW_SYSTEM,
   getLocalePreference,
@@ -25,24 +26,39 @@ interface SettingsModalProps {
 }
 
 // 稳定 ID（与 i18n key 一致，方便 modal.sections.* 渲染）。
-type ModalSectionId = 'account' | 'settings' | 'personalize' | 'about';
+type ModalSectionId = 'settings' | 'personalize' | 'about';
 
 interface ModalNavItem {
   id: string;
   icon: string;
   external?: boolean;
+  href?: string;
 }
 
 interface ModalGroup {
   items: ModalNavItem[];
 }
 
+const HELP_URL = 'https://github.com/appergb/openless#readme';
+const RELEASE_NOTES_URL = 'https://github.com/appergb/openless/releases';
+
 export function SettingsModal({ os: _os, onClose, initialSettingsSection }: SettingsModalProps) {
   const { t } = useTranslation();
   const [section, setSection] = useState<ModalSectionId>('settings');
   const groups: ModalGroup[] = [
-    { items: [{ id: 'account', icon: 'user' }, { id: 'settings', icon: 'settings' }, { id: 'personalize', icon: 'sparkle' }, { id: 'about', icon: 'info' }] },
-    { items: [{ id: 'helpCenter', icon: 'help', external: true }, { id: 'releaseNotes', icon: 'doc', external: true }] },
+    {
+      items: [
+        { id: 'settings', icon: 'settings' },
+        { id: 'personalize', icon: 'sparkle' },
+        { id: 'about', icon: 'info' },
+      ],
+    },
+    {
+      items: [
+        { id: 'helpCenter', icon: 'help', external: true, href: HELP_URL },
+        { id: 'releaseNotes', icon: 'doc', external: true, href: RELEASE_NOTES_URL },
+      ],
+    },
   ];
 
   return (
@@ -89,7 +105,13 @@ export function SettingsModal({ os: _os, onClose, initialSettingsSection }: Sett
                 return (
                   <button
                     key={it.id}
-                    onClick={() => !it.external && setSection(it.id as ModalSectionId)}
+                    onClick={() => {
+                      if (it.external && it.href) {
+                        void openExternal(it.href);
+                      } else {
+                        setSection(it.id as ModalSectionId);
+                      }
+                    }}
                     style={{
                       display: 'flex', alignItems: 'center', gap: 10,
                       padding: '7px 10px',
@@ -99,6 +121,7 @@ export function SettingsModal({ os: _os, onClose, initialSettingsSection }: Sett
                       fontFamily: 'inherit', fontSize: 13, fontWeight: active ? 600 : 500,
                       boxShadow: active ? '0 1px 2px rgba(0,0,0,.05), 0 0 0 0.5px rgba(0,0,0,.06)' : 'none',
                       cursor: 'default', textAlign: 'left',
+                      transition: 'background 0.12s ease-out, color 0.12s ease-out',
                     }}>
 
                     <Icon name={it.icon} size={14} />
@@ -121,7 +144,10 @@ export function SettingsModal({ os: _os, onClose, initialSettingsSection }: Sett
               background: 'transparent', color: 'var(--ol-ink-3)',
               display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
               cursor: 'default',
+              transition: 'background 0.12s ease-out',
             }}
+            onMouseEnter={e => (e.currentTarget.style.background = 'rgba(0,0,0,0.05)')}
+            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
             title={t('common.close')}>
 
             <Icon name="close" size={14} />
@@ -130,7 +156,6 @@ export function SettingsModal({ os: _os, onClose, initialSettingsSection }: Sett
           <h2 style={{ margin: '0 0 18px', fontSize: 22, fontWeight: 600, letterSpacing: '-0.02em' }}>{t(`modal.sections.${section}`)}</h2>
 
           {section === 'settings' && <SettingsContent embedded initialSection={initialSettingsSection} />}
-          {section === 'account' && <AccountSection />}
           {section === 'personalize' && <PersonalizeSection />}
           {section === 'about' && <AboutMini />}
         </div>
@@ -143,38 +168,6 @@ export function SettingsModal({ os: _os, onClose, initialSettingsSection }: Sett
           to   { opacity: 1; transform: translateY(0) scale(1); }
         }
       `}</style>
-    </div>
-  );
-}
-
-function AccountSection() {
-  const { t } = useTranslation();
-  return (
-    <div>
-      <div style={{
-        padding: 16, borderRadius: 12,
-        border: '0.5px solid var(--ol-line)',
-        display: 'flex', alignItems: 'center', gap: 14,
-      }}>
-        <div style={{
-          width: 44, height: 44, borderRadius: 999,
-          background: 'linear-gradient(135deg, #0a0a0b, #2563eb)',
-          color: '#fff', fontSize: 16, fontWeight: 600,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }}>L</div>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 14, fontWeight: 600 }}>{t('modal.account.localUser')}</div>
-          <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', marginTop: 2 }}>{t('modal.account.localUserDesc')}</div>
-        </div>
-        <button style={{
-          padding: '7px 14px', fontSize: 12.5, fontWeight: 500,
-          borderRadius: 8, border: 0, background: 'var(--ol-ink)', color: '#fff',
-          cursor: 'default', fontFamily: 'inherit',
-        }}>{t('modal.account.loginSync')}</button>
-      </div>
-      <p style={{ margin: '20px 0 0', fontSize: 12, color: 'var(--ol-ink-4)', lineHeight: 1.6 }}>
-        {t('modal.account.footer')}
-      </p>
     </div>
   );
 }
@@ -196,12 +189,6 @@ function PersonalizeSection() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <Row label={t('modal.personalize.appearance')} desc={t('modal.personalize.appearanceDesc')}>
-        <SegSimple
-          options={[t('modal.personalize.appearanceSystem'), t('modal.personalize.appearanceLight'), t('modal.personalize.appearanceDark')]}
-          active={t('modal.personalize.appearanceSystem')}
-        />
-      </Row>
       <Row label={t('modal.personalize.language')}>
         <LanguagePicker />
       </Row>
@@ -220,15 +207,6 @@ function PersonalizeSection() {
           </span>
         </div>
       </Row>
-      <Row label={t('modal.personalize.startupOpen')}>
-        <SegSimple
-          options={[t('modal.personalize.startupOverview'), t('modal.personalize.startupLast')]}
-          active={t('modal.personalize.startupLast')}
-        />
-      </Row>
-      <Row label={t('modal.personalize.startupAtBoot')}>
-        <SwitchLite on />
-      </Row>
     </div>
   );
 }
@@ -244,9 +222,30 @@ function AboutMini() {
           <div style={{ fontSize: 12, color: 'var(--ol-ink-3)' }}>{t('modal.about.tagline')} · {APP_VERSION_LABEL}</div>
         </div>
       </div>
-      <Row label={t('modal.about.checkUpdate')}><button style={btnGhost}>{t('modal.about.checkUpdateBtn')}</button></Row>
-      <Row label={t('modal.about.docs')}><button style={btnGhost}>{t('modal.about.docsBtn')}</button></Row>
-      <Row label={t('modal.about.feedback')}><button style={btnGhost}>{t('modal.about.feedbackBtn')}</button></Row>
+      <Row label={t('modal.about.checkUpdate')}>
+        <button
+          style={btnGhost}
+          onClick={() => openExternal('https://github.com/appergb/openless/releases')}
+        >
+          {t('modal.about.checkUpdateBtn')}
+        </button>
+      </Row>
+      <Row label={t('modal.about.docs')}>
+        <button
+          style={btnGhost}
+          onClick={() => openExternal('https://github.com/appergb/openless#readme')}
+        >
+          {t('modal.about.docsBtn')}
+        </button>
+      </Row>
+      <Row label={t('modal.about.feedback')}>
+        <button
+          style={btnGhost}
+          onClick={() => openExternal('https://github.com/appergb/openless/issues')}
+        >
+          {t('modal.about.feedbackBtn')}
+        </button>
+      </Row>
       <Row label={t('modal.about.privacy')} desc={t('modal.about.privacyDesc')}>
         <span style={{ fontSize: 11, padding: '3px 8px', borderRadius: 999, background: 'var(--ol-blue-soft)', color: 'var(--ol-blue)', fontWeight: 500 }}>{t('modal.about.localFirst')}</span>
       </Row>
@@ -259,6 +258,7 @@ const btnGhost: CSSProperties = {
   border: '0.5px solid var(--ol-line-strong)',
   background: '#fff', color: 'var(--ol-ink-2)',
   cursor: 'default', fontFamily: 'inherit',
+  transition: 'background 0.12s ease-out, border-color 0.12s ease-out',
 };
 
 // 真正可用的语言切换器 —— 用原生 <select>，与 Settings → Language 分区共享同一份 localStorage 偏好。
