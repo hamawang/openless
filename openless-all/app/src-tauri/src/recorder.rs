@@ -11,7 +11,7 @@
 //! - 主线程通过 `AtomicBool` 通知"该停了"，并 `join` 线程；线程内 `drop` Stream。
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::mpsc::{channel, Sender};
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
@@ -57,16 +57,24 @@ impl Recorder {
     pub fn start(
         consumer: Arc<dyn AudioConsumer>,
         level_handler: Arc<dyn Fn(f32) + Send + Sync>,
-    ) -> Result<Self, RecorderError> {
+    ) -> Result<(Self, Receiver<RecorderError>), RecorderError> {
         // 启动信号：子线程构造 Stream 完成后通过 startup_tx 报告结果。
         let (startup_tx, startup_rx) = channel::<Result<(), RecorderError>>();
+        // 运行期错误：Stream 已成功启动后，cpal 通过 err_cb 异步上报。
+        let (runtime_error_tx, runtime_error_rx) = channel::<RecorderError>();
         let stop_flag = Arc::new(AtomicBool::new(false));
         let stop_for_thread = Arc::clone(&stop_flag);
 
         let join_handle = thread::Builder::new()
             .name("openless-recorder".into())
             .spawn(move || {
-                run_audio_thread(consumer, level_handler, stop_for_thread, startup_tx);
+                run_audio_thread(
+                    consumer,
+                    level_handler,
+                    stop_for_thread,
+                    startup_tx,
+                    runtime_error_tx,
+                );
             })
             .map_err(|e| RecorderError::EngineFailed(format!("spawn audio thread: {e}")))?;
 
@@ -77,10 +85,13 @@ impl Recorder {
             .map_err(|e| RecorderError::EngineFailed(format!("audio thread vanished: {e}")))?;
         startup_result?;
 
-        Ok(Self {
-            stop_flag,
-            join_handle: Mutex::new(Some(join_handle)),
-        })
+        Ok((
+            Self {
+                stop_flag,
+                join_handle: Mutex::new(Some(join_handle)),
+            },
+            runtime_error_rx,
+        ))
     }
 
     /// 停止采集并等待音频线程退出。
@@ -102,8 +113,9 @@ fn run_audio_thread(
     level_handler: Arc<dyn Fn(f32) + Send + Sync>,
     stop_flag: Arc<AtomicBool>,
     startup_tx: Sender<Result<(), RecorderError>>,
+    runtime_error_tx: Sender<RecorderError>,
 ) {
-    let stream = match build_input_stream(consumer, level_handler) {
+    let stream = match build_input_stream(consumer, level_handler, runtime_error_tx) {
         Ok(s) => s,
         Err(err) => {
             // 启动失败：通知主线程后即退出。
@@ -133,6 +145,7 @@ fn run_audio_thread(
 fn build_input_stream(
     consumer: Arc<dyn AudioConsumer>,
     level_handler: Arc<dyn Fn(f32) + Send + Sync>,
+    runtime_error_tx: Sender<RecorderError>,
 ) -> Result<cpal::Stream, RecorderError> {
     let host = cpal::default_host();
     let device = host
@@ -165,6 +178,7 @@ fn build_input_stream(
         state,
         input_sr,
         channels,
+        runtime_error_tx,
     )
 }
 
@@ -202,14 +216,19 @@ fn build_stream_for_format(
     state: Arc<StreamState>,
     input_sr: u32,
     channels: usize,
+    runtime_error_tx: Sender<RecorderError>,
 ) -> Result<cpal::Stream, RecorderError> {
-    let err_cb = |err| log::error!("[recorder] stream error: {err}");
-
     macro_rules! make_stream {
         ($t:ty, $to_f32:expr) => {{
             let consumer = Arc::clone(&consumer);
             let level_handler = Arc::clone(&level_handler);
             let state = Arc::clone(&state);
+            let runtime_error_tx = runtime_error_tx.clone();
+            let err_cb = move |err| {
+                log::error!("[recorder] stream error: {err}");
+                let _ =
+                    runtime_error_tx.send(RecorderError::EngineFailed(format!("stream: {err}")));
+            };
             device
                 .build_input_stream::<$t, _, _>(
                     config,
