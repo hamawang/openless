@@ -24,6 +24,9 @@ pub enum HotkeyEvent {
     Pressed,
     Released,
     Cancelled,
+    /// Shift（或未来配置项指定的修饰键）按下边沿。可在录音过程中任何时刻产生；
+    /// 上层据此切换到翻译输出管线。详见 issue #4。
+    TranslationModifierPressed,
 }
 
 pub trait HotkeyAdapter: Send + Sync {
@@ -36,6 +39,9 @@ struct Shared {
     binding: RwLock<HotkeyBinding>,
     /// 触发键当前是否处于"按住"状态。OS 自动重复事件用此去重。
     trigger_held: AtomicBool,
+    /// Shift（翻译修饰键）当前是否按住。用于在 FLAGS_CHANGED 上识别 down 边沿
+    /// （只在 false → true 时往上层发 TranslationModifierPressed）。详见 issue #4。
+    translation_modifier_held: AtomicBool,
 }
 
 pub struct HotkeyMonitor {
@@ -108,6 +114,7 @@ where
     let shared = Arc::new(Shared {
         binding: RwLock::new(binding),
         trigger_held: AtomicBool::new(false),
+        translation_modifier_held: AtomicBool::new(false),
     });
 
     let thread_shared = Arc::clone(&shared);
@@ -217,6 +224,7 @@ mod platform {
 
     const KEYBOARD_EVENT_KEYCODE: CgEventField = 9;
 
+    const FLAG_MASK_SHIFT: CgEventFlags = 0x0002_0000;
     const FLAG_MASK_CONTROL: CgEventFlags = 0x0004_0000;
     const FLAG_MASK_ALTERNATE: CgEventFlags = 0x0008_0000;
     const FLAG_MASK_COMMAND: CgEventFlags = 0x0010_0000;
@@ -335,13 +343,24 @@ mod platform {
     }
 
     fn handle_flags_changed(ctx: &CallbackContext, event: CgEventRef) {
+        let flags = unsafe { CGEventGetFlags(event) };
+
+        // Shift 是翻译模式修饰键 — 与触发键的 keycode 检查独立，任何时刻按 Shift 都生效。
+        let shift_active = (flags & FLAG_MASK_SHIFT) != 0;
+        let shift_was_held = ctx.shared.translation_modifier_held.load(Ordering::SeqCst);
+        if shift_active && !shift_was_held {
+            ctx.shared.translation_modifier_held.store(true, Ordering::SeqCst);
+            send_or_log(&ctx.tx, HotkeyEvent::TranslationModifierPressed);
+        } else if !shift_active && shift_was_held {
+            ctx.shared.translation_modifier_held.store(false, Ordering::SeqCst);
+        }
+
         let keycode = unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) };
         let trigger = ctx.shared.binding.read().trigger;
         let expected_keycode = trigger_to_keycode(trigger);
         if keycode != expected_keycode {
             return;
         }
-        let flags = unsafe { CGEventGetFlags(event) };
         let mask = trigger_to_flag_mask(trigger);
         let is_active = (flags & mask) != 0;
         let was_held = ctx.shared.trigger_held.load(Ordering::SeqCst);
@@ -414,6 +433,9 @@ mod platform {
     const WM_SYSKEYUP: usize = 0x0105;
 
     const VK_ESCAPE: u32 = 0x1B;
+    const VK_SHIFT: u32 = 0x10;
+    const VK_LSHIFT: u32 = 0xA0;
+    const VK_RSHIFT: u32 = 0xA1;
     const VK_LCONTROL: u32 = 0xA2;
     const VK_RCONTROL: u32 = 0xA3;
     const VK_RMENU: u32 = 0xA5;
@@ -556,6 +578,23 @@ mod platform {
             return;
         }
 
+        // Shift（任一侧）= 翻译模式修饰键。在录音过程中任意时刻按下都生效。详见 issue #4。
+        if matches!(vk_code, VK_SHIFT | VK_LSHIFT | VK_RSHIFT) {
+            match message {
+                WM_KEYDOWN | WM_SYSKEYDOWN => {
+                    let was_held = ctx.shared.translation_modifier_held.swap(true, Ordering::SeqCst);
+                    if !was_held {
+                        send_or_log(&ctx.tx, HotkeyEvent::TranslationModifierPressed);
+                    }
+                }
+                WM_KEYUP | WM_SYSKEYUP => {
+                    ctx.shared.translation_modifier_held.store(false, Ordering::SeqCst);
+                }
+                _ => {}
+            }
+            return;
+        }
+
         let trigger = ctx.shared.binding.read().trigger;
         if vk_code != trigger_to_vk_code(trigger) {
             return;
@@ -683,6 +722,14 @@ mod platform {
                     let _ = tx.send(HotkeyEvent::Cancelled);
                     return;
                 }
+                // Shift（任一侧）= 翻译模式修饰键。详见 issue #4。
+                if matches!(key, Key::ShiftLeft | Key::ShiftRight) {
+                    let was_held = shared.translation_modifier_held.swap(true, Ordering::SeqCst);
+                    if !was_held {
+                        let _ = tx.send(HotkeyEvent::TranslationModifierPressed);
+                    }
+                    return;
+                }
                 if key == trigger_to_rdev_key(trigger) {
                     let was_held = shared.trigger_held.swap(true, Ordering::SeqCst);
                     if !was_held {
@@ -691,6 +738,10 @@ mod platform {
                 }
             }
             EventType::KeyRelease(key) => {
+                if matches!(key, Key::ShiftLeft | Key::ShiftRight) {
+                    shared.translation_modifier_held.store(false, Ordering::SeqCst);
+                    return;
+                }
                 if key == trigger_to_rdev_key(trigger) {
                     let was_held = shared.trigger_held.swap(false, Ordering::SeqCst);
                     if was_held {

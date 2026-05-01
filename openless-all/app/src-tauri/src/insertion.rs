@@ -25,17 +25,19 @@ impl TextInserter {
     }
 
     /// Insert `text` at the current cursor position.
+    /// `restore_clipboard_after_paste` 仅在 Windows/Linux 路径下决定 paste 之后是否恢复
+    /// 用户原剪贴板。macOS 走 AX 直写，参数被忽略。详见 issue #111。
     #[cfg(not(target_os = "macos"))]
-    pub fn insert(&self, text: &str) -> InsertStatus {
+    pub fn insert(&self, text: &str, restore_clipboard_after_paste: bool) -> InsertStatus {
         if text.is_empty() {
             return InsertStatus::CopiedFallback;
         }
-        insert_with_clipboard_restore(text)
+        insert_with_clipboard_restore(text, restore_clipboard_after_paste)
     }
 
     /// Insert `text` at the current cursor position.
     #[cfg(target_os = "macos")]
-    pub fn insert(&self, text: &str) -> InsertStatus {
+    pub fn insert(&self, text: &str, _restore_clipboard_after_paste: bool) -> InsertStatus {
         if text.is_empty() {
             return InsertStatus::CopiedFallback;
         }
@@ -101,7 +103,7 @@ fn copy_to_clipboard_with_restore_plan(text: &str) -> Result<ClipboardRestorePla
 }
 
 #[cfg(not(target_os = "macos"))]
-fn insert_with_clipboard_restore(text: &str) -> InsertStatus {
+fn insert_with_clipboard_restore(text: &str, restore_clipboard_after_paste: bool) -> InsertStatus {
     let restore_plan = match copy_to_clipboard_with_restore_plan(text) {
         Ok(plan) => plan,
         Err(err) => {
@@ -115,7 +117,10 @@ fn insert_with_clipboard_restore(text: &str) -> InsertStatus {
         return InsertStatus::CopiedFallback;
     }
 
-    maybe_restore_clipboard(restore_plan);
+    if restore_clipboard_after_paste {
+        maybe_restore_clipboard(restore_plan);
+    }
+    // 关掉 → 听写文本留在剪贴板里，simulate_paste 没真正落地时用户能手动 Ctrl+V 找回。
     insertion_success_status()
 }
 

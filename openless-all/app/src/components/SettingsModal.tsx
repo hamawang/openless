@@ -134,12 +134,14 @@ export function SettingsModal({ os: _os, onClose, initialSettingsSection }: Sett
           ))}
         </aside>
 
-        {/* content */}
-        <div style={{ flex: 1, minWidth: 0, overflow: 'auto', padding: '22px 28px 28px', position: 'relative' }}>
+        {/* content — 父容器 overflow:hidden + 列向 flex；X 和 h2 固定在头部，
+            只有最里层的 scroll wrapper 真正滚动。这样模态左 sidebar、关闭按钮、
+            section 标题都不会跟着内容一起飘。 */}
+        <div style={{ flex: 1, minWidth: 0, overflow: 'hidden', position: 'relative', display: 'flex', flexDirection: 'column' }}>
           <button
             onClick={onClose}
             style={{
-              position: 'absolute', top: 14, right: 14,
+              position: 'absolute', top: 14, right: 14, zIndex: 2,
               width: 28, height: 28, border: 0, borderRadius: 999,
               background: 'transparent', color: 'var(--ol-ink-3)',
               display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
@@ -153,11 +155,20 @@ export function SettingsModal({ os: _os, onClose, initialSettingsSection }: Sett
             <Icon name="close" size={14} />
           </button>
 
-          <h2 style={{ margin: '0 0 18px', fontSize: 22, fontWeight: 600, letterSpacing: '-0.02em' }}>{t(`modal.sections.${section}`)}</h2>
+          <h2 style={{ margin: 0, padding: '22px 28px 8px', fontSize: 22, fontWeight: 600, letterSpacing: '-0.02em', flexShrink: 0 }}>{t(`modal.sections.${section}`)}</h2>
 
-          {section === 'settings' && <SettingsContent embedded initialSection={initialSettingsSection} />}
-          {section === 'personalize' && <PersonalizeSection />}
-          {section === 'about' && <AboutMini />}
+          {section === 'settings' ? (
+            // SettingsContent 自己接管 flex:1 + 内部右栏 scroll，外层不能再加 overflow:auto。
+            <div style={{ flex: 1, minHeight: 0, padding: '10px 28px 28px', display: 'flex', flexDirection: 'column' }}>
+              <SettingsContent embedded initialSection={initialSettingsSection} />
+            </div>
+          ) : (
+            // personalize / about 短内容：单一 scroll wrapper，超出时本块滚动。
+            <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '10px 28px 28px' }}>
+              {section === 'personalize' && <PersonalizeSection />}
+              {section === 'about' && <AboutMini />}
+            </div>
+          )}
         </div>
       </div>
 

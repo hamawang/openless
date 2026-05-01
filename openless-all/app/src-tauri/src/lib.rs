@@ -62,6 +62,9 @@ pub fn run() {
 
             // 主窗口磨砂：macOS 用 NSVisualEffectView，Windows 用 Mica。
             // 没这一层的话 transparent: true 让窗口透明 → 背后只是空，不是磨砂。
+            //
+            // decorations 留给运行时分平台决定：macOS 默认 true 用系统红黄绿；
+            // Windows 这里关掉 native chrome 让 React 端 WinTitleBar 接管。
             if let Some(main) = app.get_webview_window("main") {
                 #[cfg(target_os = "macos")]
                 {
@@ -82,6 +85,9 @@ pub fn run() {
                     use window_vibrancy::apply_mica;
                     if let Err(e) = apply_mica(&main, None) {
                         log::warn!("[main] mica failed: {e}");
+                    }
+                    if let Err(e) = main.set_decorations(false) {
+                        log::warn!("[main] disable native decorations failed: {e}");
                     }
                 }
             }

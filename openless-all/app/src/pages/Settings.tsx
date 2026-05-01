@@ -64,7 +64,18 @@ export function Settings({ embedded = false, initialSection = 'recording' }: Set
           desc={t('settings.desc')}
         />
       )}
-      <div style={{ display: 'grid', gridTemplateColumns: embedded ? '120px 1fr' : '160px 1fr', gap: 18 }}>
+      {/* embedded（在 SettingsModal 里）模式下：mini-sidebar 固定，仅右栏 scroll。
+          外层 flex:1 minHeight:0 让 grid 拿到确定高度；gridTemplateRows: minmax(0, 1fr)
+          强制行高等于容器高度，否则 grid 默认 auto rows 会跟内容长，右栏 overflow:auto
+          就退化成"没东西需要 scroll"，于是大家照旧一起飘。 */}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: embedded ? '120px 1fr' : '160px 1fr',
+          gap: 18,
+          ...(embedded ? { flex: 1, minHeight: 0, gridTemplateRows: 'minmax(0, 1fr)' } : {}),
+        }}
+      >
         <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
           {SECTION_ORDER.map(s => (
             <button
@@ -83,7 +94,14 @@ export function Settings({ embedded = false, initialSection = 'recording' }: Set
             </button>
           ))}
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 12,
+            ...(embedded ? { minHeight: 0, overflow: 'auto', paddingRight: 4 } : {}),
+          }}
+        >
           {section === 'recording' && <RecordingSection />}
           {section === 'providers' && <ProvidersSection />}
           {section === 'shortcuts' && <ShortcutsSection />}
@@ -132,6 +150,8 @@ function RecordingSection() {
     savePrefs({ ...prefs, hotkey: { ...prefs.hotkey, mode } });
   const onShowCapsuleChange = (showCapsule: boolean) =>
     savePrefs({ ...prefs, showCapsule });
+  const onRestoreClipboardChange = (restoreClipboardAfterPaste: boolean) =>
+    savePrefs({ ...prefs, restoreClipboardAfterPaste });
 
   const choices: Array<[HotkeyMode, string]> = [
     ['toggle', t('settings.recording.modeToggle')],
@@ -202,6 +222,12 @@ function RecordingSection() {
       </SettingRow>
       <SettingRow label={t('settings.recording.capsuleLabel')} desc={t('settings.recording.capsuleDesc')}>
         <Toggle on={prefs.showCapsule} onToggle={onShowCapsuleChange} />
+      </SettingRow>
+      <SettingRow
+        label={t('settings.recording.restoreClipboardLabel')}
+        desc={t('settings.recording.restoreClipboardDesc')}
+      >
+        <Toggle on={prefs.restoreClipboardAfterPaste} onToggle={onRestoreClipboardChange} />
       </SettingRow>
       {capability.statusHint && (
         <div style={{ marginTop: 6, fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.5 }}>
@@ -338,7 +364,7 @@ function ProvidersSection() {
         </SettingRow>
         {asrProvider === 'volcengine' ? (
           <>
-            <CredentialField key={`${asrProvider}:app_key`} label={t('settings.providers.appKeyLabel')} account="volcengine.app_key" mono mask />
+            <CredentialField key={`${asrProvider}:app_key`} label={t('settings.providers.appIdLabel')} account="volcengine.app_key" mono mask />
             <CredentialField key={`${asrProvider}:access_key`} label={t('settings.providers.accessKeyLabel')} account="volcengine.access_key" mono mask />
             <CredentialField key={`${asrProvider}:resource_id`} label={t('settings.providers.resourceIdLabel')} account="volcengine.resource_id" mono
               placeholder={ASR_DEFAULT_RESOURCE_ID} defaultValue={ASR_DEFAULT_RESOURCE_ID} />

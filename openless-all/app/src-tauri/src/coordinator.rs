@@ -60,6 +60,10 @@ struct SessionState {
     /// 跳过 history.append。issue #52。
     cancelled: bool,
     focus_target: Option<usize>,
+    /// 单调递增的 session id。begin_session 自增。
+    /// recorder error monitor 持有 captured id，处理时若与当前不等说明
+    /// 是上一 session 的迟到错误，必须 drop，不要 abort 当前 active session。
+    session_id: u64,
 }
 
 impl Default for SessionState {
@@ -70,6 +74,7 @@ impl Default for SessionState {
             pending_stop: false,
             cancelled: false,
             focus_target: None,
+            session_id: 0,
         }
     }
 }
@@ -90,6 +95,11 @@ struct Inner {
     hotkey: Mutex<Option<HotkeyMonitor>>,
     hotkey_status: Mutex<HotkeyStatus>,
     hotkey_trigger_held: AtomicBool,
+    /// 翻译模式触发标志。每次 begin_session 重置为 false；hotkey 监听器在
+    /// Listening / Starting 阶段看到 Shift down 边沿时 set true。
+    /// end_session 在调 polish/translate 前读这个 flag + translation_target_language
+    /// 决定走哪条管线。详见 issue #4。
+    translation_modifier_seen: AtomicBool,
 }
 
 impl Coordinator {
@@ -114,6 +124,7 @@ impl Coordinator {
                 hotkey: Mutex::new(None),
                 hotkey_status: Mutex::new(HotkeyStatus::default()),
                 hotkey_trigger_held: AtomicBool::new(false),
+                translation_modifier_seen: AtomicBool::new(false),
             }),
         }
     }
@@ -197,7 +208,8 @@ impl Coordinator {
 
     pub async fn repolish(&self, raw_text: String, mode: PolishMode) -> Result<String, String> {
         let hotwords = enabled_phrases(&self.inner);
-        polish_text(&raw_text, mode, &hotwords)
+        let working_languages = self.inner.prefs.get().working_languages;
+        polish_text(&raw_text, mode, &hotwords, &working_languages)
             .await
             .map_err(|e| e.to_string())
     }
@@ -274,6 +286,18 @@ fn hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEvent>) {
             }
             HotkeyEvent::Cancelled => {
                 cancel_session(&inner_cloned);
+            }
+            HotkeyEvent::TranslationModifierPressed => {
+                // 仅在 Starting / Listening 阶段把 Shift 边沿计入"翻译模式触发"。
+                // Idle 阶段按 Shift 不应该影响下一段录音；Processing/Inserting 已经过了
+                // 决定走哪条管线的检查点，再 set 也没意义。
+                let phase = inner_cloned.state.lock().phase;
+                if matches!(phase, SessionPhase::Starting | SessionPhase::Listening) {
+                    inner_cloned
+                        .translation_modifier_seen
+                        .store(true, Ordering::SeqCst);
+                    log::info!("[coord] translation modifier seen during {phase:?}");
+                }
             }
         }
     }
@@ -437,7 +461,12 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
         state.pending_stop = false;
         state.cancelled = false;
         state.focus_target = capture_focus_target();
+        // 自增 session_id；spawn 出去的 recorder error monitor 会捕获这个值，
+        // 如果迟到错误到达时 id 已不匹配就 drop，不会误中止后续 session。
+        state.session_id = state.session_id.wrapping_add(1);
     }
+    // 翻译模式标志重置；hotkey 监听器在 Shift down 时再 set true。
+    inner.translation_modifier_seen.store(false, Ordering::SeqCst);
 
     #[cfg(any(debug_assertions, test))]
     if hotkey_injection_dry_run_enabled() {
@@ -618,11 +647,24 @@ fn start_recorder_for_starting(
 }
 
 fn spawn_recorder_error_monitor(inner: &Arc<Inner>, rx: mpsc::Receiver<RecorderError>) {
+    // 捕获当前 session_id：err 来时若 id 已经不一致说明是上一 session 的迟到事件，
+    // 不能去 abort 当前 active 的新 session（它录得好好的）。
+    let captured_session_id = inner.state.lock().session_id;
     let inner = Arc::clone(inner);
     std::thread::Builder::new()
         .name("openless-recorder-error-monitor".into())
         .spawn(move || {
             if let Ok(err) = rx.recv() {
+                let current_session_id = inner.state.lock().session_id;
+                if captured_session_id != current_session_id {
+                    log::warn!(
+                        "[coord] recorder error from stale session {} dropped (current={}, err={})",
+                        captured_session_id,
+                        current_session_id,
+                        err
+                    );
+                    return;
+                }
                 log::error!("[coord] recorder runtime error: {err}");
                 abort_recording_with_error(&inner, format!("录音中断: {err}"));
             }
@@ -831,7 +873,20 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     let prefs = inner.prefs.get();
     let mode = prefs.default_mode;
     let hotword_strs = enabled_phrases(inner);
-    let (polished, polish_error) = polish_or_passthrough(&raw, mode, &hotword_strs).await;
+    let working_languages = prefs.working_languages.clone();
+    let translation_target = prefs.translation_target_language.trim().to_string();
+    let translation_active = inner.translation_modifier_seen.load(Ordering::SeqCst)
+        && !translation_target.is_empty();
+    let (polished, polish_error) = if translation_active {
+        log::info!(
+            "[coord] translation mode → target=\u{300C}{}\u{300D} working={:?}",
+            translation_target,
+            working_languages
+        );
+        translate_or_passthrough(&raw, &translation_target, &working_languages).await
+    } else {
+        polish_or_passthrough(&raw, mode, &hotword_strs, &working_languages).await
+    };
 
     // 原子化最后一次 cancel 检查 + 转 Inserting：
     // 在同一 lock 内决定「丢弃」还是「进入 Inserting」。一旦设到 Inserting，
@@ -857,7 +912,8 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
 
     let focus_target = inner.state.lock().focus_target;
     restore_focus_target_if_possible(focus_target);
-    let status = inner.inserter.insert(&polished);
+    let restore_clipboard = inner.prefs.get().restore_clipboard_after_paste;
+    let status = inner.inserter.insert(&polished, restore_clipboard);
     let inserted_chars = polished.chars().count() as u32;
 
     // 累计每条 enabled 词条在最终文本中的命中次数。
@@ -1041,11 +1097,12 @@ async fn polish_or_passthrough(
     raw: &RawTranscript,
     mode: PolishMode,
     hotwords: &[String],
+    working_languages: &[String],
 ) -> (String, Option<String>) {
     if mode == PolishMode::Raw {
         return (raw.text.clone(), None);
     }
-    match polish_text(&raw.text, mode, hotwords).await {
+    match polish_text(&raw.text, mode, hotwords, working_languages).await {
         Ok(s) => (s, None),
         Err(e) => {
             let reason = e.to_string();
@@ -1055,7 +1112,12 @@ async fn polish_or_passthrough(
     }
 }
 
-async fn polish_text(raw: &str, mode: PolishMode, hotwords: &[String]) -> anyhow::Result<String> {
+async fn polish_text(
+    raw: &str,
+    mode: PolishMode,
+    hotwords: &[String],
+    working_languages: &[String],
+) -> anyhow::Result<String> {
     let api_key = CredentialsVault::get(CredentialAccount::ArkApiKey)?.unwrap_or_default();
     if api_key.is_empty() {
         anyhow::bail!("ark api key missing");
@@ -1073,7 +1135,50 @@ async fn polish_text(raw: &str, mode: PolishMode, hotwords: &[String]) -> anyhow
 
     let config = OpenAICompatibleConfig::new("ark", "Doubao Ark", base_url, api_key, model);
     let provider = OpenAICompatibleLLMProvider::new(config);
-    Ok(provider.polish(raw, mode, hotwords).await?)
+    Ok(provider.polish(raw, mode, hotwords, working_languages).await?)
+}
+
+/// 翻译路径——和 polish 一样失败时返回原文 + 失败原因，避免"不丢字"约定被违反（CLAUDE.md）。
+async fn translate_or_passthrough(
+    raw: &RawTranscript,
+    target_language: &str,
+    working_languages: &[String],
+) -> (String, Option<String>) {
+    match translate_text(&raw.text, target_language, working_languages).await {
+        Ok(s) => (s, None),
+        Err(e) => {
+            let reason = e.to_string();
+            log::error!("[coord] translate failed, falling back to raw: {reason}");
+            (raw.text.clone(), Some(reason))
+        }
+    }
+}
+
+async fn translate_text(
+    raw: &str,
+    target_language: &str,
+    working_languages: &[String],
+) -> anyhow::Result<String> {
+    let api_key = CredentialsVault::get(CredentialAccount::ArkApiKey)?.unwrap_or_default();
+    if api_key.is_empty() {
+        anyhow::bail!("ark api key missing");
+    }
+    let model = CredentialsVault::get(CredentialAccount::ArkModelId)?
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "deepseek-v3-2".to_string());
+    let endpoint = CredentialsVault::get(CredentialAccount::ArkEndpoint)?
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "https://ark.cn-beijing.volces.com/api/v3/chat/completions".to_string());
+    let base_url = endpoint
+        .trim_end_matches("/chat/completions")
+        .trim_end_matches('/')
+        .to_string();
+
+    let config = OpenAICompatibleConfig::new("ark", "Doubao Ark", base_url, api_key, model);
+    let provider = OpenAICompatibleLLMProvider::new(config);
+    Ok(provider
+        .translate_to(raw, target_language, working_languages)
+        .await?)
 }
 
 fn read_whisper_credentials() -> (String, String, String) {
@@ -1419,6 +1524,7 @@ fn emit_capsule(
         elapsed_ms,
         message,
         inserted_chars,
+        translation: inner.translation_modifier_seen.load(Ordering::SeqCst),
     };
 
     let show_capsule = inner.prefs.get().show_capsule;

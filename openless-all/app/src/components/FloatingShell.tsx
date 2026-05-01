@@ -14,6 +14,7 @@ import { Overview } from '../pages/Overview';
 import { History } from '../pages/History';
 import { Vocab } from '../pages/Vocab';
 import { Style } from '../pages/Style';
+import { Translation } from '../pages/Translation';
 import { APP_VERSION_LABEL } from '../lib/appVersion';
 import {
   HOTKEY_MODE_MIGRATION_ACK_KEY,
@@ -44,6 +45,7 @@ const NAV_BASE: Array<Omit<NavItem, 'name'>> = [
   { id: 'history', icon: 'history', cmp: History },
   { id: 'vocab', icon: 'vocab', cmp: Vocab },
   { id: 'style', icon: 'style', cmp: Style },
+  { id: 'translation', icon: 'translate', cmp: Translation },
 ];
 
 const RELEASE_NOTES_URL = 'https://github.com/appergb/openless/releases';

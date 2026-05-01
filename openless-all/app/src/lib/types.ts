@@ -79,7 +79,33 @@ export interface UserPreferences {
   showCapsule: boolean;
   activeAsrProvider: string;
   activeLlmProvider: string;
+  /** 仅 Windows/Linux：粘贴成功后是否恢复用户原剪贴板。默认 true。详见 issue #111。 */
+  restoreClipboardAfterPaste: boolean;
+  /** 用户的工作语言（多选，原生名）；作为前提注入 LLM polish/translate prompt 头部。 */
+  workingLanguages: string[];
+  /** 翻译模式目标语言（单选，原生名）；空串 = 不启用 Shift 翻译。详见 issue #4。 */
+  translationTargetLanguage: string;
 }
+
+/** 内置语言列表 — 前端 Settings UI 用，后端只接收原生名字符串拼 prompt。
+ *  添加新语言时直接在这里加一项（原生名），无需修改后端。 */
+export const SUPPORTED_LANGUAGES: readonly string[] = [
+  '简体中文',
+  '繁体中文',
+  'English',
+  '日本語',
+  '한국어',
+  'Français',
+  'Deutsch',
+  'Español',
+  'Italiano',
+  'Português',
+  'Русский',
+  'العربية',
+  'Tiếng Việt',
+  'ไทย',
+  'हिन्दी',
+] as const;
 
 export type CapsuleState =
   | 'idle'
@@ -96,6 +122,8 @@ export interface CapsulePayload {
   elapsedMs: number;
   message: string | null;
   insertedChars: number | null;
+  /** 当前 session 是否处于翻译模式（用户已按过 Shift）。详见 issue #4。 */
+  translation: boolean;
 }
 
 export interface CredentialsStatus {

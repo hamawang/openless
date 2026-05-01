@@ -13,7 +13,7 @@ use parking_lot::Mutex as ParkingMutex;
 use serde_json::{json, Value};
 use tokio::net::TcpStream;
 use tokio::runtime::Handle;
-use tokio::sync::{oneshot, Mutex as AsyncMutex, Notify};
+use tokio::sync::{mpsc, oneshot, Mutex as AsyncMutex, Notify};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::header::HeaderValue;
 use tokio_tungstenite::tungstenite::Message;
@@ -88,7 +88,12 @@ pub struct VolcengineStreamingASR {
     /// of the lifetime of any particular `&self` borrow.
     writer: SharedWriter,
     final_rx: ParkingMutex<Option<oneshot::Receiver<Result<RawTranscript, VolcengineASRError>>>>,
-    /// 在飞的 audio 帧 spawn 数。consume_pcm_chunk +1，spawn 内 send 完成 -1。
+    /// 单 worker 模式：consume_pcm_chunk 把 (seq, chunk) 入队这个 channel，
+    /// open_session 里 spawn 出的唯一 worker 串行 recv + send_binary，
+    /// 保证 seq 顺序严格等于实际发送顺序。session 结束时 take() 掉这个 sender，
+    /// worker 的 recv() 返回 None 自动退出。
+    audio_tx: ParkingMutex<Option<mpsc::UnboundedSender<(i32, Vec<u8>)>>>,
+    /// 队列里 + worker 在飞的 audio 帧总数。consume +N，worker send 完一帧 -1。
     /// send_last_frame 必须等它降到 0 才能安全发末帧，否则末帧可能被服务端先收到
     /// 而把后续 chunk 当成「stream 已结束」之后的多余数据丢弃 → 尾句丢失。
     pending_sends: Arc<AtomicUsize>,
@@ -103,6 +108,7 @@ impl VolcengineStreamingASR {
             state: ParkingMutex::new(SyncState::default()),
             writer: Arc::new(AsyncMutex::new(None)),
             final_rx: ParkingMutex::new(None),
+            audio_tx: ParkingMutex::new(None),
             pending_sends: Arc::new(AtomicUsize::new(0)),
             send_done: Arc::new(Notify::new()),
         }
@@ -169,6 +175,33 @@ impl VolcengineStreamingASR {
         self.pending_sends.store(0, Ordering::SeqCst);
         *self.final_rx.lock() = Some(rx);
         *self.writer.lock().await = Some(write);
+
+        // 起一个唯一的 audio worker：consume_pcm_chunk 把 (seq, chunk) 推到 audio_tx，
+        // worker 这边 FIFO recv 然后串行 send_binary。session 结束后调用方
+        // (cancel / handle_frame error / fallback_to_partial_or_error) 会 take 掉
+        // self.audio_tx，channel 关闭，worker 自然退出。
+        let (audio_tx, mut audio_rx) = mpsc::unbounded_channel::<(i32, Vec<u8>)>();
+        *self.audio_tx.lock() = Some(audio_tx);
+        let writer_for_worker = Arc::clone(&self.writer);
+        let pending_for_worker = Arc::clone(&self.pending_sends);
+        let notify_for_worker = Arc::clone(&self.send_done);
+        tokio::spawn(async move {
+            while let Some((seq, chunk)) = audio_rx.recv().await {
+                let frame = frame::build(
+                    MessageType::AudioOnlyRequest,
+                    Flags::PositiveSequence,
+                    Serialization::None,
+                    &chunk,
+                    Some(seq),
+                );
+                if let Err(e) = send_binary(&writer_for_worker, frame).await {
+                    log::error!("[asr] audio frame seq={} send 失败: {}", seq, e);
+                }
+                if pending_for_worker.fetch_sub(1, Ordering::SeqCst) == 1 {
+                    notify_for_worker.notify_waiters();
+                }
+            }
+        });
 
         // Send the first frame: full client request with seq=1.
         let payload_json = self.build_first_frame_payload(&connect_id);
@@ -318,6 +351,8 @@ impl VolcengineStreamingASR {
             st.pending_audio.clear();
             st.runtime.clone()
         };
+        // Drop audio sender → worker.recv() 返回 None → worker 退出，不再 hold writer。
+        *self.audio_tx.lock() = None;
         if let Some(runtime) = runtime {
             // Close the writer asynchronously so the receive loop sees EOF.
             let writer = Arc::clone(&self.writer);
@@ -384,6 +419,7 @@ impl VolcengineStreamingASR {
                 code, body
             )));
             self.state.lock().is_connected = false;
+            *self.audio_tx.lock() = None;
             return false;
         }
 
@@ -447,6 +483,7 @@ impl VolcengineStreamingASR {
             };
             self.signal_success(transcript);
             self.state.lock().is_connected = false;
+            *self.audio_tx.lock() = None;
             return false;
         }
         true
@@ -492,16 +529,16 @@ impl VolcengineStreamingASR {
             self.signal_error(err);
         }
         self.state.lock().is_connected = false;
+        *self.audio_tx.lock() = None;
     }
 }
 
 impl AudioConsumer for VolcengineStreamingASR {
     fn consume_pcm_chunk(&self, pcm: &[u8]) {
-        // 一次性把就绪 chunk 全部 drain 出来（同一把 state 锁内分配 seq，保证 seq 单调）。
-        // 然后 spawn 一个串行 send 的 task —— 不要每块一个 spawn，否则 burst flush 时多
-        // 个 task 异步竞争 writer 锁，发送顺序和 seq 顺序对不上，服务端会报
-        // "autoAssignedSequence (N) mismatch sequence in request (N+1)" 直接断连。
-        let (runtime, chunks) = {
+        // 单 worker 串行 send 模式：在 state 锁内 drain 并分配 seq（seq 单调），
+        // 然后把 (seq, chunk) push 进 mpsc。worker 端按入队顺序 send，
+        // 哪怕跨多个 consume 调用、多个 spawn 也不会再有 writer 锁竞争。
+        let chunks: Vec<(i32, Vec<u8>)> = {
             let mut st = self.state.lock();
             if !st.is_connected {
                 return;
@@ -517,41 +554,30 @@ impl AudioConsumer for VolcengineStreamingASR {
                 st.frames_sent += 1;
                 out.push((seq, chunk));
             }
-            (st.runtime.clone(), out)
+            out
         };
 
         if chunks.is_empty() {
             return;
         }
-        let Some(runtime) = runtime else {
+        let Some(tx) = self.audio_tx.lock().as_ref().cloned() else {
             return;
         };
 
-        // pending_sends + Notify 让 send_last_frame 知道何时所有 chunk 都已发出。
-        // 单 task 内串行 send，所以一次性 +N、收尾 -N。
-        let count = chunks.len();
-        self.pending_sends.fetch_add(count, Ordering::SeqCst);
-        let writer = Arc::clone(&self.writer);
-        let pending = Arc::clone(&self.pending_sends);
-        let notify = Arc::clone(&self.send_done);
-        runtime.spawn(async move {
-            for (seq, chunk) in chunks {
-                let frame = frame::build(
-                    MessageType::AudioOnlyRequest,
-                    Flags::PositiveSequence,
-                    Serialization::None,
-                    &chunk,
-                    Some(seq),
-                );
-                if let Err(e) = send_binary(&writer, frame).await {
-                    // 把丢帧错误顶到日志里，定位"为什么服务端只收到 100ms"
-                    log::error!("[asr] audio frame seq={} send 失败: {}", seq, e);
+        for entry in chunks {
+            // pending_sends 必须在 tx.send 之前 +1：否则 worker 可能先 recv + 发送 +
+            // 减 1，把 usize 计数器 underflow。
+            self.pending_sends.fetch_add(1, Ordering::SeqCst);
+            if tx.send(entry).is_err() {
+                // worker 已退出（cancel / 错误路径里 audio_tx 被 take）。
+                // 撤销刚才的 +1，避免 send_last_frame 的 wait 永远等不到 0。
+                if self.pending_sends.fetch_sub(1, Ordering::SeqCst) == 1 {
+                    self.send_done.notify_waiters();
                 }
+                log::warn!("[asr] audio queue closed; dropping subsequent frames");
+                return;
             }
-            if pending.fetch_sub(count, Ordering::SeqCst) == count {
-                notify.notify_waiters();
-            }
-        });
+        }
     }
 }
 

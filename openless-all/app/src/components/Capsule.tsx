@@ -257,11 +257,13 @@ function Pill({ os, state, level, insertedChars, message, onCancel, onConfirm }:
 }
 
 export function Capsule() {
+  const { t } = useTranslation();
   const os = detectOS();
   const [state, setState] = useState<CapsuleState>(isTauri ? 'idle' : 'recording');
   const [level, setLevel] = useState<number>(isTauri ? 0 : 0.6);
   const [insertedChars, setInsertedChars] = useState<number>(0);
   const [message, setMessage] = useState<string | undefined>();
+  const [translation, setTranslation] = useState<boolean>(false);
 
   useEffect(() => {
     if (!isTauri) return;
@@ -275,6 +277,7 @@ export function Capsule() {
         setLevel(p.level ?? 0);
         setMessage(p.message ?? undefined);
         if (p.insertedChars != null) setInsertedChars(p.insertedChars);
+        setTranslation(p.translation === true);
       });
       if (cancelled) handle();
       else unlisten = handle;
@@ -284,6 +287,7 @@ export function Capsule() {
       if (unlisten) unlisten();
     };
   }, []);
+
 
   const onCancel = () => {
     void invokeOrMock<void>('cancel_dictation', undefined, () => undefined);
@@ -302,6 +306,7 @@ export function Capsule() {
       style={{
         width: '100%',
         height: '100%',
+        position: 'relative',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -309,6 +314,50 @@ export function Capsule() {
         animation: os === 'win' ? 'none' : 'capsule-in .22s cubic-bezier(.2,.9,.3,1.1)',
       }}
     >
+      {/* "正在翻译" 徽章 — 嵌套两层：
+          外层只负责"绝对定位 + 水平居中（translateX(-50%)）"，不参与动画；
+          内层只负责"垂直位移 + 渐变透明度"——这样不会跟 translateX(-50%) 冲突，
+          也不存在 keyframe 与 inline transform 互相覆盖导致的视觉跳变。 */}
+      <div
+        style={{
+          position: 'absolute',
+          left: '50%',
+          // bottom = 50%（pill 中线）+ pill 半高 21px（capsuleLayout mac=42）+ 8px 间隔。
+          // 胶囊窗口高度 110（tauri.conf.json）刚好装下 badge + 间隔 + pill。
+          bottom: 'calc(50% + 21px + 8px)',
+          transform: 'translateX(-50%)',
+          pointerEvents: 'none',
+        }}
+      >
+        <div
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 5,
+            padding: '3px 10px',
+            borderRadius: 999,
+            fontSize: 10.5,
+            fontWeight: 600,
+            color: 'var(--ol-blue)',
+            background: 'rgba(255, 255, 255, 0.78)',
+            backdropFilter: 'blur(20px) saturate(180%)',
+            WebkitBackdropFilter: 'blur(20px) saturate(180%)',
+            border: '0.5px solid rgba(37, 99, 235, 0.25)',
+            boxShadow: '0 4px 12px -4px rgba(37, 99, 235, 0.25), 0 0 0 0.5px rgba(0,0,0,0.04)',
+            letterSpacing: '0.02em',
+            whiteSpace: 'nowrap',
+            // 隐藏：从 pill 中线偏下出发；显示：归位到 wrapper（pill 上方 25px）
+            opacity: translation ? 1 : 0,
+            transform: translation ? 'translateY(0) scale(1)' : 'translateY(40px) scale(.88)',
+            transformOrigin: 'center bottom',
+            transition: 'opacity .24s ease-out, transform .34s cubic-bezier(.2,.9,.3,1.1)',
+            willChange: 'opacity, transform',
+          }}
+        >
+          <span style={{ width: 5, height: 5, borderRadius: 999, background: 'var(--ol-blue)' }} />
+          {t('capsule.translating')}
+        </div>
+      </div>
       <Pill
         os={os}
         state={state}

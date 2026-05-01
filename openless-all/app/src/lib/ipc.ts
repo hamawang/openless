@@ -43,6 +43,9 @@ const mockSettings: UserPreferences = {
   showCapsule: true,
   activeAsrProvider: 'volcengine',
   activeLlmProvider: 'ark',
+  restoreClipboardAfterPaste: true,
+  workingLanguages: ['简体中文'],
+  translationTargetLanguage: '',
 };
 
 const mockHotkeyCapability: HotkeyCapability = {

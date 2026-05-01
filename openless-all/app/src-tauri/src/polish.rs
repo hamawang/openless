@@ -89,15 +89,42 @@ impl OpenAICompatibleLLMProvider {
         raw_text: &str,
         mode: PolishMode,
         hotwords: &[String],
+        working_languages: &[String],
+    ) -> Result<String, LLMError> {
+        let mut system_prompt = compose_system_prompt(mode, hotwords);
+        if let Some(premise) = working_languages_premise(working_languages) {
+            system_prompt = format!("{}\n\n{}", premise, system_prompt);
+        }
+        let user_prompt = prompts::user_prompt(raw_text);
+        self.chat_completion(&system_prompt, &user_prompt).await
+    }
+
+    /// 把转写翻译成 `target_language`（前端从内置语言列表里选出来的原生名）。
+    /// `working_languages` 作为前提注入头部。详见 issue #4。
+    pub async fn translate_to(
+        &self,
+        raw_text: &str,
+        target_language: &str,
+        working_languages: &[String],
+    ) -> Result<String, LLMError> {
+        let mut system_prompt = prompts::translate_system_prompt(target_language);
+        if let Some(premise) = working_languages_premise(working_languages) {
+            system_prompt = format!("{}\n\n{}", premise, system_prompt);
+        }
+        let user_prompt = prompts::user_prompt(raw_text);
+        self.chat_completion(&system_prompt, &user_prompt).await
+    }
+
+    async fn chat_completion(
+        &self,
+        system_prompt: &str,
+        user_prompt: &str,
     ) -> Result<String, LLMError> {
         if self.config.api_key.trim().is_empty() {
             return Err(LLMError::MissingCredentials);
         }
 
         let url = chat_completions_url(&self.config.base_url);
-        let system_prompt = compose_system_prompt(mode, hotwords);
-        let user_prompt = prompts::user_prompt(raw_text);
-
         let body = json!({
             "model": self.config.model,
             "stream": false,
@@ -175,6 +202,23 @@ fn chat_completions_url(base_url: &str) -> String {
     }
     let without_trailing = trimmed.strip_suffix('/').unwrap_or(trimmed);
     format!("{}/chat/completions", without_trailing)
+}
+
+/// 把 working_languages 拼成 system prompt 头部前提："# 上下文\n用户的工作语言：A、B、C"。
+/// 列表为空或全空白返回 None，调用方就不拼前缀。
+fn working_languages_premise(working_languages: &[String]) -> Option<String> {
+    let cleaned: Vec<&str> = working_languages
+        .iter()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if cleaned.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "# 上下文\n用户的工作语言：{}。处理任何文本时请把这一前提带进考虑（识别专名、判定语气、决定写法）。",
+        cleaned.join("、")
+    ))
 }
 
 fn compose_system_prompt(mode: PolishMode, hotwords: &[String]) -> String {
@@ -447,43 +491,71 @@ pub mod prompts {
                 出：我觉得这个方案大概可以，但性能上还要再看看。",
 
             PolishMode::Structured => "# 任务（清晰结构）\n\
-                把口述整理为脉络清晰、可直接用作 AI prompt 或工作文档的结构化文本。\n\
+                把口述整理为脉络清晰、可直接复制走的结构化文本：保留用户的口语引子（润色后作为首行过渡），\
+                主动按语义把扁平事项归类成 2\u{2013}4 个主题，用双层格式呈现，尾巴查询用自然收尾句。\n\
                 \n\
-                内容涉及 \u{2265}2 个主题、步骤或要求时，使用两层层级：\n\
-                - 第一层（主题）：行首用 \"1.\" \"2.\" \"3.\" \u{2026}，每个主题一行短标题；\n\
-                - 第二层（要点）：另起一行，行首用 \"a.\" \"b.\" \"c.\" \u{2026}，每条一句。\n\
-                \u{4E0D}使用带括号的中间层（如 \"1)\" \"2)\"）。\n\
+                双层格式（主清单标准写法）：\n\
+                - 第一层（主题）：行首用 \"1.\" \"2.\" \"3.\" \u{2026}，每个主题一行短标题（4\u{2013}8 字最佳）；\n\
+                - 第二层（子项）：另起一行，行首用 \"(a)\" \"(b)\" \"(c)\" \u{2026}，每条一句完整陈述。\n\
+                顶层\u{4E0D}使用半括号写法（如 \"1)\" \"2)\"）；不在子项内再嵌第三层。\n\
                 \n\
-                即使原文没有显式说\u{201C}第一/第二\u{201D}，只要可以归并到 \u{2265}2 个主题，也要自动归类。\n\
                 单一简短主题 \u{2192} 直接输出连贯段落，\u{4E0D}硬塞层级。\n\
-                任务密集、顺序混乱、带大量口头连接词的请求 \u{2192} 去掉\u{201C}呃/那个啥/然后还有/对了/顺便/别忘了/一起\u{201D}等噪声，\
-                合并重复意图，保留每个可执行事项，输出紧凑编号清单。\n\
+                事项 \u{2265}4 条 \u{2192} 必须按语义归类（典型如\u{201C}代码与功能 / 文档与配置 / 界面与交互 / 项目清理\u{201D}），\u{4E0D}要扁平堆成一长串编号。\n\
+                合并意图相近的条目（如\u{201C}上传代码 + 修复闪退\u{201D}合成一条 (a)），但\u{4E0D}丢失任何一件事。\n\
+                \n\
+                # 保留口语引子并润色成自然首行\n\
+                原话开头出现\u{201C}帮我给 X 提个请求 / 帮我列个清单 / 帮我整理一下 / 帮我跟团队说\u{201D}等口语引子时，\
+                保留这层语义并润色成自然书面语，作为输出首行 + 过渡。例：\n\
+                - \u{201C}呃那个啥帮我给 GitHub 提个请求啊\u{2026}\u{201D} \u{2192} \u{201C}帮忙给 GitHub 提个请求，主要包含以下内容：\u{201D}\n\
+                - \u{201C}帮我列个发布前要做的事\u{201D} \u{2192} \u{201C}发布前需要完成以下事项：\u{201D}\n\
+                清理\u{201C}呃 / 啊 / 那个啥 / 就是 / 然后还有 / 别忘了\u{201D}等口癖；\
+                \u{4E0D}替用户做执行决策（OpenLess 是输入法，\u{4E0D}主动\u{201C}打开 GitHub 帮你建 issue\u{201D}）。\n\
+                \n\
+                # 尾巴查询用自然收尾句\n\
+                原话结尾以\u{201C}对了 / 顺便 / 还有 / 检查一下 / 帮我看下\u{201D}起头、且性质是\u{201C}查询 / 列出 / 确认\u{201D}\
+                （与前面陈述事项的性质不同）的句子，作为收尾段单独成行，\
+                用\u{201C}最后再\u{2026}\u{201D}\u{201C}另外还需要\u{2026}\u{201D}等自然句过渡，\u{4E0D}用\u{201C}另外：\u{2026}\u{201D}标签写法。\
+                同一句连说两遍只算一次。\n\
+                若性质与前面事项一致（如再补一句\u{201C}还有把缓存改一改\u{201D}），则归入主清单的对应主题。\n\
+                \n\
                 开发协作语境中的 GitHub、README、issue/issues、接口、路由、缓存策略、依赖包、分支冲突等术语按原意保留，\
                 \u{4E0D}翻译成别的产品名或系统名，\u{4E0D}补充用户没说过的实现方案。\n\
                 \n\
                 # 示例 1\n\
                 原：发布前要做几件事，第一是回归测试，要测登录页和支付页，第二是文档要更新，要改 README 和 changelog\n\
                 出：\n\
-                1. 回归测试\n\
-                a. 登录页。\n\
-                b. 支付页。\n\
-                2. 文档更新\n\
-                a. 更新 README。\n\
-                b. 更新 changelog。\n\
+                发布前需要完成以下事项：\n\
                 \n\
-                # 示例 2\n\
+                1. 回归测试\n\
+                (a) 登录页。\n\
+                (b) 支付页。\n\
+                2. 文档更新\n\
+                (a) 更新 README。\n\
+                (b) 更新 changelog。\n\
+                \n\
+                # 示例 2（口语引子 + 主题归类 + 自然尾巴）\n\
                 原：呃那个啥帮我给GitHub提个请求啊就是首先我要上传代码还有修复一下之前那个页面闪退的bug然后还有新增一个暗色模式的功能好像还有接口请求超时的问题也得改一改对了顺便把README文档更新一下里面的安装步骤写错了还有依赖包版本要降级一下不然跑不起来另外还有侧边栏排版错乱、手机端适配有问题也一起处理下然后还有日志打印太多冗余信息要精简掉还有那个头像上传格式限制没做好还要加个校验哦对了还有合并一下分支冲突的代码别忘了还有把没用的注释全部删掉清理一下项目垃圾文件还有新增两个接口路由优化一下加载速度缓存策略也改一改 检查一下有哪些 issues。检查一下有哪些 issues。\n\
                 出：\n\
-                1. 上传代码并修复页面闪退的 bug\n\
-                2. 新增暗色模式功能\n\
-                3. 解决接口请求超时的问题\n\
-                4. 更新 README 文档（修正安装步骤中的错误）\n\
-                5. 降级依赖包版本，确保程序正常运行\n\
-                6. 修复侧边栏排版混乱，并完成手机端适配\n\
-                7. 精简日志打印，删除冗余信息\n\
-                8. 完善头像上传的格式限制，增加校验功能\n\
-                9. 合并冲突的分支\n\
-                10. 检查一下还有哪些 issues",
+                帮忙给 GitHub 提个请求，主要包含以下内容：\n\
+                \n\
+                1. 代码与功能优化\n\
+                (a) 上传最新代码，修复页面闪退的 bug\n\
+                (b) 新增暗色模式功能\n\
+                (c) 解决接口请求超时的问题\n\
+                (d) 优化路由以及加载的缓存策略\n\
+                (e) 清理冗余日志打印，精简信息\n\
+                2. 文档与配置调整\n\
+                (a) 更新 README 文档，修正安装步骤错误\n\
+                (b) 降级依赖包版本，确保程序正常运行\n\
+                3. 界面与交互修复\n\
+                (a) 修复侧边栏排版混乱及手机端适配问题\n\
+                (b) 完善头像上传功能，增加格式限制与校验\n\
+                4. 项目清理与合并\n\
+                (a) 合并分支冲突\n\
+                (b) 删除无用注释，清理项目垃圾文件\n\
+                (c) 处理新增的两个接口\n\
+                \n\
+                最后再检查一下还有哪些 issue 需要处理。",
 
             PolishMode::Formal => "# 任务（正式表达）\n\
                 输出适合工作沟通和邮件的正式表达。\n\
@@ -511,6 +583,26 @@ pub mod prompts {
              <raw_transcript>\n{}\n</raw_transcript>\n\n\
              只输出整理后的文本正文。",
             escaped
+        )
+    }
+
+    /// 翻译模式 system prompt — 用户在 Settings 里填的任意自然语言文本作为目标语言，
+    /// 直接拼进来。LLM 自己理解（"繁体中文"/"English"/"美式英文，正式邮件风格" 都行）。
+    pub fn translate_system_prompt(target_language: &str) -> String {
+        format!(
+            "# 任务（翻译输出）\n\
+             你刚收到一段语音转写。请把它翻译成 \u{300C}{}\u{300D}，\
+             保持原意、语气和必要的标点；不增不减、不解释、不加任何前缀或后缀。\n\
+             \n\
+             # 行为\n\
+             - 直接输出翻译结果。\n\
+             - 如果转写里夹杂多种语言，统一翻译到目标语言。\n\
+             - 转写本来就是目标语言时，做最小润色（补标点、去口癖）后输出。\n\
+             - 不要带 \u{300C}翻译：\u{300D}\u{300C}译文：\u{300D}之类前缀。\n\
+             \n\
+             # 输出\n\
+             只输出翻译后的文本正文。",
+            target_language
         )
     }
 }
@@ -562,9 +654,25 @@ mod tests {
     fn structured_prompt_includes_dense_github_request_example() {
         let prompt = prompts::system_prompt(PolishMode::Structured);
 
-        assert!(prompt.contains("任务密集、顺序混乱、带大量口头连接词的请求"));
+        // 任务段：必须教会模型保留口语引子、按主题归类、用 (a) 子项、自然尾巴
+        assert!(prompt.contains("# 保留口语引子并润色成自然首行"));
+        assert!(prompt.contains("# 尾巴查询用自然收尾句"));
+        assert!(prompt.contains("\"(a)\" \"(b)\" \"(c)\""));
+        assert!(prompt.contains("代码与功能 / 文档与配置 / 界面与交互 / 项目清理"));
         assert!(prompt.contains("GitHub、README、issue/issues"));
-        assert!(prompt.contains("上传代码并修复页面闪退的 bug"));
-        assert!(prompt.contains("检查一下还有哪些 issues"));
+
+        // 示例 1：双层格式必须用 (a) (b)，且带首行过渡。
+        assert!(prompt.contains("发布前需要完成以下事项："));
+        assert!(prompt.contains("(a) 登录页。"));
+
+        // 示例 2：必须呈现"引子润色 + 4 主题归类 + 自然尾巴"的目标输出。
+        assert!(prompt.contains("帮忙给 GitHub 提个请求，主要包含以下内容："));
+        assert!(prompt.contains("1. 代码与功能优化"));
+        assert!(prompt.contains("(a) 上传最新代码，修复页面闪退的 bug"));
+        assert!(prompt.contains("4. 项目清理与合并"));
+        assert!(prompt.contains("最后再检查一下还有哪些 issue 需要处理。"));
+
+        // 防回归：旧版"另外："标签写法不能再出现在示例输出里。
+        assert!(!prompt.contains("另外：检查一下当前还有哪些 issues"));
     }
 }

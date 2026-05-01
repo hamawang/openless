@@ -86,6 +86,22 @@ pub struct UserPreferences {
     pub show_capsule: bool,
     pub active_asr_provider: String, // "volcengine" | "apple-speech" | ...
     pub active_llm_provider: String, // "ark" | "openai" | ...
+    /// Windows/Linux 粘贴成功后是否恢复用户原剪贴板。默认 true 跟历史行为一致；
+    /// 关掉就把听写文本留在剪贴板，让 simulate_paste 实际没生效时用户能 Ctrl+V 找回。
+    /// macOS 走 AX 直写，不受这个开关影响。详见 issue #111。
+    pub restore_clipboard_after_paste: bool,
+    /// 用户的工作语言（多选，原生名）。会作为前提注入 LLM polish/translate 的 system prompt 头部，
+    /// 让模型知道该用户在哪些语言间工作。详见 issue #4。
+    #[serde(default = "default_working_languages")]
+    pub working_languages: Vec<String>,
+    /// 翻译输出的目标语言（单选，原生名）。空串 = 不启用翻译模式（Shift 组合键无效）。
+    /// 由前端从内置语言列表中选择，后端只接收最终的原生名字符串拼进 prompt。详见 issue #4。
+    #[serde(default)]
+    pub translation_target_language: String,
+}
+
+fn default_working_languages() -> Vec<String> {
+    vec!["简体中文".into()]
 }
 
 impl Default for UserPreferences {
@@ -103,6 +119,9 @@ impl Default for UserPreferences {
             show_capsule: true,
             active_asr_provider: "volcengine".into(),
             active_llm_provider: "ark".into(),
+            restore_clipboard_after_paste: true,
+            working_languages: default_working_languages(),
+            translation_target_language: String::new(),
         }
     }
 }
@@ -322,6 +341,9 @@ pub struct CapsulePayload {
     pub elapsed_ms: u64,
     pub message: Option<String>,
     pub inserted_chars: Option<u32>,
+    /// 当前 session 是否处于翻译模式（用户按过 Shift）。前端用它在胶囊顶部
+    /// 渲染"正在翻译"标签，让用户立刻知道这次输出会走翻译管线。详见 issue #4。
+    pub translation: bool,
 }
 
 /// Snapshot of credentials read from vault — only what the UI needs to know
