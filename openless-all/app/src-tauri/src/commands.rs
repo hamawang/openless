@@ -85,9 +85,10 @@ pub fn read_credential(account: String) -> Result<Option<String>, String> {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProviderCheckResult {
     ok: bool,
-    message: String,
+    model_count: usize,
 }
 
 #[derive(Serialize)]
@@ -102,11 +103,7 @@ pub async fn validate_provider_credentials(kind: String) -> Result<ProviderCheck
         .await
         .map(|models| ProviderCheckResult {
             ok: true,
-            message: if models.is_empty() {
-                "鉴权成功，但账号未返回可用模型".to_string()
-            } else {
-                format!("鉴权成功，可用模型 {} 个", models.len())
-            },
+            model_count: models.len(),
         })
 }
 

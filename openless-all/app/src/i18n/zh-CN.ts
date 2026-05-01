@@ -253,7 +253,7 @@ export const zhCN = {
       modelsEmpty: '鉴权成功，但没有返回可用模型。',
       modelsLoaded: '已拉取 {{count}} 个模型。',
       selectModel: '选择一个模型写入上方字段',
-      validateSuccess: '鉴权成功。',
+      validateSuccess: '鉴权成功，可用模型 {{count}} 个。',
       providerHttpStatus: '供应商接口返回 {{status}}，请检查 API Key 权限或 Endpoint。',
       apiKeyMissing: 'API Key 为空。',
       endpointMissing: 'Endpoint 为空。',

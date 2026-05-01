@@ -255,7 +255,7 @@ export const en: typeof zhCN = {
       modelsEmpty: 'Credentials are valid, but no models were returned.',
       modelsLoaded: 'Fetched {{count}} models.',
       selectModel: 'Select a model to fill the field above',
-      validateSuccess: 'Credentials are valid.',
+      validateSuccess: 'Credentials are valid. {{count}} models available.',
       providerHttpStatus: 'Provider returned HTTP {{status}}. Check the API key permissions or endpoint.',
       apiKeyMissing: 'API Key is empty.',
       endpointMissing: 'Endpoint is empty.',

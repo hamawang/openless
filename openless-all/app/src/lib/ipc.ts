@@ -65,7 +65,7 @@ const mockCredentialsStatus: CredentialsStatus = {
 
 export interface ProviderCheckResult {
   ok: boolean;
-  message: string;
+  modelCount: number;
 }
 
 export interface ProviderModelsResult {
@@ -141,7 +141,7 @@ export function readCredential(account: string): Promise<string | null> {
 }
 
 export function validateProviderCredentials(kind: 'llm' | 'asr'): Promise<ProviderCheckResult> {
-  return invokeOrMock('validate_provider_credentials', { kind }, () => ({ ok: true, message: 'Mock credentials are valid.' }));
+  return invokeOrMock('validate_provider_credentials', { kind }, () => ({ ok: true, modelCount: 2 }));
 }
 
 export function listProviderModels(kind: 'llm' | 'asr'): Promise<ProviderModelsResult> {
