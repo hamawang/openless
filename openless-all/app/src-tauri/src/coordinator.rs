@@ -64,6 +64,9 @@ struct SessionState {
     /// recorder error monitor 持有 captured id，处理时若与当前不等说明
     /// 是上一 session 的迟到错误，必须 drop，不要 abort 当前 active session。
     session_id: u64,
+    /// 用户开始 dictation 时所处的前台 app 标签（"Mail (com.apple.mail)" / Windows 窗口标题）。
+    /// 用作 LLM polish/translate 的上下文前提，让模型按 app 调风格。详见 issue #116。
+    front_app: Option<String>,
 }
 
 impl Default for SessionState {
@@ -75,6 +78,7 @@ impl Default for SessionState {
             cancelled: false,
             focus_target: None,
             session_id: 0,
+            front_app: None,
         }
     }
 }
@@ -209,9 +213,18 @@ impl Coordinator {
     pub async fn repolish(&self, raw_text: String, mode: PolishMode) -> Result<String, String> {
         let hotwords = enabled_phrases(&self.inner);
         let working_languages = self.inner.prefs.get().working_languages;
-        polish_text(&raw_text, mode, &hotwords, &working_languages)
-            .await
-            .map_err(|e| e.to_string())
+        // repolish 是历史记录里手动重新润色，不再绑定原 session 的前台 app；
+        // 当下用户调起的 app 才是相关上下文（如果可拿）。
+        let front_app = capture_frontmost_app();
+        polish_text(
+            &raw_text,
+            mode,
+            &hotwords,
+            &working_languages,
+            front_app.as_deref(),
+        )
+        .await
+        .map_err(|e| e.to_string())
     }
 }
 
@@ -464,6 +477,10 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
         // 自增 session_id；spawn 出去的 recorder error monitor 会捕获这个值，
         // 如果迟到错误到达时 id 已不匹配就 drop，不会误中止后续 session。
         state.session_id = state.session_id.wrapping_add(1);
+        state.front_app = capture_frontmost_app();
+        if let Some(label) = state.front_app.as_deref() {
+            log::info!("[coord] front_app captured: {label}");
+        }
     }
     // 翻译模式标志重置；hotkey 监听器在 Shift down 时再 set true。
     inner.translation_modifier_seen.store(false, Ordering::SeqCst);
@@ -874,18 +891,33 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     let mode = prefs.default_mode;
     let hotword_strs = enabled_phrases(inner);
     let working_languages = prefs.working_languages.clone();
+    let front_app = inner.state.lock().front_app.clone();
     let translation_target = prefs.translation_target_language.trim().to_string();
     let translation_active = inner.translation_modifier_seen.load(Ordering::SeqCst)
         && !translation_target.is_empty();
     let (polished, polish_error) = if translation_active {
         log::info!(
-            "[coord] translation mode → target=\u{300C}{}\u{300D} working={:?}",
+            "[coord] translation mode → target=\u{300C}{}\u{300D} working={:?} front_app={:?}",
             translation_target,
-            working_languages
+            working_languages,
+            front_app
         );
-        translate_or_passthrough(&raw, &translation_target, &working_languages).await
+        translate_or_passthrough(
+            &raw,
+            &translation_target,
+            &working_languages,
+            front_app.as_deref(),
+        )
+        .await
     } else {
-        polish_or_passthrough(&raw, mode, &hotword_strs, &working_languages).await
+        polish_or_passthrough(
+            &raw,
+            mode,
+            &hotword_strs,
+            &working_languages,
+            front_app.as_deref(),
+        )
+        .await
     };
 
     // 原子化最后一次 cancel 检查 + 转 Inserting：
@@ -1098,11 +1130,12 @@ async fn polish_or_passthrough(
     mode: PolishMode,
     hotwords: &[String],
     working_languages: &[String],
+    front_app: Option<&str>,
 ) -> (String, Option<String>) {
     if mode == PolishMode::Raw {
         return (raw.text.clone(), None);
     }
-    match polish_text(&raw.text, mode, hotwords, working_languages).await {
+    match polish_text(&raw.text, mode, hotwords, working_languages, front_app).await {
         Ok(s) => (s, None),
         Err(e) => {
             let reason = e.to_string();
@@ -1117,47 +1150,7 @@ async fn polish_text(
     mode: PolishMode,
     hotwords: &[String],
     working_languages: &[String],
-) -> anyhow::Result<String> {
-    let api_key = CredentialsVault::get(CredentialAccount::ArkApiKey)?.unwrap_or_default();
-    if api_key.is_empty() {
-        anyhow::bail!("ark api key missing");
-    }
-    let model = CredentialsVault::get(CredentialAccount::ArkModelId)?
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "deepseek-v3-2".to_string());
-    let endpoint = CredentialsVault::get(CredentialAccount::ArkEndpoint)?
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "https://ark.cn-beijing.volces.com/api/v3/chat/completions".to_string());
-    let base_url = endpoint
-        .trim_end_matches("/chat/completions")
-        .trim_end_matches('/')
-        .to_string();
-
-    let config = OpenAICompatibleConfig::new("ark", "Doubao Ark", base_url, api_key, model);
-    let provider = OpenAICompatibleLLMProvider::new(config);
-    Ok(provider.polish(raw, mode, hotwords, working_languages).await?)
-}
-
-/// 翻译路径——和 polish 一样失败时返回原文 + 失败原因，避免"不丢字"约定被违反（CLAUDE.md）。
-async fn translate_or_passthrough(
-    raw: &RawTranscript,
-    target_language: &str,
-    working_languages: &[String],
-) -> (String, Option<String>) {
-    match translate_text(&raw.text, target_language, working_languages).await {
-        Ok(s) => (s, None),
-        Err(e) => {
-            let reason = e.to_string();
-            log::error!("[coord] translate failed, falling back to raw: {reason}");
-            (raw.text.clone(), Some(reason))
-        }
-    }
-}
-
-async fn translate_text(
-    raw: &str,
-    target_language: &str,
-    working_languages: &[String],
+    front_app: Option<&str>,
 ) -> anyhow::Result<String> {
     let api_key = CredentialsVault::get(CredentialAccount::ArkApiKey)?.unwrap_or_default();
     if api_key.is_empty() {
@@ -1177,7 +1170,52 @@ async fn translate_text(
     let config = OpenAICompatibleConfig::new("ark", "Doubao Ark", base_url, api_key, model);
     let provider = OpenAICompatibleLLMProvider::new(config);
     Ok(provider
-        .translate_to(raw, target_language, working_languages)
+        .polish(raw, mode, hotwords, working_languages, front_app)
+        .await?)
+}
+
+/// 翻译路径——和 polish 一样失败时返回原文 + 失败原因，避免"不丢字"约定被违反（CLAUDE.md）。
+async fn translate_or_passthrough(
+    raw: &RawTranscript,
+    target_language: &str,
+    working_languages: &[String],
+    front_app: Option<&str>,
+) -> (String, Option<String>) {
+    match translate_text(&raw.text, target_language, working_languages, front_app).await {
+        Ok(s) => (s, None),
+        Err(e) => {
+            let reason = e.to_string();
+            log::error!("[coord] translate failed, falling back to raw: {reason}");
+            (raw.text.clone(), Some(reason))
+        }
+    }
+}
+
+async fn translate_text(
+    raw: &str,
+    target_language: &str,
+    working_languages: &[String],
+    front_app: Option<&str>,
+) -> anyhow::Result<String> {
+    let api_key = CredentialsVault::get(CredentialAccount::ArkApiKey)?.unwrap_or_default();
+    if api_key.is_empty() {
+        anyhow::bail!("ark api key missing");
+    }
+    let model = CredentialsVault::get(CredentialAccount::ArkModelId)?
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "deepseek-v3-2".to_string());
+    let endpoint = CredentialsVault::get(CredentialAccount::ArkEndpoint)?
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "https://ark.cn-beijing.volces.com/api/v3/chat/completions".to_string());
+    let base_url = endpoint
+        .trim_end_matches("/chat/completions")
+        .trim_end_matches('/')
+        .to_string();
+
+    let config = OpenAICompatibleConfig::new("ark", "Doubao Ark", base_url, api_key, model);
+    let provider = OpenAICompatibleLLMProvider::new(config);
+    Ok(provider
+        .translate_to(raw, target_language, working_languages, front_app)
         .await?)
 }
 
@@ -1433,6 +1471,92 @@ fn capture_focus_target() -> Option<usize> {
 
 #[cfg(not(target_os = "windows"))]
 fn capture_focus_target() -> Option<usize> {
+    None
+}
+
+/// 捕获用户开始 dictation 时的前台 app 标签（"localizedName (bundle.id)"），用作 LLM
+/// polish/translate 的上下文前提，让模型按 app 调风格。详见 issue #116。
+///
+/// macOS 走 NSWorkspace.frontmostApplication（公开 API，无需额外权限）；
+/// Windows 复用前台 HWND 拿窗口标题；Linux/其他平台返回 None。
+#[cfg(target_os = "macos")]
+fn capture_frontmost_app() -> Option<String> {
+    use objc2::msg_send;
+    use objc2::runtime::{AnyClass, AnyObject};
+
+    unsafe {
+        let cls = AnyClass::get("NSWorkspace")?;
+        let workspace: *mut AnyObject = msg_send![cls, sharedWorkspace];
+        if workspace.is_null() {
+            return None;
+        }
+        let app: *mut AnyObject = msg_send![workspace, frontmostApplication];
+        if app.is_null() {
+            return None;
+        }
+        let name_obj: *mut AnyObject = msg_send![app, localizedName];
+        let bundle_obj: *mut AnyObject = msg_send![app, bundleIdentifier];
+        let name = nsstring_to_string(name_obj);
+        let bundle = nsstring_to_string(bundle_obj);
+        match (name, bundle) {
+            (Some(n), Some(b)) => Some(format!("{n} ({b})")),
+            (Some(n), None) => Some(n),
+            (None, Some(b)) => Some(b),
+            (None, None) => None,
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+unsafe fn nsstring_to_string(ns_string: *mut objc2::runtime::AnyObject) -> Option<String> {
+    use objc2::msg_send;
+    if ns_string.is_null() {
+        return None;
+    }
+    let utf8: *const std::os::raw::c_char = unsafe { msg_send![ns_string, UTF8String] };
+    if utf8.is_null() {
+        return None;
+    }
+    let cstr = unsafe { std::ffi::CStr::from_ptr(utf8) };
+    let s = cstr.to_string_lossy().into_owned();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn capture_frontmost_app() -> Option<String> {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW,
+    };
+
+    unsafe {
+        let hwnd = GetForegroundWindow();
+        if hwnd.0.is_null() {
+            return None;
+        }
+        let len = GetWindowTextLengthW(hwnd);
+        if len <= 0 {
+            return None;
+        }
+        let mut buf = vec![0u16; (len + 1) as usize];
+        let copied = GetWindowTextW(hwnd, &mut buf);
+        if copied <= 0 {
+            return None;
+        }
+        let title = String::from_utf16_lossy(&buf[..copied as usize]);
+        if title.is_empty() {
+            None
+        } else {
+            Some(title)
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn capture_frontmost_app() -> Option<String> {
     None
 }
 

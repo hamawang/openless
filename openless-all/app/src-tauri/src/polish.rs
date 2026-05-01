@@ -90,9 +90,10 @@ impl OpenAICompatibleLLMProvider {
         mode: PolishMode,
         hotwords: &[String],
         working_languages: &[String],
+        front_app: Option<&str>,
     ) -> Result<String, LLMError> {
         let mut system_prompt = compose_system_prompt(mode, hotwords);
-        if let Some(premise) = working_languages_premise(working_languages) {
+        if let Some(premise) = context_premise(working_languages, front_app) {
             system_prompt = format!("{}\n\n{}", premise, system_prompt);
         }
         let user_prompt = prompts::user_prompt(raw_text);
@@ -100,15 +101,16 @@ impl OpenAICompatibleLLMProvider {
     }
 
     /// 把转写翻译成 `target_language`（前端从内置语言列表里选出来的原生名）。
-    /// `working_languages` 作为前提注入头部。详见 issue #4。
+    /// `working_languages` 与 `front_app` 作为前提注入头部。详见 issue #4 与 #116。
     pub async fn translate_to(
         &self,
         raw_text: &str,
         target_language: &str,
         working_languages: &[String],
+        front_app: Option<&str>,
     ) -> Result<String, LLMError> {
         let mut system_prompt = prompts::translate_system_prompt(target_language);
-        if let Some(premise) = working_languages_premise(working_languages) {
+        if let Some(premise) = context_premise(working_languages, front_app) {
             system_prompt = format!("{}\n\n{}", premise, system_prompt);
         }
         let user_prompt = prompts::user_prompt(raw_text);
@@ -204,21 +206,39 @@ fn chat_completions_url(base_url: &str) -> String {
     format!("{}/chat/completions", without_trailing)
 }
 
-/// 把 working_languages 拼成 system prompt 头部前提："# 上下文\n用户的工作语言：A、B、C"。
-/// 列表为空或全空白返回 None，调用方就不拼前缀。
-fn working_languages_premise(working_languages: &[String]) -> Option<String> {
-    let cleaned: Vec<&str> = working_languages
+/// 把 working_languages + front_app 拼成 system prompt 头部前提：
+///     # 上下文
+///     用户的工作语言：…
+///     当前前台应用：…（请按这个 app 的常见沟通风格调整语气）
+///
+/// 两个字段都空时返回 None，调用方就不拼前缀。详见 issue #4 / #116。
+fn context_premise(working_languages: &[String], front_app: Option<&str>) -> Option<String> {
+    let langs: Vec<&str> = working_languages
         .iter()
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .collect();
-    if cleaned.is_empty() {
+    let app = front_app
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+
+    if langs.is_empty() && app.is_none() {
         return None;
     }
-    Some(format!(
-        "# 上下文\n用户的工作语言：{}。处理任何文本时请把这一前提带进考虑（识别专名、判定语气、决定写法）。",
-        cleaned.join("、")
-    ))
+
+    let mut lines = vec!["# 上下文".to_string()];
+    if !langs.is_empty() {
+        lines.push(format!(
+            "用户的工作语言：{}。处理任何文本时请把这一前提带进考虑（识别专名、判定语气、决定写法）。",
+            langs.join("、")
+        ));
+    }
+    if let Some(name) = app {
+        lines.push(format!(
+            "当前前台应用：{name}。请按这个应用的常见沟通风格调整语气——例如邮件类 app 偏正式、聊天类 app 偏口语、IDE / 文档类 app 偏技术或结构化。\u{4E0D}主动加入与用户原意无关的客套话。"
+        ));
+    }
+    Some(lines.join("\n"))
 }
 
 fn compose_system_prompt(mode: PolishMode, hotwords: &[String]) -> String {
@@ -586,23 +606,42 @@ pub mod prompts {
         )
     }
 
-    /// 翻译模式 system prompt — 用户在 Settings 里填的任意自然语言文本作为目标语言，
-    /// 直接拼进来。LLM 自己理解（"繁体中文"/"English"/"美式英文，正式邮件风格" 都行）。
+    /// 翻译模式 system prompt — 用户在「翻译」页选定的目标语言（内置 15 种自然语言原生名）。
+    /// LLM 自己理解（"繁体中文"/"English"/"美式英文"/"日本語" 都行）。
+    /// 此 prompt 之上还有 working_languages_premise 拼出的"# 上下文"前提。
     pub fn translate_system_prompt(target_language: &str) -> String {
         format!(
             "# 任务（翻译输出）\n\
-             你刚收到一段语音转写。请把它翻译成 \u{300C}{}\u{300D}，\
-             保持原意、语气和必要的标点；不增不减、不解释、不加任何前缀或后缀。\n\
+             把下面收到的一段语音转写翻译成 \u{300C}{lang}\u{300D}。\n\
+             这是用户对着语音输入工具说的话——他正在某个 app 的输入框前，\
+             转译结果会直接被插入到光标位置。\n\
              \n\
-             # 行为\n\
-             - 直接输出翻译结果。\n\
-             - 如果转写里夹杂多种语言，统一翻译到目标语言。\n\
-             - 转写本来就是目标语言时，做最小润色（补标点、去口癖）后输出。\n\
-             - 不要带 \u{300C}翻译：\u{300D}\u{300C}译文：\u{300D}之类前缀。\n\
+             # 翻译规则\n\
+             ## 必须保留原文（不要翻译）\n\
+             - 人名、地名、品牌名（OpenAI、Tauri、字节跳动、张三 等）。\n\
+             - 代码标识符、技术术语（useState、async/await、HTTP、Rust crate 名 等）。\n\
+             - URL、邮箱、文件路径、命令行片段。\n\
+             - 说话人**故意**用源语言夹进来的英文/技术词，按原样保留，\u{4E0D}替换为目标语言对应词。\n\
+             \n\
+             ## 主体翻译\n\
+             - 句子骨架、动作、形容、连接词翻译成 \u{300C}{lang}\u{300D}。\n\
+             - **保持原说话语气**：口语就维持口语化（\u{4E0D}强行正式化），书面就维持书面。\n\
+             - **保持原意**：不增不减、不解释、不扩写、不替用户做决策。\
+             如\"我想给老板发个邮件说今天我们要推迟发布\"应翻译成\"I want to email my boss saying we need to delay the release today\"，\
+             \u{800C}\u{4E0D}\u{662F}主动生成邮件正文。\n\
+             - 数字、日期、时间用目标语言地区常见写法（\"5月1日下午两点\" → \"May 1, 2 PM\"；\
+             \"明天上午十点\" → \"tomorrow at 10 AM\"；\"100块\" → \"100 yuan\"）。\n\
+             - 转写已经是目标语言时：去明显口癖（嗯、那个、就是、um、you know）+ 补必要标点，\u{4E0D}做风格改写。\n\
+             \n\
+             ## 边界 case\n\
+             - 转写非常短（一两个字）也照译，\u{4E0D}因为短就硬补内容。\n\
+             - 转写是命令式（\"加个空格 / 删除最后一行\"）时，照原意翻译，\u{4E0D}改成陈述句。\n\
+             - 转写全是 fillers（\"嗯嗯啊那个\"）时，输出空字符串。\n\
              \n\
              # 输出\n\
-             只输出翻译后的文本正文。",
-            target_language
+             只输出翻译后的正文，\u{4E0D}带 \u{300C}翻译：\u{300D}\u{300C}译文：\u{300D}\u{300C}Translation:\u{300D}之类前缀，\
+             \u{4E0D}加引号、\u{4E0D}加 markdown 围栏。",
+            lang = target_language
         )
     }
 }
