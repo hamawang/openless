@@ -6,7 +6,7 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use futures_util::{SinkExt, StreamExt};
 use parking_lot::Mutex as ParkingMutex;
@@ -29,6 +29,7 @@ const TARGET_AUDIO_CHUNK_BYTES: usize = 6_400;
 /// 16 kHz · 16-bit · mono = 32 000 bytes/sec → 32 bytes/ms.
 const BYTES_PER_MS: f64 = 32.0;
 const HOTWORD_CAP: usize = 80;
+const FINAL_RESULT_TIMEOUT: Duration = Duration::from_secs(12);
 
 #[derive(Clone, Debug)]
 pub struct VolcengineCredentials {
@@ -53,6 +54,8 @@ pub enum VolcengineASRError {
     AuthenticationFailed,
     #[error("no final result")]
     NoFinalResult,
+    #[error("final result timed out")]
+    FinalResultTimeout,
     #[error("decode failed: {0}")]
     DecodeFailed(String),
 }
@@ -334,13 +337,29 @@ impl VolcengineStreamingASR {
     }
 
     pub async fn await_final_result(&self) -> Result<RawTranscript, VolcengineASRError> {
+        self.await_final_result_with_timeout(FINAL_RESULT_TIMEOUT)
+            .await
+    }
+
+    pub async fn await_final_result_with_timeout(
+        &self,
+        timeout: Duration,
+    ) -> Result<RawTranscript, VolcengineASRError> {
         let rx = self.final_rx.lock().take();
         let Some(rx) = rx else {
             return Err(VolcengineASRError::NoFinalResult);
         };
-        match rx.await {
-            Ok(result) => result,
-            Err(_) => Err(VolcengineASRError::NoFinalResult),
+        match tokio::time::timeout(timeout, rx).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => Err(VolcengineASRError::NoFinalResult),
+            Err(_) => {
+                log::error!(
+                    "[asr] final result timed out after {} ms",
+                    timeout.as_millis()
+                );
+                self.cancel();
+                Err(VolcengineASRError::FinalResultTimeout)
+            }
         }
     }
 
@@ -702,5 +721,29 @@ mod tests {
             VolcengineCredentials::default_resource_id(),
             "volc.bigasr.sauc.duration"
         );
+    }
+
+    #[tokio::test]
+    async fn await_final_result_returns_error_when_final_frame_never_arrives() {
+        let asr = VolcengineStreamingASR::new(
+            VolcengineCredentials {
+                app_id: "app".into(),
+                access_token: "token".into(),
+                resource_id: VolcengineCredentials::default_resource_id().into(),
+            },
+            Vec::new(),
+        );
+        let (tx, rx) = oneshot::channel();
+        asr.state.lock().final_tx = Some(tx);
+        *asr.final_rx.lock() = Some(rx);
+
+        let result = asr
+            .await_final_result_with_timeout(std::time::Duration::from_millis(10))
+            .await;
+
+        assert!(matches!(
+            result,
+            Err(VolcengineASRError::FinalResultTimeout)
+        ));
     }
 }
