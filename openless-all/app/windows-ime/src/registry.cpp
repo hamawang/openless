@@ -103,6 +103,13 @@ HRESULT CreateProfiles(ITfInputProcessorProfiles** profiles) {
                           reinterpret_cast<void**>(profiles));
 }
 
+HRESULT CreateProfileManager(ITfInputProcessorProfileMgr** manager) {
+  return CoCreateInstance(CLSID_TF_InputProcessorProfiles, nullptr,
+                          CLSCTX_INPROC_SERVER,
+                          IID_ITfInputProcessorProfileMgr,
+                          reinterpret_cast<void**>(manager));
+}
+
 HRESULT CreateCategoryManager(ITfCategoryMgr** category_mgr) {
   return CoCreateInstance(CLSID_TF_CategoryMgr, nullptr, CLSCTX_INPROC_SERVER,
                           IID_ITfCategoryMgr,
@@ -138,6 +145,24 @@ HRESULT RegisterLanguageProfile() {
   }
 
   profiles->Release();
+
+  if (FAILED(hr)) {
+    return hr;
+  }
+
+  ITfInputProcessorProfileMgr* manager = nullptr;
+  hr = CreateProfileManager(&manager);
+  if (FAILED(hr)) {
+    return hr;
+  }
+
+  manager->UnregisterProfile(CLSID_OpenLessTextService, kOpenLessLangId,
+                             GUID_OpenLessProfile, 0);
+  hr = manager->RegisterProfile(
+      CLSID_OpenLessTextService, kOpenLessLangId, GUID_OpenLessProfile,
+      kOpenLessImeName, static_cast<ULONG>(ARRAYSIZE(kOpenLessImeName) - 1),
+      nullptr, 0, 0, nullptr, 0, TRUE, 0);
+  manager->Release();
   return hr;
 }
 
@@ -176,6 +201,14 @@ HRESULT UnregisterLanguageProfile() {
   hr = CreateProfiles(&profiles);
   if (FAILED(hr)) {
     return hr;
+  }
+
+  ITfInputProcessorProfileMgr* manager = nullptr;
+  hr = CreateProfileManager(&manager);
+  if (SUCCEEDED(hr)) {
+    manager->UnregisterProfile(CLSID_OpenLessTextService, kOpenLessLangId,
+                               GUID_OpenLessProfile, 0);
+    manager->Release();
   }
 
   hr = profiles->Unregister(CLSID_OpenLessTextService);

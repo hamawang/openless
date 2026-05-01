@@ -1,7 +1,11 @@
 use serde::{Deserialize, Serialize};
 
 pub const OPENLESS_IME_PROTOCOL_VERSION: u32 = 1;
-pub const OPENLESS_IME_PIPE_NAME: &str = r"\\.\pipe\OpenLessImeSubmit";
+pub const OPENLESS_IME_PIPE_NAME_PREFIX: &str = r"\\.\pipe\OpenLessImeSubmit";
+
+pub fn ime_pipe_name_for_target(process_id: u32, thread_id: u32) -> String {
+    format!("{OPENLESS_IME_PIPE_NAME_PREFIX}-{process_id}-{thread_id}")
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(
@@ -91,6 +95,14 @@ mod tests {
 
         let decoded = decode_message(json.trim_end()).expect("decode");
         assert_eq!(decoded, message);
+    }
+
+    #[test]
+    fn ime_pipe_name_includes_target_process_and_thread() {
+        assert_eq!(
+            ime_pipe_name_for_target(1234, 5678),
+            r"\\.\pipe\OpenLessImeSubmit-1234-5678"
+        );
     }
 
     #[test]

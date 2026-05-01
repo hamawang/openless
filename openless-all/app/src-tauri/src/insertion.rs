@@ -44,6 +44,20 @@ impl TextInserter {
         self.insert(text, restore_clipboard_after_paste)
     }
 
+    #[cfg(target_os = "windows")]
+    pub fn insert_via_unicode_keystrokes(&self, text: &str) -> InsertStatus {
+        if text.is_empty() {
+            return InsertStatus::CopiedFallback;
+        }
+        match windows_unicode::send_text(text) {
+            Ok(()) => InsertStatus::Inserted,
+            Err(err) => {
+                log::warn!("[insertion] Unicode SendInput failed: {err}");
+                InsertStatus::CopiedFallback
+            }
+        }
+    }
+
     /// Insert `text` at the current cursor position.
     #[cfg(target_os = "macos")]
     pub fn insert(&self, text: &str, _restore_clipboard_after_paste: bool) -> InsertStatus {
@@ -216,6 +230,48 @@ fn insertion_success_status() -> InsertStatus {
 fn insertion_success_status() -> InsertStatus {
     // Windows/Linux 的 Ctrl+V 只能证明粘贴快捷键已发送，不能证明目标控件已接收。
     InsertStatus::PasteSent
+}
+
+#[cfg(target_os = "windows")]
+mod windows_unicode {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
+        KEYEVENTF_UNICODE, VIRTUAL_KEY,
+    };
+
+    pub fn send_text(text: &str) -> Result<(), String> {
+        for unit in text.encode_utf16() {
+            send_utf16_unit(unit, false)?;
+            send_utf16_unit(unit, true)?;
+        }
+        Ok(())
+    }
+
+    fn send_utf16_unit(unit: u16, key_up: bool) -> Result<(), String> {
+        let flags = if key_up {
+            KEYEVENTF_UNICODE | KEYEVENTF_KEYUP
+        } else {
+            KEYEVENTF_UNICODE
+        };
+        let input = INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: VIRTUAL_KEY(0),
+                    wScan: unit,
+                    dwFlags: KEYBD_EVENT_FLAGS(flags.0),
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        };
+        let sent = unsafe { SendInput(&[input], std::mem::size_of::<INPUT>() as i32) };
+        if sent == 1 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error().to_string())
+        }
+    }
 }
 
 // ─────────────────────────── macOS native CGEvent paste ───────────────────────────

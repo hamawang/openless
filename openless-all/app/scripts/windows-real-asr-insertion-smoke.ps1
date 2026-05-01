@@ -1,10 +1,12 @@
 param(
   [string]$ExePath = "",
-  [ValidateSet("notepad", "browser")]
+  [ValidateSet("notepad", "browser", "win32edit")]
   [string]$Target = "notepad",
   [string]$Phrase = "OpenLess Windows real regression",
   [int]$TimeoutSeconds = 120,
   [int]$VirtualKey = 0xA3,
+  [switch]$AllowClipboardFallback,
+  [switch]$RequireJsonCredentials,
   [switch]$DebugHotkeyEvents
 )
 
@@ -263,6 +265,48 @@ function New-BrowserInputFixture {
   return $path
 }
 
+function New-Win32EditHost {
+  $sourcePath = Join-Path $env:TEMP "OpenLessWin32EditHost.cs"
+  $exePath = Join-Path $env:TEMP "OpenLessWin32EditHost.exe"
+  $source = @"
+using System;
+using System.Windows.Forms;
+
+public static class OpenLessWin32EditHost {
+  [STAThread]
+  public static void Main() {
+    Application.EnableVisualStyles();
+    Application.SetCompatibleTextRenderingDefault(false);
+    var form = new Form();
+    form.Text = "OpenLess Win32 Edit Host";
+    form.Width = 820;
+    form.Height = 320;
+    var box = new TextBox();
+    box.Multiline = true;
+    box.AcceptsReturn = true;
+    box.AcceptsTab = true;
+    box.Dock = DockStyle.Fill;
+    box.Font = new System.Drawing.Font("Consolas", 18);
+    form.Controls.Add(box);
+    form.Shown += (sender, args) => box.Focus();
+    Application.Run(form);
+  }
+}
+"@
+  $needsBuild = $true
+  if ((Test-Path $exePath) -and (Test-Path $sourcePath)) {
+    $needsBuild = (Get-Item $sourcePath).LastWriteTimeUtc -gt (Get-Item $exePath).LastWriteTimeUtc
+  }
+  if ($needsBuild) {
+    [System.IO.File]::WriteAllText($sourcePath, $source, [System.Text.UTF8Encoding]::new($false))
+    Add-Type -TypeDefinition $source `
+      -ReferencedAssemblies @("System.Windows.Forms", "System.Drawing") `
+      -OutputAssembly $exePath `
+      -OutputType WindowsApplication
+  }
+  return $exePath
+}
+
 function Stop-BrowserProfileProcesses($ProfilePath) {
   if ([string]::IsNullOrWhiteSpace($ProfilePath)) {
     return
@@ -282,6 +326,15 @@ function Start-InputTarget($TargetName) {
     $process = Wait-ProcessWindow "notepad" $startedAt 15
     if (-not (Focus-Window $process)) {
       throw "Notepad window could not be focused."
+    }
+    return [pscustomobject]@{ Process = $process; FixturePath = $null; ProfilePath = $null }
+  }
+  if ($TargetName -eq "win32edit") {
+    $hostExe = New-Win32EditHost
+    Start-Process -FilePath $hostExe | Out-Null
+    $process = Wait-ProcessWindow "OpenLessWin32EditHost" $startedAt 15
+    if (-not (Focus-Window $process)) {
+      throw "Win32 edit host window could not be focused."
     }
     return [pscustomobject]@{ Process = $process; FixturePath = $null; ProfilePath = $null }
   }
@@ -327,8 +380,11 @@ function Speak-TestPhrase($Text) {
 }
 
 $credentialStatus = Get-OpenLessCredentialStatus
-if (-not $credentialStatus.VolcengineConfigured -or -not $credentialStatus.ArkConfigured) {
+if ($RequireJsonCredentials -and (-not $credentialStatus.VolcengineConfigured -or -not $credentialStatus.ArkConfigured)) {
   throw "Real ASR regression requires configured Volcengine ASR and Ark LLM credentials."
+}
+if (-not $credentialStatus.VolcengineConfigured -or -not $credentialStatus.ArkConfigured) {
+  Write-Warning "Legacy credentials.json is incomplete; continuing because the app may use the OS credential vault."
 }
 
 $logPath = Join-Path $env:LOCALAPPDATA "OpenLess\Logs\openless.log"
@@ -340,7 +396,7 @@ $previousPreferences = Set-HoldHotkeyPreference $preferencesPath
 Get-Process openless -ErrorAction SilentlyContinue | Stop-Process -Force
 Remove-Item -LiteralPath $logPath -Force -ErrorAction SilentlyContinue
 
-Write-Host "== Real ASR + insertion fallback smoke ($Target) =="
+Write-Host "== Real ASR + direct insertion smoke ($Target) =="
 $env:OPENLESS_SHOW_MAIN_ON_START = "1"
 $env:OPENLESS_ACCEPT_SYNTHETIC_HOTKEY_EVENTS = "1"
 if ($DebugHotkeyEvents) {
@@ -356,7 +412,7 @@ try {
 
 $inputTarget = $null
 try {
-  if (-not (Wait-LogPattern $logPath "WH_KEYBOARD_LL installed" 20)) {
+  if (-not (Wait-LogPattern $logPath "hotkey listener installed" 20)) {
     throw "Windows low-level keyboard hook was not installed."
   }
 
@@ -388,8 +444,11 @@ try {
   if ([string]::IsNullOrWhiteSpace($latest.rawTranscript) -or [string]::IsNullOrWhiteSpace($latest.finalText)) {
     throw "Latest history item is missing rawTranscript or finalText."
   }
-  if (@("copiedFallback", "pasteSent") -notcontains $latest.insertStatus) {
-    throw "Expected Windows insertStatus copiedFallback or pasteSent, got '$($latest.insertStatus)'."
+  if ($latest.insertStatus -ne "inserted") {
+    if (-not $AllowClipboardFallback -or @("copiedFallback", "pasteSent") -notcontains $latest.insertStatus) {
+      throw "Expected Windows insertStatus inserted, got '$($latest.insertStatus)'."
+    }
+    Write-Warning "Clipboard fallback was allowed for this run. insertStatus=$($latest.insertStatus)"
   }
 
   Focus-Window $inputTarget.Process | Out-Null
@@ -430,4 +489,4 @@ try {
   }
 }
 
-Write-Host "Real ASR + insertion fallback smoke ($Target) passed."
+Write-Host "Real ASR + direct insertion smoke ($Target) passed."

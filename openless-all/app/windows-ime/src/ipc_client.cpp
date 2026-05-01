@@ -7,7 +7,7 @@
 
 namespace {
 
-constexpr wchar_t kPipeName[] = L"\\\\.\\pipe\\OpenLessImeSubmit";
+constexpr wchar_t kPipeNamePrefix[] = L"\\\\.\\pipe\\OpenLessImeSubmit";
 constexpr DWORD kPipeBufferSize = 4096;
 constexpr size_t kMaxJsonLineBytes = 64 * 1024;
 
@@ -21,6 +21,25 @@ struct SubmitMessage {
   bool has_text = false;
   bool has_protocol_version = false;
 };
+
+std::wstring HResultErrorCode(HRESULT hr) {
+  constexpr wchar_t kHexDigits[] = L"0123456789ABCDEF";
+  auto value = static_cast<unsigned long>(hr);
+  std::wstring code = L"hresult:0x";
+  for (int shift = 28; shift >= 0; shift -= 4) {
+    code.push_back(kHexDigits[(value >> shift) & 0xF]);
+  }
+  return code;
+}
+
+std::wstring PipeNameForCurrentThread() {
+  std::wstring name = kPipeNamePrefix;
+  name += L"-";
+  name += std::to_wstring(GetCurrentProcessId());
+  name += L"-";
+  name += std::to_wstring(GetCurrentThreadId());
+  return name;
+}
 
 bool AppendUtf8AsWide(const char* data,
                       int length,
@@ -329,6 +348,7 @@ void OpenLessPipeServer::Start(OpenLessTextService* service) {
   }
 
   stop_requested_.store(false);
+  pipe_name_ = PipeNameForCurrentThread();
   service_ = service;
   service_->AddRef();
   thread_ = std::thread(&OpenLessPipeServer::Run, this);
@@ -349,9 +369,10 @@ void OpenLessPipeServer::Stop() {
 }
 
 void OpenLessPipeServer::Run() {
+  const std::wstring pipe_name = pipe_name_;
   while (!stop_requested_.load()) {
     HANDLE pipe = CreateNamedPipeW(
-        kPipeName, PIPE_ACCESS_DUPLEX,
+        pipe_name.c_str(), PIPE_ACCESS_DUPLEX,
         PIPE_TYPE_MESSAGE | PIPE_READMODE_BYTE | PIPE_WAIT, 1,
         kPipeBufferSize, kPipeBufferSize, 0, nullptr);
     if (pipe == INVALID_HANDLE_VALUE) {
@@ -441,7 +462,8 @@ void OpenLessPipeServer::HandleSubmitLine(HANDLE pipe, const std::string& line) 
   if (SUCCEEDED(hr)) {
     WriteResult(pipe, message.session_id, L"committed", nullptr);
   } else {
-    WriteResult(pipe, message.session_id, L"rejected", L"commitRejected");
+    const std::wstring error_code = HResultErrorCode(hr);
+    WriteResult(pipe, message.session_id, L"rejected", error_code.c_str());
   }
 }
 
@@ -477,8 +499,11 @@ bool OpenLessPipeServer::WriteResult(HANDLE pipe,
 }
 
 void OpenLessPipeServer::WakePipe() {
+  if (pipe_name_.empty()) {
+    return;
+  }
   HANDLE pipe =
-      CreateFileW(kPipeName, GENERIC_READ | GENERIC_WRITE, 0, nullptr,
+      CreateFileW(pipe_name_.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
                   OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
   if (pipe != INVALID_HANDLE_VALUE) {
     CloseHandle(pipe);

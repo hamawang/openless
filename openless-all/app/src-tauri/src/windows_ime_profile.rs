@@ -191,9 +191,10 @@ mod windows_impl {
     };
     use windows::Win32::UI::Input::KeyboardAndMouse::HKL;
     use windows::Win32::UI::TextServices::{
-        CLSID_TF_InputProcessorProfiles, ITfInputProcessorProfileMgr, GUID_TFCAT_TIP_KEYBOARD,
-        TF_INPUTPROCESSORPROFILE, TF_IPPMF_DONTCARECURRENTINPUTLANGUAGE, TF_IPPMF_FORSESSION,
-        TF_PROFILETYPE_INPUTPROCESSOR, TF_PROFILETYPE_KEYBOARDLAYOUT,
+        CLSID_TF_InputProcessorProfiles, ITfInputProcessorProfileMgr, ITfInputProcessorProfiles,
+        GUID_TFCAT_TIP_KEYBOARD, TF_INPUTPROCESSORPROFILE, TF_IPPMF_DONTCARECURRENTINPUTLANGUAGE,
+        TF_IPPMF_ENABLEPROFILE, TF_IPPMF_FORSESSION, TF_PROFILETYPE_INPUTPROCESSOR,
+        TF_PROFILETYPE_KEYBOARDLAYOUT,
     };
     use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_64KEY};
     use winreg::RegKey;
@@ -201,8 +202,9 @@ mod windows_impl {
     const OPENLESS_COM_INPROC_KEY: &str =
         r"Software\Classes\CLSID\{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D}\InprocServer32";
     const OPENLESS_TSF_PROFILE_KEY: &str = r"Software\Microsoft\CTF\TIP\{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D}\LanguageProfile\0x00000804\{9B5F5E04-23F6-47DA-9A26-D221F6C3F02E}";
-    const PROFILE_ACTIVATION_FLAGS: u32 =
-        TF_IPPMF_FORSESSION | TF_IPPMF_DONTCARECURRENTINPUTLANGUAGE;
+    const OPENLESS_PROFILE_ACTIVATION_FLAGS: u32 =
+        TF_IPPMF_FORSESSION | TF_IPPMF_DONTCARECURRENTINPUTLANGUAGE | TF_IPPMF_ENABLEPROFILE;
+    const PROFILE_RESTORE_FLAGS: u32 = TF_IPPMF_FORSESSION | TF_IPPMF_DONTCARECURRENTINPUTLANGUAGE;
 
     struct ComApartment;
 
@@ -250,6 +252,12 @@ mod windows_impl {
         let clsid = parse_guid(OPENLESS_TEXT_SERVICE_CLSID_BRACED)?;
         let profile_guid = parse_guid(OPENLESS_PROFILE_GUID_BRACED)?;
 
+        with_input_processor_profiles(|profiles| unsafe {
+            profiles.EnableLanguageProfile(&clsid, OPENLESS_TSF_LANG_ID, &profile_guid, true)?;
+            profiles.ChangeCurrentLanguage(OPENLESS_TSF_LANG_ID)?;
+            profiles.ActivateLanguageProfile(&clsid, OPENLESS_TSF_LANG_ID, &profile_guid)
+        })?;
+
         with_profile_manager(|manager| unsafe {
             manager.ActivateProfile(
                 TF_PROFILETYPE_INPUTPROCESSOR,
@@ -257,7 +265,7 @@ mod windows_impl {
                 &clsid,
                 &profile_guid,
                 null_hkl(),
-                PROFILE_ACTIVATION_FLAGS,
+                OPENLESS_PROFILE_ACTIVATION_FLAGS,
             )
         })
     }
@@ -276,7 +284,7 @@ mod windows_impl {
                         &clsid,
                         &profile_guid,
                         null_hkl(),
-                        PROFILE_ACTIVATION_FLAGS,
+                        PROFILE_RESTORE_FLAGS,
                     )
                 })
             }
@@ -291,7 +299,7 @@ mod windows_impl {
                         &zero_guid,
                         &zero_guid,
                         hkl,
-                        PROFILE_ACTIVATION_FLAGS,
+                        PROFILE_RESTORE_FLAGS,
                     )
                 })
             }
@@ -407,6 +415,20 @@ mod windows_impl {
         ))?;
 
         operation(&manager).map_err(windows_api_error("ITfInputProcessorProfileMgr operation"))
+    }
+
+    fn with_input_processor_profiles<T>(
+        operation: impl FnOnce(&ITfInputProcessorProfiles) -> windows::core::Result<T>,
+    ) -> WindowsImeProfileResult<T> {
+        let _com = ComApartment::initialize()?;
+        let profiles: ITfInputProcessorProfiles = unsafe {
+            CoCreateInstance(&CLSID_TF_InputProcessorProfiles, None, CLSCTX_INPROC_SERVER)
+        }
+        .map_err(windows_api_error(
+            "CoCreateInstance ITfInputProcessorProfiles",
+        ))?;
+
+        operation(&profiles).map_err(windows_api_error("ITfInputProcessorProfiles operation"))
     }
 
     fn parse_required_guid(label: &str, value: Option<&str>) -> WindowsImeProfileResult<GUID> {

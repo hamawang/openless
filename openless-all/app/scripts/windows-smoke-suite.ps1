@@ -1,7 +1,7 @@
 param(
   [string]$ExePath = "",
   [string]$Phrase = "OpenLess Windows regression suite phrase. OpenLess Windows regression suite phrase.",
-  [ValidateSet("notepad", "browser")]
+  [ValidateSet("notepad", "browser", "win32edit")]
   [string[]]$Targets = @("notepad", "browser"),
   [switch]$Build,
   [switch]$SkipRuntime,
@@ -105,7 +105,7 @@ try {
 
   if (-not $SkipRealAsr) {
     foreach ($target in $Targets) {
-      Invoke-Step "Real ASR insertion fallback: $target" {
+      Invoke-Step "Real ASR direct insertion: $target" {
         $parameters = @{
           ExePath = $ExePath
           Target = $target

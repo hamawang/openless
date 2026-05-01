@@ -124,7 +124,9 @@ impl WindowsImeSessionController {
             .await
             .map_err(|error| WindowsImeSessionError::Ipc(error.to_string()))?;
         if should_fallback_after_ime_result(status) {
-            log::warn!("[windows-ime] TSF submit returned {status:?}; falling back to clipboard");
+            log::warn!(
+                "[windows-ime] TSF submit returned {status:?}; falling back to non-TSF insertion"
+            );
         }
         Ok(map_ime_status_to_insert_status(status))
     }
@@ -198,6 +200,7 @@ mod tests {
                     session_id: "session-1".to_string(),
                     text: "hello".to_string(),
                     created_at: "2026-05-01T12:00:00Z".to_string(),
+                    target: None,
                 },
             )
             .await;

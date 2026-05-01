@@ -349,10 +349,14 @@ mod platform {
         let shift_active = (flags & FLAG_MASK_SHIFT) != 0;
         let shift_was_held = ctx.shared.translation_modifier_held.load(Ordering::SeqCst);
         if shift_active && !shift_was_held {
-            ctx.shared.translation_modifier_held.store(true, Ordering::SeqCst);
+            ctx.shared
+                .translation_modifier_held
+                .store(true, Ordering::SeqCst);
             send_or_log(&ctx.tx, HotkeyEvent::TranslationModifierPressed);
         } else if !shift_active && shift_was_held {
-            ctx.shared.translation_modifier_held.store(false, Ordering::SeqCst);
+            ctx.shared
+                .translation_modifier_held
+                .store(false, Ordering::SeqCst);
         }
 
         let keycode = unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) };
@@ -582,13 +586,18 @@ mod platform {
         if matches!(vk_code, VK_SHIFT | VK_LSHIFT | VK_RSHIFT) {
             match message {
                 WM_KEYDOWN | WM_SYSKEYDOWN => {
-                    let was_held = ctx.shared.translation_modifier_held.swap(true, Ordering::SeqCst);
+                    let was_held = ctx
+                        .shared
+                        .translation_modifier_held
+                        .swap(true, Ordering::SeqCst);
                     if !was_held {
                         send_or_log(&ctx.tx, HotkeyEvent::TranslationModifierPressed);
                     }
                 }
                 WM_KEYUP | WM_SYSKEYUP => {
-                    ctx.shared.translation_modifier_held.store(false, Ordering::SeqCst);
+                    ctx.shared
+                        .translation_modifier_held
+                        .store(false, Ordering::SeqCst);
                 }
                 _ => {}
             }
@@ -724,7 +733,9 @@ mod platform {
                 }
                 // Shift（任一侧）= 翻译模式修饰键。详见 issue #4。
                 if matches!(key, Key::ShiftLeft | Key::ShiftRight) {
-                    let was_held = shared.translation_modifier_held.swap(true, Ordering::SeqCst);
+                    let was_held = shared
+                        .translation_modifier_held
+                        .swap(true, Ordering::SeqCst);
                     if !was_held {
                         let _ = tx.send(HotkeyEvent::TranslationModifierPressed);
                     }
@@ -739,7 +750,9 @@ mod platform {
             }
             EventType::KeyRelease(key) => {
                 if matches!(key, Key::ShiftLeft | Key::ShiftRight) {
-                    shared.translation_modifier_held.store(false, Ordering::SeqCst);
+                    shared
+                        .translation_modifier_held
+                        .store(false, Ordering::SeqCst);
                     return;
                 }
                 if key == trigger_to_rdev_key(trigger) {

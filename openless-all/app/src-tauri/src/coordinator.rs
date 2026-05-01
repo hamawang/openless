@@ -32,6 +32,8 @@ use crate::types::{
     HotkeyStatusState, InsertStatus, PolishMode,
 };
 #[cfg(target_os = "windows")]
+use crate::windows_ime_ipc::ImeSubmitTarget;
+#[cfg(target_os = "windows")]
 use crate::windows_ime_session::{PreparedWindowsImeSession, WindowsImeSessionController};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -492,7 +494,9 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
         });
     }
     // 翻译模式标志重置；hotkey 监听器在 Shift down 时再 set true。
-    inner.translation_modifier_seen.store(false, Ordering::SeqCst);
+    inner
+        .translation_modifier_seen
+        .store(false, Ordering::SeqCst);
 
     #[cfg(any(debug_assertions, test))]
     if hotkey_injection_dry_run_enabled() {
@@ -952,8 +956,8 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     let hotword_strs = enabled_phrases(inner);
     let working_languages = prefs.working_languages.clone();
     let translation_target = prefs.translation_target_language.trim().to_string();
-    let translation_active = inner.translation_modifier_seen.load(Ordering::SeqCst)
-        && !translation_target.is_empty();
+    let translation_active =
+        inner.translation_modifier_seen.load(Ordering::SeqCst) && !translation_target.is_empty();
     let (polished, polish_error) = if translation_active {
         log::info!(
             "[coord] translation mode → target=\u{300C}{}\u{300D} working={:?}",
@@ -992,9 +996,16 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     restore_focus_target_if_possible(focus_target);
     let restore_clipboard = inner.prefs.get().restore_clipboard_after_paste;
     #[cfg(target_os = "windows")]
-    let status =
-        insert_with_windows_ime_first(inner, current_session_id, &polished, restore_clipboard)
-            .await;
+    let ime_target = capture_ime_submit_target();
+    #[cfg(target_os = "windows")]
+    let status = insert_with_windows_ime_first(
+        inner,
+        current_session_id,
+        &polished,
+        restore_clipboard,
+        ime_target,
+    )
+    .await;
     #[cfg(not(target_os = "windows"))]
     let status = inner.inserter.insert(&polished, restore_clipboard);
     let inserted_chars = polished.chars().count() as u32;
@@ -1151,6 +1162,7 @@ async fn insert_with_windows_ime_first(
     session_id: u64,
     polished: &str,
     restore_clipboard: bool,
+    ime_target: Option<ImeSubmitTarget>,
 ) -> InsertStatus {
     let prepared = {
         let mut slot = inner.prepared_windows_ime_session.lock();
@@ -1166,12 +1178,15 @@ async fn insert_with_windows_ime_first(
         session_id: Uuid::new_v4().to_string(),
         text: polished.to_string(),
         created_at: Utc::now().to_rfc3339(),
+        target: ime_target,
     };
 
     let ime_status = match inner.windows_ime.submit_prepared(&prepared, request).await {
         Ok(status) => status,
         Err(error) => {
-            log::warn!("[windows-ime] TSF submit failed, falling back to clipboard: {error}");
+            log::warn!(
+                "[windows-ime] TSF submit failed, falling back to non-TSF insertion: {error}"
+            );
             InsertStatus::CopiedFallback
         }
     };
@@ -1179,6 +1194,9 @@ async fn insert_with_windows_ime_first(
 
     if ime_status == InsertStatus::Inserted {
         ime_status
+    } else if inner.inserter.insert_via_unicode_keystrokes(polished) == InsertStatus::Inserted {
+        log::info!("[windows-ime] TSF unavailable; inserted via Unicode SendInput");
+        InsertStatus::Inserted
     } else {
         inner
             .inserter
@@ -1293,7 +1311,9 @@ async fn polish_text(
 
     let config = OpenAICompatibleConfig::new("ark", "Doubao Ark", base_url, api_key, model);
     let provider = OpenAICompatibleLLMProvider::new(config);
-    Ok(provider.polish(raw, mode, hotwords, working_languages).await?)
+    Ok(provider
+        .polish(raw, mode, hotwords, working_languages)
+        .await?)
 }
 
 /// 翻译路径——和 polish 一样失败时返回原文 + 失败原因，避免"不丢字"约定被违反（CLAUDE.md）。
@@ -1683,6 +1703,48 @@ fn restore_focus_target_if_possible(target: Option<usize>) {
 
 #[cfg(not(target_os = "windows"))]
 fn restore_focus_target_if_possible(_target: Option<usize>) {}
+
+#[cfg(target_os = "windows")]
+fn capture_ime_submit_target() -> Option<ImeSubmitTarget> {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId, GUITHREADINFO,
+    };
+
+    let foreground = unsafe { GetForegroundWindow() };
+    if foreground.0.is_null() {
+        return None;
+    }
+
+    let mut foreground_process_id = 0;
+    let foreground_thread_id =
+        unsafe { GetWindowThreadProcessId(foreground, Some(&mut foreground_process_id)) };
+    if foreground_thread_id == 0 {
+        return None;
+    }
+
+    let mut gui_info = GUITHREADINFO {
+        cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+        ..Default::default()
+    };
+    let target_window = if unsafe { GetGUIThreadInfo(foreground_thread_id, &mut gui_info).is_ok() }
+        && !gui_info.hwndFocus.0.is_null()
+    {
+        gui_info.hwndFocus
+    } else {
+        foreground
+    };
+
+    let mut process_id = 0;
+    let thread_id = unsafe { GetWindowThreadProcessId(target_window, Some(&mut process_id)) };
+    if process_id == 0 || thread_id == 0 {
+        return None;
+    }
+
+    Some(ImeSubmitTarget {
+        process_id,
+        thread_id,
+    })
+}
 
 #[cfg(target_os = "windows")]
 fn show_capsule_window_no_activate() -> bool {

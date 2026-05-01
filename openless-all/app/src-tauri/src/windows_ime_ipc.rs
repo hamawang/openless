@@ -96,6 +96,13 @@ pub struct ImeSubmitRequest {
     pub session_id: String,
     pub text: String,
     pub created_at: String,
+    pub target: Option<ImeSubmitTarget>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ImeSubmitTarget {
+    pub process_id: u32,
+    pub thread_id: u32,
 }
 
 #[derive(Clone)]
@@ -171,7 +178,7 @@ mod windows_pipe {
         IME_CLIENT_WAIT_TIMEOUT, IME_PIPE_RETRY_INTERVAL, IME_SUBMIT_TIMEOUT,
     };
     use crate::windows_ime_protocol::{
-        decode_message, encode_message, ImePipeMessage, OPENLESS_IME_PIPE_NAME,
+        decode_message, encode_message, ime_pipe_name_for_target, ImePipeMessage,
         OPENLESS_IME_PROTOCOL_VERSION,
     };
 
@@ -182,8 +189,10 @@ mod windows_pipe {
     pub async fn submit_text_over_pipe(
         request: ImeSubmitRequest,
     ) -> WindowsImeIpcResult<crate::windows_ime_protocol::ImeSubmitStatus> {
+        let target = request.target.ok_or(WindowsImeIpcError::NoReadyClient)?;
         let mut pending = PendingImeSubmit::new(request.session_id.clone());
-        let pipe = open_pipe_with_retry().await?;
+        let pipe_name = ime_pipe_name_for_target(target.process_id, target.thread_id);
+        let pipe = open_pipe_with_retry(&pipe_name).await?;
         let (read_half, mut write_half) = tokio::io::split(pipe);
         let mut reader = BufReader::new(read_half);
 
@@ -230,8 +239,13 @@ mod windows_pipe {
                 protocol_version,
                 session_id,
                 status,
-                ..
+                error_code,
             } if protocol_version == OPENLESS_IME_PROTOCOL_VERSION => {
+                if status != crate::windows_ime_protocol::ImeSubmitStatus::Committed {
+                    log::warn!(
+                        "[windows-ime] submit result status={status:?} error_code={error_code:?}"
+                    );
+                }
                 pending.accept_result(&session_id, status)
             }
             ImePipeMessage::SubmitResult {
@@ -245,12 +259,12 @@ mod windows_pipe {
         }
     }
 
-    async fn open_pipe_with_retry() -> WindowsImeIpcResult<NamedPipeClient> {
+    async fn open_pipe_with_retry(pipe_name: &str) -> WindowsImeIpcResult<NamedPipeClient> {
         let deadline = Instant::now() + IME_CLIENT_WAIT_TIMEOUT;
 
         loop {
-            let retry_error = match wait_for_pipe_client() {
-                Ok(()) => match ClientOptions::new().open(OPENLESS_IME_PIPE_NAME) {
+            let retry_error = match wait_for_pipe_client(pipe_name) {
+                Ok(()) => match ClientOptions::new().open(pipe_name) {
                     Ok(pipe) => return Ok(pipe),
                     Err(error) => {
                         let error_code = error.raw_os_error().map(|code| code as u32);
@@ -275,8 +289,8 @@ mod windows_pipe {
         }
     }
 
-    fn wait_for_pipe_client() -> WindowsImeIpcResult<()> {
-        let pipe_name = OsStr::new(OPENLESS_IME_PIPE_NAME)
+    fn wait_for_pipe_client(pipe_name: &str) -> WindowsImeIpcResult<()> {
+        let pipe_name = OsStr::new(pipe_name)
             .encode_wide()
             .chain(std::iter::once(0))
             .collect::<Vec<u16>>();
