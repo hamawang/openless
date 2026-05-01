@@ -72,10 +72,10 @@ const mockHotkeyStatus: HotkeyStatus = {
 };
 
 const mockWindowsImeStatus: WindowsImeStatus = {
-  state: 'installed',
-  usingTsfBackend: true,
-  message: 'OpenLess TSF IME registration is present',
-  dllPath: 'C:\\Program Files\\OpenLess\\OpenLessIme.dll',
+  state: 'notWindows',
+  usingTsfBackend: false,
+  message: 'Browser dev mock',
+  dllPath: null,
 };
 
 const mockHistory: DictationSession[] = OL_DATA.history.map((h, i) => ({
