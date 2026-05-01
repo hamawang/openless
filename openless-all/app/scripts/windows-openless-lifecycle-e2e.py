@@ -86,23 +86,28 @@ class CdpClient:
 
 
 def cdp_page_ws(port: int) -> str:
-    import urllib.request
-    import urllib.error
-
     deadline = time.time() + 20
     last_targets = []
     while time.time() < deadline:
         try:
-            with urllib.request.urlopen(f"http://127.0.0.1:{port}/json/list") as response:
-                targets = json.loads(response.read().decode("utf-8"))
+            response = subprocess.run(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-Command",
+                    f"(Invoke-WebRequest -UseBasicParsing http://127.0.0.1:{port}/json/list).Content",
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            targets = json.loads(response.stdout)
             last_targets = [target.get("url", "") for target in targets]
             for target in targets:
                 url = target.get("url", "")
                 if url.startswith("http://tauri.localhost") and "?window=" not in url:
                     return target["webSocketDebuggerUrl"]
-        except urllib.error.URLError:
-            pass
-        except urllib.error.HTTPError:
+        except Exception:
             pass
         time.sleep(0.5)
     raise RuntimeError(f"Main Tauri page target was not found. last_targets={last_targets}")
@@ -146,7 +151,16 @@ def configure_preferences(client: CdpClient) -> dict:
 
 def focus_terminal_window(target: str):
     title = "C:\\WINDOWS\\system32\\cmd.exe" if target == "wt-cmd" else "Windows PowerShell"
-    win = Desktop(backend="uia").window(title=title)
+    win = None
+    for candidate in Desktop(backend="uia").windows():
+        try:
+            if candidate.class_name() == "CASCADIA_HOSTING_WINDOW_CLASS" and candidate.window_text() == title:
+                win = candidate
+                break
+        except Exception:
+            continue
+    if win is None:
+        raise RuntimeError(f"terminal window not found for title={title}")
     win.set_focus()
     time.sleep(0.5)
     keyboard.send_keys("{ESC}")
@@ -187,11 +201,7 @@ def read_target_text(target_info: dict) -> str:
             if descendant.class_name() == "TermControl":
                 return descendant.window_text()
         return ""
-    target_info["doc"].set_focus()
-    time.sleep(0.2)
-    keyboard.send_keys("^a^c")
-    time.sleep(0.3)
-    return get_clipboard_text() or ""
+    return target_info["doc"].window_text()
 
 
 def cleanup_target(target_info: dict):
@@ -211,13 +221,20 @@ def main():
     parser.add_argument("--exe-path", required=True)
     parser.add_argument("--target", choices=["notepad", "wt-cmd", "wt-powershell"], required=True)
     parser.add_argument("--phrase", default="openless terminal regression success")
+    parser.add_argument("--injected-transcript-text", default="")
     parser.add_argument("--remote-debugging-port", type=int, default=9223)
     parser.add_argument("--timeout-seconds", type=int, default=120)
     args = parser.parse_args()
 
+    debug_transcript_path = ""
+    if args.injected_transcript_text.strip():
+        debug_transcript_path = str(Path(tempfile.gettempdir()) / "openless-debug-transcript-e2e.txt")
+        Path(debug_transcript_path).write_text(args.injected_transcript_text, encoding="utf-8")
+
     launch_ps = f"""
 $env:OPENLESS_SHOW_MAIN_ON_START='1'
 $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS='--remote-debugging-port={args.remote_debugging_port}'
+$env:OPENLESS_DEBUG_TRANSCRIPT_FILE='{debug_transcript_path}'
 $proc = Start-Process -FilePath '{args.exe_path}' -PassThru
 $proc.Id
 """
@@ -246,8 +263,11 @@ $proc.Id
 
         client.invoke("start_dictation")
         time.sleep(1.0)
-        speak_phrase(args.phrase)
-        time.sleep(0.8)
+        if args.injected_transcript_text.strip():
+            time.sleep(1.0)
+        else:
+            speak_phrase(args.phrase)
+            time.sleep(0.8)
         client.invoke("stop_dictation")
 
         latest = wait_for_history_growth(client, baseline_count, args.timeout_seconds)
@@ -278,6 +298,11 @@ $proc.Id
             ["powershell", "-NoProfile", "-Command", f"Stop-Process -Id {app_pid} -Force -ErrorAction SilentlyContinue"],
             check=False,
         )
+        if debug_transcript_path:
+            try:
+                Path(debug_transcript_path).unlink(missing_ok=True)
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":

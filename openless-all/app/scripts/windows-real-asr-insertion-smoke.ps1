@@ -374,12 +374,31 @@ raise SystemExit(1)
     } finally {
       Remove-Item -LiteralPath $activatePath -Force -ErrorAction SilentlyContinue
     }
+    $handleLookup = @"
+import sys
+from pywinauto import Desktop
+
+title = sys.argv[1]
+for window in Desktop(backend='uia').windows():
+    if window.class_name() == 'CASCADIA_HOSTING_WINDOW_CLASS' and window.window_text() == title:
+        print(window.handle)
+        raise SystemExit(0)
+raise SystemExit(1)
+"@
+    $handlePath = Join-Path $env:TEMP "openless-terminal-handle.py"
+    Write-TextUtf8 $handlePath $handleLookup
+    try {
+      $targetHandle = [int](python -X utf8 $handlePath $title)
+    } finally {
+      Remove-Item -LiteralPath $handlePath -Force -ErrorAction SilentlyContinue
+    }
     Start-Sleep -Milliseconds 800
     return [pscustomobject]@{
       Process = $null
       FixturePath = $null
       ProfilePath = $null
       TargetTitle = $title
+      TargetHandle = $targetHandle
       TargetKind = "terminal"
     }
   }
@@ -427,14 +446,7 @@ if win is None:
     raise SystemExit(2)
 for descendant in win.descendants():
     if descendant.class_name() == 'RichEditD2DPT':
-        descendant.set_focus()
-        descendant.type_keys('^a^c')
-        import win32clipboard, win32con
-        win32clipboard.OpenClipboard()
-        try:
-            value = win32clipboard.GetClipboardData(win32con.CF_UNICODETEXT)
-        finally:
-            win32clipboard.CloseClipboard()
+        value = descendant.window_text()
         open(out, 'w', encoding='utf-8').write(value)
         raise SystemExit(0)
 raise SystemExit(1)
@@ -471,9 +483,9 @@ raise SystemExit(1)
 import sys
 from pywinauto import Desktop
 
-title = sys.argv[1]
+handle = int(sys.argv[1])
 out = sys.argv[2]
-win = Desktop(backend='uia').window(title=title)
+win = Desktop(backend='uia').window(handle=handle)
 for descendant in win.descendants():
     if descendant.class_name() == 'TermControl':
         open(out, 'w', encoding='utf-8').write(descendant.window_text())
@@ -485,7 +497,7 @@ raise SystemExit(1)
     Write-TextUtf8 $readbackPath $readbackScript
     try {
       Remove-Item -LiteralPath $outputPath -Force -ErrorAction SilentlyContinue
-      python -X utf8 $readbackPath $TargetInfo.TargetTitle $outputPath | Out-Null
+      python -X utf8 $readbackPath $TargetInfo.TargetHandle $outputPath | Out-Null
       if (Test-Path $outputPath) {
         return Get-Content -Raw -Encoding UTF8 $outputPath
       }

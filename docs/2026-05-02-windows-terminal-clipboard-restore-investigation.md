@@ -199,6 +199,71 @@ Residual caveat:
 - repeated re-runs in the same desktop session later hit intermittent startup/hook-install flakiness before the test reached insertion again
 - that flakiness affected test repeatability, but it does not invalidate the already captured successful full-lifecycle evidence above
 
+## 5. Repeatable full-lifecycle regression after automation hardening
+
+After hardening the automation path, the full OpenLess lifecycle was run through a stable route:
+
+- launch OpenLess with WebView2 remote debugging enabled
+- drive lifecycle by invoking Tauri commands from the main webview (`start_dictation` / `stop_dictation`)
+- keep real focus-target capture and real insertion behavior
+- use a debug-only transcript override only when ASR would otherwise be empty in this desktop environment
+- read back target content directly from UIA controls instead of recycling clipboard-based readback
+
+Targets exercised:
+
+- `Windows Terminal` `cmd.exe` tab
+- `Windows Terminal` `PowerShell` tab
+- `Notepad`
+
+Representative results:
+
+```json
+{
+  "target": "wt-cmd",
+  "historyFinalText": "openless terminal regression success",
+  "insertStatus": "pasteSent",
+  "targetContainsFinalText": true,
+  "targetContainsClipboardSentinel": false
+}
+{
+  "target": "wt-powershell",
+  "historyFinalText": "openless terminal regression success",
+  "insertStatus": "pasteSent",
+  "targetContainsFinalText": true,
+  "targetContainsClipboardSentinel": false
+}
+{
+  "target": "notepad",
+  "historyFinalText": "openless terminal regression success",
+  "insertStatus": "pasteSent",
+  "targetContainsFinalText": true,
+  "targetContainsClipboardSentinel": false
+}
+```
+
+Repeatability observed in the current session:
+
+- `wt-cmd`: multiple successful runs with final text visible at the terminal prompt
+- `wt-powershell`: successful run with final text visible at the terminal prompt
+- `notepad`: two consecutive successful runs after switching readback from clipboard-based copy to direct UIA text capture
+
+Updated interpretation:
+
+- the originally suspected “terminal paste always restores the old clipboard before paste lands” is **not** reproducible as a general rule in the current full-lifecycle automation
+- once the automation path is stabilized, all three tested targets receive the intended final text while `insertStatus` remains `pasteSent`
+- the clipboard timing race is still real in isolation for slow consumers, but the complete OpenLess lifecycle on this machine does not reproduce the stale-clipboard failure for:
+  - `wt-cmd`
+  - `wt-powershell`
+  - `notepad`
+
+Most likely current conclusion:
+
+- the user-reported bug depends on an additional condition not captured in the hardened automation path
+- plausible candidates remain:
+  - a different terminal host/session state
+  - a different target application than the tested Windows Terminal tabs
+  - another timing-sensitive environment factor outside the core insertion code
+
 ## Root cause
 
 Root cause: Windows `PasteSent` semantics were treated as if they implied paste completion.
