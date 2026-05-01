@@ -12,7 +12,7 @@ use crate::permissions::{self, PermissionStatus};
 use crate::persistence::{CredentialAccount, CredentialsSnapshot, CredentialsVault};
 use crate::types::{
     CredentialsStatus, DictationSession, DictionaryEntry, HotkeyCapability, HotkeyStatus,
-    PolishMode, UserPreferences,
+    PolishMode, QaHotkeyBinding, UserPreferences,
 };
 
 type CoordinatorState<'a> = State<'a, Arc<Coordinator>>;
@@ -439,6 +439,42 @@ pub fn trigger_microphone_prompt(app: AppHandle) -> Result<(), String> {
     } else {
         Err(format!("microphone permission is {status:?}"))
     }
+}
+
+// ─────────────────────────── QA (划词语音问答, issue #118) ───────────────────────────
+
+/// 给前端 Settings 页渲染当前 QA 快捷键 label（如 `"Cmd+Shift+;"`）。
+/// 未启用时返回空串。
+#[tauri::command]
+pub fn get_qa_hotkey_label(coord: CoordinatorState<'_>) -> String {
+    coord.qa_hotkey_label()
+}
+
+/// 设置 QA 快捷键并热更新 monitor。
+/// 传入 `None` 形式的字段不在这里支持——前端用 `binding == null` 时调下面的
+/// "disable" 写法（写 prefs.qa_hotkey = None）即可。
+#[tauri::command]
+pub fn set_qa_hotkey(
+    coord: CoordinatorState<'_>,
+    binding: QaHotkeyBinding,
+) -> Result<(), String> {
+    let mut prefs = coord.prefs().get();
+    prefs.qa_hotkey = Some(binding);
+    coord.prefs().set(prefs).map_err(|e| e.to_string())?;
+    coord.update_qa_hotkey_binding();
+    Ok(())
+}
+
+/// 用户点 ✕ / 按 Esc 关 QA 浮窗。
+#[tauri::command]
+pub fn qa_window_dismiss(coord: CoordinatorState<'_>) {
+    coord.qa_window_dismiss();
+}
+
+/// 用户点 📌 / 取消 📌。pinned=true 时浮窗不会自动隐藏。
+#[tauri::command]
+pub fn qa_window_pin(coord: CoordinatorState<'_>, pinned: bool) {
+    coord.qa_window_pin(pinned);
 }
 
 // ─────────────────────────── unused but exported (silences dead_code) ───────────────────────────

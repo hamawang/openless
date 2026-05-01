@@ -9,17 +9,22 @@ import {
   handleWindowHotkeyEvent,
   isTauri,
 } from './lib/ipc';
+import { QaPanel } from './pages/QaPanel';
 import { HotkeySettingsProvider } from './state/HotkeySettingsContext';
 
 interface AppProps {
   isCapsule: boolean;
+  isQa: boolean;
 }
 
 type Gate = 'checking' | 'onboarding' | 'ready';
 
-export function App({ isCapsule }: AppProps) {
+export function App({ isCapsule, isQa }: AppProps) {
   if (isCapsule) {
     return <Capsule />;
+  }
+  if (isQa) {
+    return <QaPanel />;
   }
 
   const os = detectOS();

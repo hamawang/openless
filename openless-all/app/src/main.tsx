@@ -6,14 +6,16 @@ import "./styles/tokens.css";
 import "./styles/global.css";
 
 const params = new URLSearchParams(window.location.search);
-const isCapsule = params.get("window") === "capsule";
+const windowKind = params.get("window");
+const isCapsule = windowKind === "capsule";
+const isQa = windowKind === "qa";
 
 const root = ReactDOM.createRoot(document.getElementById("root")!);
 
 const renderApp = () => {
   root.render(
     <React.StrictMode>
-      <App isCapsule={isCapsule} />
+      <App isCapsule={isCapsule} isQa={isQa} />
     </React.StrictMode>,
   );
 };

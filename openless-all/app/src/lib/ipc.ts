@@ -10,6 +10,7 @@ import type {
   HotkeyStatus,
   PermissionStatus,
   PolishMode,
+  QaHotkeyBinding,
   UserPreferences,
 } from './types';
 import { OL_DATA } from './mockData';
@@ -46,6 +47,8 @@ const mockSettings: UserPreferences = {
   restoreClipboardAfterPaste: true,
   workingLanguages: ['简体中文'],
   translationTargetLanguage: '',
+  qaHotkey: { primary: ';', modifiers: ['cmd', 'shift'] },
+  qaSaveHistory: false,
 };
 
 const mockHotkeyCapability: HotkeyCapability = {
@@ -251,6 +254,25 @@ export function triggerMicrophonePrompt(): Promise<void> {
 
 export function restartApp(): Promise<void> {
   return invokeOrMock('restart_app', undefined, () => undefined);
+}
+
+// ── QA (划词语音问答) ───────────────────────────────────────────────────
+// 详见 issue #118。后端会发 `qa:state` / `qa:dismiss` 事件；前端通过下面四个
+// 命令查询与控制 QA 浮窗。
+export function getQaHotkeyLabel(): Promise<string> {
+  return invokeOrMock('get_qa_hotkey_label', undefined, () => 'Cmd+Shift+;');
+}
+
+export function setQaHotkey(binding: QaHotkeyBinding): Promise<void> {
+  return invokeOrMock('set_qa_hotkey', { binding }, () => undefined);
+}
+
+export function qaWindowDismiss(): Promise<void> {
+  return invokeOrMock('qa_window_dismiss', undefined, () => undefined);
+}
+
+export function qaWindowPin(pinned: boolean): Promise<void> {
+  return invokeOrMock('qa_window_pin', { pinned }, () => undefined);
 }
 
 export async function openExternal(url: string): Promise<void> {

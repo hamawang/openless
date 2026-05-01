@@ -18,17 +18,24 @@ mod insertion;
 mod permissions;
 mod persistence;
 mod polish;
+mod qa_hotkey;
 mod recorder;
+mod selection;
 mod types;
 
 #[cfg(target_os = "macos")]
 use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 #[cfg(target_os = "macos")]
 use std::time::Duration;
+
+/// 第一次 show 时把 QA 浮窗摆到屏幕底部居中；之后的 show 不再 reposition，
+/// 让用户拖动后的位置在 hide → show 之间得以保持。详见 issue #118 v2。
+static QA_WINDOW_POSITIONED: AtomicBool = AtomicBool::new(false);
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, LogicalPosition, Manager, RunEvent, Runtime};
+use tauri::{AppHandle, Emitter, LogicalPosition, Manager, RunEvent, Runtime};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -58,6 +65,21 @@ pub fn run() {
                     log::warn!("[capsule] position failed: {e}");
                 }
                 let _ = capsule.hide();
+            }
+
+            // QA 浮窗（issue #118）：紧贴胶囊上方 8pt、屏幕底部居中、380×440。
+            // 启动时 hide()，等 coordinator 在 open_qa_panel 时再 show + 首次定位。
+            // tauri.conf.json 里需要声明 label="qa" 的窗口（前端 agent 负责）；
+            // 这里 get_webview_window 返回 None 时直接跳过，不影响主流程。
+            if let Some(qa) = app.get_webview_window("qa") {
+                if let Err(e) = position_qa_window(&qa) {
+                    log::warn!("[qa] position failed: {e}");
+                }
+                #[cfg(target_os = "macos")]
+                make_qa_window_draggable_macos(&qa);
+                let _ = qa.hide();
+            } else {
+                log::info!("[qa] qa 窗口未在 tauri.conf.json 中声明，前端 agent 会补上");
             }
 
             // 主窗口磨砂：macOS 用 NSVisualEffectView，Windows 用 Mica。
@@ -137,6 +159,8 @@ pub fn run() {
             let app_handle = app.handle().clone();
             coordinator.bind_app(app_handle);
             coordinator.start_hotkey_listener();
+            // 同步启动 QA hotkey listener。和 dictation hotkey 平行，互不抢状态。
+            coordinator.start_qa_hotkey_listener();
             if std::env::var("OPENLESS_SHOW_MAIN_ON_START").ok().as_deref() == Some("1") {
                 show_main_window(app.handle());
             }
@@ -175,6 +199,10 @@ pub fn run() {
             commands::read_credential,
             commands::set_active_asr_provider,
             commands::set_active_llm_provider,
+            commands::get_qa_hotkey_label,
+            commands::set_qa_hotkey,
+            commands::qa_window_dismiss,
+            commands::qa_window_pin,
             commands::validate_provider_credentials,
             commands::list_provider_models,
             restart_app,
@@ -195,6 +223,7 @@ pub fn run() {
             RunEvent::Exit => {
                 let coordinator = app.state::<Arc<coordinator::Coordinator>>();
                 coordinator.stop_hotkey_listener();
+                coordinator.stop_qa_hotkey_listener();
             }
             _ => {}
         });
@@ -400,6 +429,137 @@ fn wait_for_app_activation<R: Runtime>(app: &AppHandle<R>) {
 
 #[cfg(not(target_os = "macos"))]
 fn wait_for_app_activation<R: Runtime>(_app: &AppHandle<R>) {}
+
+/// QA 浮窗的目标尺寸（issue #118）。胶囊默认 220×96 + Dock 80pt + 8pt gap，
+/// 算下来 QA 窗口顶部坐标 = h - 80 - 96 - 8 - 280。
+const QA_WINDOW_WIDTH: f64 = 380.0;
+const QA_WINDOW_HEIGHT: f64 = 440.0;
+/// 胶囊与 QA 窗口的间距，与设计稿一致。
+const QA_WINDOW_GAP_TO_CAPSULE: f64 = 8.0;
+/// 胶囊高度（与 `position_capsule_bottom_center` 中一致）。
+const CAPSULE_HEIGHT_FOR_QA: f64 = 96.0;
+/// 给 macOS Dock 留的下边距（与 capsule 同源）。
+const DOCK_BOTTOM_PADDING_FOR_QA: f64 = 80.0;
+
+/// 把 QA 浮窗放到屏幕底部居中、紧贴胶囊上方。tauri 启动期 + show 之前都会调一次，
+/// 防止用户切换显示器后位置错乱。
+fn position_qa_window<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) -> tauri::Result<()> {
+    let monitor = match window.current_monitor()? {
+        Some(m) => m,
+        None => return Ok(()),
+    };
+    let scale = monitor.scale_factor();
+    let size = monitor.size();
+    let logical_w = size.width as f64 / scale;
+    let logical_h = size.height as f64 / scale;
+    let x = ((logical_w - QA_WINDOW_WIDTH) / 2.0).max(0.0);
+    let y = (logical_h
+        - DOCK_BOTTOM_PADDING_FOR_QA
+        - CAPSULE_HEIGHT_FOR_QA
+        - QA_WINDOW_GAP_TO_CAPSULE
+        - QA_WINDOW_HEIGHT)
+        .max(0.0);
+    window.set_size(tauri::LogicalSize::new(QA_WINDOW_WIDTH, QA_WINDOW_HEIGHT))?;
+    window.set_position(LogicalPosition::new(x, y))?;
+    Ok(())
+}
+
+/// 显示 QA 窗口并发一条状态事件（前端订阅 `qa:state`）。
+/// `content_kind` 是不透明字符串（"loading" / "answer" / "idle" 等），
+/// 让前端 React 视图自行决定渲染哪一种。**不**抢前台 app 焦点（保证 Cmd+C
+/// fallback 仍能从原 app 拿到选区）。
+pub(crate) fn show_qa_window<R: tauri::Runtime>(app: &AppHandle<R>, content_kind: &str) {
+    let Some(window) = app.get_webview_window("qa") else {
+        log::info!(
+            "[qa] show 跳过：qa 窗口不存在 (content_kind={content_kind})"
+        );
+        return;
+    };
+    // 仅首次 show 时居中；之后保留用户拖动后的位置。
+    if !QA_WINDOW_POSITIONED.load(Ordering::Relaxed) {
+        if let Err(e) = position_qa_window(&window) {
+            log::warn!("[qa] position before first show failed: {e}");
+        }
+        QA_WINDOW_POSITIONED.store(true, Ordering::Relaxed);
+    }
+    // macOS：不用 window.show()（它会 makeKeyAndOrderFront 把 OpenLess 推成 frontmost，
+    // 之后 capture_selection 的 AX read / Cmd+C fallback 都跑在 OpenLess 自己的 webview 上
+    // → 抓不到原 app 选区）。改用 orderFrontRegardless 让窗口可见但**不**成为 key window，
+    // frontmost 仍是用户原 app，AX 还能读到选区。这是 Spotlight / Raycast 的标准做法。
+    //
+    // ⚠️ 关键：NSWindow 任何操作必须在主线程，macOS 26 是硬断言（违反直接 SIGTRAP）。
+    // show_qa_window 经常从 tokio worker 调（qa_hotkey_bridge_loop），所以裸 ObjC msg_send
+    // 必须用 `app.run_on_main_thread` dispatch 到主线程。详见 issue #118 v2。
+    #[cfg(target_os = "macos")]
+    {
+        let window_clone = window.clone();
+        let _ = app.run_on_main_thread(move || {
+            use objc2::msg_send;
+            use objc2::runtime::AnyObject;
+            match window_clone.ns_window() {
+                Ok(handle) => {
+                    let ns = handle as *mut AnyObject;
+                    if ns.is_null() {
+                        log::warn!("[qa] ns_window null; falling back to window.show()");
+                        let _ = window_clone.show();
+                    } else {
+                        unsafe {
+                            let _: () = msg_send![ns, orderFrontRegardless];
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::warn!("[qa] ns_window unavailable: {e}; falling back to window.show()");
+                    let _ = window_clone.show();
+                }
+            }
+        });
+    }
+    #[cfg(not(target_os = "macos"))]
+    if let Err(e) = window.show() {
+        log::warn!("[qa] show failed: {e}");
+    }
+    let _ = app.emit_to(
+        "qa",
+        "qa:state",
+        serde_json::json!({ "kind": content_kind }),
+    );
+}
+
+/// QA 浮窗的拖动修复（macOS）。
+///
+/// 配置 `focus: false` 让 Tauri 把窗口创建为 nonactivating panel 风格（避免抢前台 app
+/// 焦点）。代价是 AppKit 的 `performWindowDragWithEvent:` 在 nonactivating 窗口上无效，
+/// 所以 `data-tauri-drag-region` 和 `WebviewWindow::start_dragging()` 都拖不动。
+///
+/// 解法是把 NSWindow 的 `movableByWindowBackground` 打开——这条路径不依赖窗口是否成为
+/// key window，跟 Spotlight / Raycast 的浮窗是同一手法。设一次就够，整个生命周期保持。
+#[cfg(target_os = "macos")]
+fn make_qa_window_draggable_macos<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
+    use objc2::msg_send;
+    use objc2::runtime::{AnyObject, Bool};
+    let Ok(handle) = window.ns_window() else {
+        log::warn!("[qa] ns_window unavailable; drag fix skipped");
+        return;
+    };
+    let ns_window = handle as *mut AnyObject;
+    if ns_window.is_null() {
+        log::warn!("[qa] ns_window null; drag fix skipped");
+        return;
+    }
+    unsafe {
+        let _: () = msg_send![ns_window, setMovableByWindowBackground: Bool::YES];
+        let _: () = msg_send![ns_window, setMovable: Bool::YES];
+    }
+    log::info!("[qa] NSWindow movableByWindowBackground=YES");
+}
+
+/// 隐藏 QA 窗口。供 commands::qa_window_dismiss / coordinator session 收尾共用。
+pub(crate) fn hide_qa_window<R: tauri::Runtime>(app: &AppHandle<R>) {
+    if let Some(window) = app.get_webview_window("qa") {
+        let _ = window.hide();
+    }
+}
 
 /// 把 capsule 窗口移到屏幕底部居中，与 Swift `CapsuleWindowController.repositionToBottomCenter` 同效。
 /// 留 80pt 给 macOS Dock；Windows 任务栏一般在底部 48pt 以内，整体也合适。

@@ -71,6 +71,14 @@ export interface HotkeyStatus {
   lastError: HotkeyInstallError | null;
 }
 
+/** 划词语音问答快捷键绑定。null 表示未启用。详见 issue #118。 */
+export interface QaHotkeyBinding {
+  /** 主键（去掉所有修饰符的字面字符），例如 ";" / "/" / "a" */
+  primary: string;
+  /** 修饰符列表，元素小写："cmd" | "shift" | "option" | "ctrl"。 */
+  modifiers: string[];
+}
+
 export interface UserPreferences {
   hotkey: HotkeyBinding;
   defaultMode: PolishMode;
@@ -85,6 +93,38 @@ export interface UserPreferences {
   workingLanguages: string[];
   /** 翻译模式目标语言（单选，原生名）；空串 = 不启用 Shift 翻译。详见 issue #4。 */
   translationTargetLanguage: string;
+  /** 划词语音问答快捷键。null = 未启用。详见 issue #118。 */
+  qaHotkey: QaHotkeyBinding | null;
+  /** 是否把 Q&A 历史写到本地存档。详见 issue #118。 */
+  qaSaveHistory: boolean;
+}
+
+/** Rust 通过 `qa:state` 事件下发的 payload。
+ *  v2 (issue #118 v2)：支持多轮对话，messages 数组每次由后端整段下发（单一可信源）。
+ *  v2.1：开 `stream:true`，LLM 答案逐 chunk 通过 `answer_delta` 事件推前端边渲染。 */
+export type QaStateKind =
+  | 'idle'
+  | 'recording'
+  | 'thinking'
+  | 'answer_delta'
+  | 'answer'
+  | 'error';
+
+export interface QaChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+export interface QaStatePayload {
+  kind: QaStateKind;
+  /** 后端权威：当前已有的多轮对话历史（user → assistant 交替）。answer 事件带完整版。 */
+  messages?: QaChatMessage[];
+  /** recording 状态时附带的选区预览（前 60 字）。 */
+  selection_preview?: string | null;
+  /** error 状态时附带的提示。 */
+  error?: string;
+  /** answer_delta 事件时附带的本帧增量字符串。 */
+  chunk?: string;
 }
 
 /** 内置语言列表 — 前端 Settings UI 用，后端只接收原生名字符串拼 prompt。
