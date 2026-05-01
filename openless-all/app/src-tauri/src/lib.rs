@@ -152,6 +152,7 @@ pub fn run() {
             commands::set_settings,
             commands::get_hotkey_status,
             commands::get_hotkey_capability,
+            commands::get_windows_ime_status,
             commands::get_credentials,
             commands::set_credential,
             commands::list_history,

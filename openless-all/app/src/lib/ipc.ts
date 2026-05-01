@@ -11,6 +11,7 @@ import type {
   PermissionStatus,
   PolishMode,
   UserPreferences,
+  WindowsImeStatus,
 } from './types';
 import { OL_DATA } from './mockData';
 
@@ -70,6 +71,13 @@ const mockHotkeyStatus: HotkeyStatus = {
   lastError: null,
 };
 
+const mockWindowsImeStatus: WindowsImeStatus = {
+  state: 'installed',
+  usingTsfBackend: true,
+  message: 'OpenLess TSF IME registration is present',
+  dllPath: 'C:\\Program Files\\OpenLess\\OpenLessIme.dll',
+};
+
 const mockHistory: DictationSession[] = OL_DATA.history.map((h, i) => ({
   id: `mock-${i}`,
   createdAt: new Date().toISOString(),
@@ -108,6 +116,10 @@ export function getHotkeyStatus(): Promise<HotkeyStatus> {
 
 export function getHotkeyCapability(): Promise<HotkeyCapability> {
   return invokeOrMock('get_hotkey_capability', undefined, () => mockHotkeyCapability);
+}
+
+export function getWindowsImeStatus(): Promise<WindowsImeStatus> {
+  return invokeOrMock('get_windows_ime_status', undefined, () => mockWindowsImeStatus);
 }
 
 // ── Credentials ────────────────────────────────────────────────────────

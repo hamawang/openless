@@ -284,6 +284,24 @@ pub struct HotkeyStatus {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub enum WindowsImeInstallState {
+    Installed,
+    NotInstalled,
+    RegistrationBroken,
+    NotWindows,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WindowsImeStatus {
+    pub state: WindowsImeInstallState,
+    pub using_tsf_backend: bool,
+    pub message: String,
+    pub dll_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub enum HotkeyStatusState {
     Starting,
     Installed,

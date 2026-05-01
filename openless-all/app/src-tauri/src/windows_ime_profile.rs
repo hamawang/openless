@@ -2,6 +2,8 @@ pub const OPENLESS_TSF_LANG_ID: u16 = 0x0804;
 pub const OPENLESS_TEXT_SERVICE_CLSID_BRACED: &str = "{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D}";
 pub const OPENLESS_PROFILE_GUID_BRACED: &str = "{9B5F5E04-23F6-47DA-9A26-D221F6C3F02E}";
 
+use crate::types::{WindowsImeInstallState, WindowsImeStatus};
+
 #[cfg(target_os = "windows")]
 fn parse_guid(value: &str) -> WindowsImeProfileResult<windows::core::GUID> {
     uuid::Uuid::parse_str(value)
@@ -101,6 +103,23 @@ impl std::error::Error for WindowsImeProfileError {}
 
 pub type WindowsImeProfileResult<T> = Result<T, WindowsImeProfileError>;
 
+pub fn get_windows_ime_status() -> WindowsImeStatus {
+    #[cfg(target_os = "windows")]
+    {
+        windows_impl::get_windows_ime_status()
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        WindowsImeStatus {
+            state: WindowsImeInstallState::NotWindows,
+            using_tsf_backend: false,
+            message: "Windows TSF IME backend is only available on Windows".to_string(),
+            dll_path: None,
+        }
+    }
+}
+
 #[cfg(target_os = "windows")]
 pub struct WindowsImeProfileManager;
 
@@ -163,6 +182,7 @@ impl WindowsImeProfileManager {
 mod windows_impl {
     use super::*;
     use std::ffi::c_void;
+    use std::path::Path;
     use std::ptr;
     use windows::core::GUID;
     use windows::Win32::System::Com::{
@@ -171,10 +191,16 @@ mod windows_impl {
     };
     use windows::Win32::UI::Input::KeyboardAndMouse::HKL;
     use windows::Win32::UI::TextServices::{
-        CLSID_TF_InputProcessorProfiles, ITfInputProcessorProfileMgr, TF_INPUTPROCESSORPROFILE,
-        GUID_TFCAT_TIP_KEYBOARD, TF_IPPMF_FORPROCESS, TF_PROFILETYPE_INPUTPROCESSOR,
+        CLSID_TF_InputProcessorProfiles, ITfInputProcessorProfileMgr, GUID_TFCAT_TIP_KEYBOARD,
+        TF_INPUTPROCESSORPROFILE, TF_IPPMF_FORPROCESS, TF_PROFILETYPE_INPUTPROCESSOR,
         TF_PROFILETYPE_KEYBOARDLAYOUT,
     };
+    use winreg::enums::HKEY_CURRENT_USER;
+    use winreg::RegKey;
+
+    const OPENLESS_COM_INPROC_KEY: &str =
+        r"Software\Classes\CLSID\{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D}\InprocServer32";
+    const OPENLESS_TSF_PROFILE_KEY: &str = r"Software\Microsoft\CTF\TIP\{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D}\LanguageProfile\0x00000804\{9B5F5E04-23F6-47DA-9A26-D221F6C3F02E}";
 
     struct ComApartment;
 
@@ -282,6 +308,86 @@ mod windows_impl {
                 .map(normalize_guid_string)
                 .as_deref()
                 == Some(OPENLESS_PROFILE_GUID_BRACED))
+    }
+
+    pub fn get_windows_ime_status() -> WindowsImeStatus {
+        match inspect_windows_ime_registration() {
+            RegistrationInspection::Installed { dll_path } => WindowsImeStatus {
+                state: WindowsImeInstallState::Installed,
+                using_tsf_backend: true,
+                message: "OpenLess TSF IME registration is present".to_string(),
+                dll_path: Some(dll_path),
+            },
+            RegistrationInspection::NotInstalled => WindowsImeStatus {
+                state: WindowsImeInstallState::NotInstalled,
+                using_tsf_backend: false,
+                message: "OpenLess TSF IME registration was not found".to_string(),
+                dll_path: None,
+            },
+            RegistrationInspection::Broken { dll_path, reason } => WindowsImeStatus {
+                state: WindowsImeInstallState::RegistrationBroken,
+                using_tsf_backend: false,
+                message: reason,
+                dll_path,
+            },
+        }
+    }
+
+    enum RegistrationInspection {
+        Installed {
+            dll_path: String,
+        },
+        NotInstalled,
+        Broken {
+            dll_path: Option<String>,
+            reason: String,
+        },
+    }
+
+    fn inspect_windows_ime_registration() -> RegistrationInspection {
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        let com_key = hkcu.open_subkey(OPENLESS_COM_INPROC_KEY);
+        let tip_key_exists = hkcu.open_subkey(OPENLESS_TSF_PROFILE_KEY).is_ok();
+
+        if com_key.is_err() && !tip_key_exists {
+            return RegistrationInspection::NotInstalled;
+        }
+
+        let com_key = match com_key {
+            Ok(key) => key,
+            Err(_) => {
+                return RegistrationInspection::Broken {
+                    dll_path: None,
+                    reason: "OpenLess COM registration is missing".to_string(),
+                };
+            }
+        };
+
+        let dll_path: String = match com_key.get_value::<String, _>("") {
+            Ok(value) if !value.trim().is_empty() => value,
+            _ => {
+                return RegistrationInspection::Broken {
+                    dll_path: None,
+                    reason: "OpenLess COM DLL path is missing".to_string(),
+                };
+            }
+        };
+
+        if !Path::new(&dll_path).is_file() {
+            return RegistrationInspection::Broken {
+                dll_path: Some(dll_path),
+                reason: "OpenLess COM DLL path does not exist".to_string(),
+            };
+        }
+
+        if !tip_key_exists {
+            return RegistrationInspection::Broken {
+                dll_path: Some(dll_path),
+                reason: "OpenLess TSF language profile registration is missing".to_string(),
+            };
+        }
+
+        RegistrationInspection::Installed { dll_path }
     }
 
     fn with_profile_manager<T>(

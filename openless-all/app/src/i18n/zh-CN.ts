@@ -281,6 +281,16 @@ export const zhCN = {
       hotkeyInstalled: '已安装',
       hotkeyStarting: '安装中…',
       hotkeyFailed: '监听失败',
+      windowsImeLabel: 'Windows 输入法后端',
+      windowsImeDesc: '用于在语音会话期间临时切换到 OpenLess TSF 输入法，避免剪贴板插入限制。',
+      windowsImeInstalled: '已安装',
+      windowsImeUnavailable: '不可用',
+      windowsIme: {
+        installed: '已安装。语音输入时会临时切换到 OpenLess 输入法。',
+        notInstalled: '未安装。OpenLess 正在使用剪贴板 / WM_PASTE 兜底。',
+        registrationBroken: '注册已损坏。请重新安装 OpenLess 输入法。',
+        notWindows: '仅 Windows 可用。',
+      },
     },
     language: {
       title: '界面语言',

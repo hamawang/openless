@@ -71,6 +71,19 @@ export interface HotkeyStatus {
   lastError: HotkeyInstallError | null;
 }
 
+export type WindowsImeInstallState =
+  | 'installed'
+  | 'notInstalled'
+  | 'registrationBroken'
+  | 'notWindows';
+
+export interface WindowsImeStatus {
+  state: WindowsImeInstallState;
+  usingTsfBackend: boolean;
+  message: string;
+  dllPath: string | null;
+}
+
 export interface UserPreferences {
   hotkey: HotkeyBinding;
   defaultMode: PolishMode;

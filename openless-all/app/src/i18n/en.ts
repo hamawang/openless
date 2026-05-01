@@ -283,6 +283,16 @@ export const en: typeof zhCN = {
       hotkeyInstalled: 'Installed',
       hotkeyStarting: 'Installing…',
       hotkeyFailed: 'Listener failed',
+      windowsImeLabel: 'Windows input method backend',
+      windowsImeDesc: 'Temporarily switches to the OpenLess TSF IME during voice sessions to avoid clipboard insertion limits.',
+      windowsImeInstalled: 'Installed',
+      windowsImeUnavailable: 'Unavailable',
+      windowsIme: {
+        installed: 'Installed. Voice input temporarily switches to the OpenLess IME.',
+        notInstalled: 'Not installed. OpenLess is using the clipboard/WM_PASTE fallback.',
+        registrationBroken: 'Registration is broken. Reinstall the OpenLess IME.',
+        notWindows: 'Only available on Windows.',
+      },
     },
     language: {
       title: 'Interface language',
