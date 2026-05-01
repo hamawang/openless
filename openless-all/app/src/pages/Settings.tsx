@@ -428,12 +428,7 @@ function ProviderTools({ kind, modelAccount, onModelSelected }: { kind: 'llm' | 
     setResult('loading', t('settings.providers.validating'));
     try {
       const result = await validateProviderCredentials(kind);
-      setResult(
-        result.ok ? (result.modelCount === 0 ? 'empty' : 'success') : 'error',
-        result.modelCount === 0
-          ? t('settings.providers.modelsEmpty')
-          : t('settings.providers.validateSuccess', { count: result.modelCount }),
-      );
+      setResult(result.ok ? 'success' : 'error', t('settings.providers.validateSuccess'));
     } catch (error) {
       setResult('error', providerErrorMessage(error, t));
     }
