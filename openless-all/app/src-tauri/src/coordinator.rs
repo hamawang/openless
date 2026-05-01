@@ -516,9 +516,7 @@ fn qa_hotkey_supervisor_loop(inner: Arc<Inner>) {
             Err(e) => {
                 attempts += 1;
                 if attempts <= 3 || attempts % 10 == 0 {
-                    log::warn!(
-                        "[coord] QA hotkey 第 {attempts} 次注册失败: {e}; 3s 后重试"
-                    );
+                    log::warn!("[coord] QA hotkey 第 {attempts} 次注册失败: {e}; 3s 后重试");
                 }
                 std::thread::sleep(std::time::Duration::from_secs(3));
             }
@@ -756,6 +754,15 @@ async fn handle_window_hotkey_event(
 
     #[cfg(target_os = "windows")]
     {
+        if !window_hotkey_fallback_enabled() {
+            if event_type == "keydown" && !repeat {
+                log::info!(
+                    "[window-hotkey] ignored because Windows lifecycle owner is the low-level hook"
+                );
+            }
+            return Ok(());
+        }
+
         let trigger = inner.prefs.get().hotkey.trigger;
         if !window_key_matches_trigger(trigger, &key, &code) {
             return Ok(());
@@ -779,6 +786,10 @@ async fn handle_window_hotkey_event(
         }
         Ok(())
     }
+}
+
+fn window_hotkey_fallback_enabled() -> bool {
+    crate::types::HotkeyCapability::current().explicit_fallback_available
 }
 
 #[cfg(any(target_os = "windows", test))]
@@ -820,7 +831,9 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
         }
     }
     // 翻译模式标志重置；hotkey 监听器在 Shift down 时再 set true。
-    inner.translation_modifier_seen.store(false, Ordering::SeqCst);
+    inner
+        .translation_modifier_seen
+        .store(false, Ordering::SeqCst);
 
     #[cfg(any(debug_assertions, test))]
     if hotkey_injection_dry_run_enabled() {
@@ -1192,6 +1205,19 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
 
     // ASR 返回空转写护栏（来自 PR #66）：写一条 emptyTranscript 失败历史 + 错误胶囊，
     // 与 main 上其它 error 路径保持一致（带 schedule_capsule_idle 让胶囊自动消失）。
+    let mut raw = raw;
+
+    #[cfg(any(debug_assertions, test))]
+    if raw.text.trim().is_empty() {
+        if let Some(debug_text) = debug_transcript_override_text() {
+            log::info!(
+                "[coord] using debug transcript override (chars={})",
+                debug_text.chars().count()
+            );
+            raw.text = debug_text;
+        }
+    }
+
     if raw.text.trim().is_empty() {
         let session = DictationSession {
             id: Uuid::new_v4().to_string(),
@@ -1230,8 +1256,8 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     let working_languages = prefs.working_languages.clone();
     let front_app = inner.state.lock().front_app.clone();
     let translation_target = prefs.translation_target_language.trim().to_string();
-    let translation_active = inner.translation_modifier_seen.load(Ordering::SeqCst)
-        && !translation_target.is_empty();
+    let translation_active =
+        inner.translation_modifier_seen.load(Ordering::SeqCst) && !translation_target.is_empty();
     let (polished, polish_error) = if translation_active {
         log::info!(
             "[coord] translation mode → target=\u{300C}{}\u{300D} working={:?} front_app={:?}",
@@ -1409,6 +1435,18 @@ fn cancel_session(inner: &Arc<Inner>) {
 #[cfg(any(debug_assertions, test))]
 fn hotkey_injection_dry_run_enabled() -> bool {
     std::env::var_os("OPENLESS_HOTKEY_INJECTION_DRY_RUN").is_some()
+}
+
+#[cfg(any(debug_assertions, test))]
+fn debug_transcript_override_text() -> Option<String> {
+    let path = std::env::var_os("OPENLESS_DEBUG_TRANSCRIPT_FILE")?;
+    let text = std::fs::read_to_string(path).ok()?;
+    let trimmed = text.trim().to_string();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
 }
 
 fn ensure_microphone_permission(inner: &Arc<Inner>) -> Result<(), String> {
@@ -1702,11 +1740,7 @@ async fn begin_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
             *last = Some(now);
         }
         if let Some(app) = inner_for_level.app.lock().clone() {
-            let _ = app.emit_to(
-                "qa",
-                "qa:level",
-                serde_json::json!({ "level": level }),
-            );
+            let _ = app.emit_to("qa", "qa:level", serde_json::json!({ "level": level }));
         }
         // 同步把电平推给底部胶囊，让 QA 录音也有跟主听写一致的可视反馈。
         emit_capsule(
@@ -1778,11 +1812,7 @@ async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
     emit_capsule(inner, CapsuleState::Transcribing, 0.0, 0, None, None);
 
     if let Some(app) = inner.app.lock().clone() {
-        let _ = app.emit_to(
-            "qa",
-            "qa:state",
-            serde_json::json!({ "kind": "loading" }),
-        );
+        let _ = app.emit_to("qa", "qa:state", serde_json::json!({ "kind": "loading" }));
     }
 
     if let Some(rec) = inner.qa_recorder.lock().take() {
@@ -1845,10 +1875,14 @@ async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
         }
     };
 
-    inner.qa_state.lock().messages.push(crate::types::QaChatMessage {
-        role: "user".to_string(),
-        content: user_content,
-    });
+    inner
+        .qa_state
+        .lock()
+        .messages
+        .push(crate::types::QaChatMessage {
+            role: "user".to_string(),
+            content: user_content,
+        });
 
     if let Some(app) = inner.app.lock().clone() {
         let messages = inner.qa_state.lock().messages.clone();
@@ -1914,10 +1948,14 @@ async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
         return Ok(());
     }
 
-    inner.qa_state.lock().messages.push(crate::types::QaChatMessage {
-        role: "assistant".to_string(),
-        content: answer.clone(),
-    });
+    inner
+        .qa_state
+        .lock()
+        .messages
+        .push(crate::types::QaChatMessage {
+            role: "assistant".to_string(),
+            content: answer.clone(),
+        });
 
     if let Some(app) = inner.app.lock().clone() {
         let messages = inner.qa_state.lock().messages.clone();
@@ -2195,6 +2233,14 @@ mod tests {
         );
         assert!(coordinator.inner.hotkey_trigger_held.load(Ordering::SeqCst));
     }
+
+    #[test]
+    fn window_hotkey_fallback_is_disabled_when_no_explicit_fallback_is_advertised() {
+        assert_eq!(
+            window_hotkey_fallback_enabled(),
+            crate::types::HotkeyCapability::current().explicit_fallback_available
+        );
+    }
 }
 
 fn enabled_phrases(inner: &Arc<Inner>) -> Vec<String> {
@@ -2433,6 +2479,42 @@ fn show_capsule_window_no_activate() -> bool {
     false
 }
 
+#[cfg(target_os = "windows")]
+fn hide_capsule_window_if_present() {
+    use std::iter::once;
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        FindWindowW, SetWindowPos, ShowWindow, HWND_NOTOPMOST, SWP_HIDEWINDOW, SWP_NOACTIVATE,
+        SWP_NOMOVE, SWP_NOSIZE, SW_HIDE,
+    };
+
+    let title: Vec<u16> = "OpenLess Capsule".encode_utf16().chain(once(0)).collect();
+    let hwnd = match unsafe { FindWindowW(PCWSTR::null(), PCWSTR(title.as_ptr())) } {
+        Ok(hwnd) => hwnd,
+        Err(_) => return,
+    };
+    if hwnd == HWND::default() || hwnd.0.is_null() {
+        return;
+    }
+
+    let _ = unsafe { ShowWindow(hwnd, SW_HIDE) };
+    let _ = unsafe {
+        SetWindowPos(
+            hwnd,
+            HWND_NOTOPMOST,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_HIDEWINDOW,
+        )
+    };
+}
+
+#[cfg(not(target_os = "windows"))]
+fn hide_capsule_window_if_present() {}
+
 fn emit_capsule(
     inner: &Arc<Inner>,
     state: CapsuleState,
@@ -2454,17 +2536,11 @@ fn emit_capsule(
 
     let show_capsule = inner.prefs.get().show_capsule;
     if let Some(window) = app.get_webview_window("capsule") {
-        let visible = !matches!(state, CapsuleState::Idle);
+        let visible = matches!(
+            state,
+            CapsuleState::Recording | CapsuleState::Transcribing | CapsuleState::Polishing
+        );
         maybe_position_capsule_bottom_center(inner, &window, payload.translation);
-        #[cfg(target_os = "windows")]
-        {
-            // The capsule is always-on-top on Windows. Once recording stops, it must
-            // stop intercepting clicks meant for the app underneath.
-            let accepts_cursor_events = matches!(state, CapsuleState::Recording);
-            if let Err(e) = window.set_ignore_cursor_events(!accepts_cursor_events) {
-                log::warn!("[capsule] set_ignore_cursor_events failed: {e}");
-            }
-        }
         if show_capsule && visible {
             if cfg!(target_os = "windows") {
                 if !show_capsule_window_no_activate() {
@@ -2478,6 +2554,7 @@ fn emit_capsule(
             #[cfg(target_os = "macos")]
             crate::restore_main_window_key_if_active(&app);
         } else {
+            hide_capsule_window_if_present();
             let _ = window.hide();
         }
     }

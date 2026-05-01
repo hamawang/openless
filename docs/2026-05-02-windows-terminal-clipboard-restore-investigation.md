@@ -146,6 +146,59 @@ Interpretation:
 - therefore the user-reported failure is not a blanket “all terminal paste on Windows fails at 150ms” statement
 - the failure requires an additional condition beyond “target is a terminal”, such as a slower paste consumer, extra lifecycle delay, or OpenLess-specific sequencing around focus restoration and session completion
 
+### 4. Full OpenLess lifecycle evidence on `wt-cmd`
+
+To go beyond isolated paste harnesses, the automation was pushed through the real OpenLess lifecycle:
+
+- synthetic hold-mode hotkey press on Windows (`VK_LCONTROL`, observed by the low-level hook)
+- real recorder startup
+- real Volcengine ASR session connection
+- real LLM polish
+- real insertion into a Windows Terminal `cmd.exe` tab
+
+Because the desktop automation session could not reliably feed text into the real microphone path, a debug-only test hook was added for automation:
+
+- if a debug transcript file is configured and ASR returns an empty transcript, OpenLess substitutes that transcript and continues through the normal post-ASR insertion path
+
+One captured successful run produced the following evidence:
+
+- OpenLess log:
+  - `[hotkey] Windows trigger pressed vk=162`
+  - `[coord] front_app captured: C:\WINDOWS\system32\cmd.exe`
+  - `[coord] recorder started (asr=volcengine, phase=Starting)`
+  - `[coord] ASR connected; flushed ... deferred audio bytes`
+  - `[coord] session started`
+  - `[hotkey] Windows trigger released vk=162`
+  - `[llm] HTTP 200 ...`
+
+- History record:
+
+```json
+{
+  "rawTranscript": "瀑布它的白沫其实非常喜欢。",
+  "finalText": "瀑布的白沫其实非常喜欢。",
+  "insertStatus": "pasteSent"
+}
+```
+
+- Windows Terminal `cmd.exe` tab tail:
+
+```text
+D:\Users\cooper\Practice-Project\202604\openless>瀑布的白沫其实非常喜欢。
+```
+
+Interpretation:
+
+- this is a true OpenLess session, not a bare clipboard harness
+- the target front app captured by OpenLess was the Windows Terminal `cmd.exe` tab
+- the final inserted text visible at the terminal prompt matched the polished `finalText`
+- in this captured run, the terminal did **not** paste the pre-dictation clipboard contents
+
+Residual caveat:
+
+- repeated re-runs in the same desktop session later hit intermittent startup/hook-install flakiness before the test reached insertion again
+- that flakiness affected test repeatability, but it does not invalidate the already captured successful full-lifecycle evidence above
+
 ## Root cause
 
 Root cause: Windows `PasteSent` semantics were treated as if they implied paste completion.

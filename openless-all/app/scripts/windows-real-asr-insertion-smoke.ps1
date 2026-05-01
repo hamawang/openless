@@ -1,10 +1,11 @@
 param(
   [string]$ExePath = "",
-  [ValidateSet("notepad", "browser")]
+  [ValidateSet("notepad", "browser", "wt-cmd", "wt-powershell")]
   [string]$Target = "notepad",
   [string]$Phrase = "OpenLess Windows real regression",
   [int]$TimeoutSeconds = 120,
-  [int]$VirtualKey = 0xA3,
+  [int]$VirtualKey = 0xA2,
+  [string]$InjectedTranscriptText = "",
   [int]$ManualSpeechSeconds = 8,
   [switch]$ManualSpeech,
   [switch]$DebugHotkeyEvents
@@ -83,6 +84,14 @@ function Write-TextUtf8($Path, $Text) {
   [System.IO.File]::WriteAllText($Path, $Text, [System.Text.UTF8Encoding]::new($false))
 }
 
+function Restore-ClipboardValue($Value) {
+  if ($null -eq $Value) {
+    cmd /c "echo off | clip" | Out-Null
+    return
+  }
+  Set-Clipboard -Value $Value
+}
+
 function Set-HoldHotkeyPreference($Path) {
   $previous = Read-TextUtf8 $Path
   if ([string]::IsNullOrWhiteSpace($previous)) {
@@ -94,9 +103,9 @@ function Set-HoldHotkeyPreference($Path) {
     $prefs | Add-Member -NotePropertyName hotkey -NotePropertyValue ([pscustomobject]@{})
   }
   if ($null -eq $prefs.hotkey.PSObject.Properties["trigger"]) {
-    $prefs.hotkey | Add-Member -NotePropertyName trigger -NotePropertyValue "rightControl"
+    $prefs.hotkey | Add-Member -NotePropertyName trigger -NotePropertyValue "leftControl"
   } else {
-    $prefs.hotkey.trigger = "rightControl"
+    $prefs.hotkey.trigger = "leftControl"
   }
   if ($null -eq $prefs.hotkey.PSObject.Properties["mode"]) {
     $prefs.hotkey | Add-Member -NotePropertyName mode -NotePropertyValue "hold"
@@ -109,6 +118,11 @@ function Set-HoldHotkeyPreference($Path) {
   if ($null -eq $prefs.showCapsule) { $prefs | Add-Member -NotePropertyName showCapsule -NotePropertyValue $true }
   if ($null -eq $prefs.activeAsrProvider) { $prefs | Add-Member -NotePropertyName activeAsrProvider -NotePropertyValue "volcengine" }
   if ($null -eq $prefs.activeLlmProvider) { $prefs | Add-Member -NotePropertyName activeLlmProvider -NotePropertyValue "ark" }
+  if ($null -eq $prefs.restoreClipboardAfterPaste) {
+    $prefs | Add-Member -NotePropertyName restoreClipboardAfterPaste -NotePropertyValue $true
+  } else {
+    $prefs.restoreClipboardAfterPaste = $true
+  }
   Write-TextUtf8 $Path ($prefs | ConvertTo-Json -Depth 8)
   return $previous
 }
@@ -182,6 +196,23 @@ function Press-Hotkey {
 
 function Release-Hotkey {
   Send-KeyEdge $VirtualKey $true $true
+}
+
+function Ensure-TargetFocused($TargetInfo) {
+  if ($null -eq $TargetInfo) {
+    return $false
+  }
+  if ($TargetInfo.TargetTitle) {
+    $wshell = New-Object -ComObject WScript.Shell
+    if ($wshell.AppActivate($TargetInfo.TargetTitle)) {
+      Start-Sleep -Milliseconds 500
+      return $true
+    }
+  }
+  if ($null -ne $TargetInfo.Process) {
+    return (Focus-Window $TargetInfo.Process)
+  }
+  return $false
 }
 
 function Focus-Window($Process) {
@@ -280,12 +311,77 @@ function Stop-BrowserProfileProcesses($ProfilePath) {
 function Start-InputTarget($TargetName) {
   $startedAt = Get-Date
   if ($TargetName -eq "notepad") {
-    Start-Process notepad.exe | Out-Null
-    $process = Wait-ProcessWindow "notepad" $startedAt 15
-    if (-not (Focus-Window $process)) {
-      throw "Notepad window could not be focused."
+    $fixture = Join-Path $env:TEMP "openless-notepad-input-fixture.txt"
+    Write-TextUtf8 $fixture ""
+    $process = Start-Process notepad.exe -ArgumentList $fixture -PassThru
+    Start-Sleep -Seconds 2
+    $title = "openless-notepad-input-fixture.txt - Notepad"
+    $activateScript = @"
+import sys, time, win32com.client
+title = sys.argv[1]
+shell = win32com.client.Dispatch('WScript.Shell')
+deadline = time.time() + 10
+while time.time() < deadline:
+    if shell.AppActivate(title):
+        print('activated')
+        raise SystemExit(0)
+    time.sleep(0.2)
+raise SystemExit(1)
+"@
+    $activatePath = Join-Path $env:TEMP "openless-activate-notepad.py"
+    Write-TextUtf8 $activatePath $activateScript
+    try {
+      python $activatePath $title | Out-Null
+    } finally {
+      Remove-Item -LiteralPath $activatePath -Force -ErrorAction SilentlyContinue
     }
-    return [pscustomobject]@{ Process = $process; FixturePath = $null; ProfilePath = $null }
+    Start-Sleep -Milliseconds 800
+    return [pscustomobject]@{
+      Process = $process
+      FixturePath = $fixture
+      ProfilePath = $null
+      TargetTitle = $title
+      TargetPid = $process.Id
+      TargetKind = "notepad"
+    }
+  }
+
+  if ($TargetName -in @("wt-cmd", "wt-powershell")) {
+    $wt = Get-Command wt.exe -ErrorAction SilentlyContinue
+    if ($null -eq $wt) {
+      throw "wt.exe was not found."
+    }
+    $profile = if ($TargetName -eq "wt-cmd") { "cmd.exe" } else { "powershell.exe" }
+    Start-Process -FilePath $wt.Source -ArgumentList @("new-tab", $profile) | Out-Null
+    Start-Sleep -Seconds 2
+    $title = if ($TargetName -eq "wt-cmd") { "C:\WINDOWS\system32\cmd.exe" } else { "Windows PowerShell" }
+    $activateScript = @"
+import sys, time, win32com.client
+title = sys.argv[1]
+shell = win32com.client.Dispatch('WScript.Shell')
+deadline = time.time() + 10
+while time.time() < deadline:
+    if shell.AppActivate(title):
+        print('activated')
+        raise SystemExit(0)
+    time.sleep(0.2)
+raise SystemExit(1)
+"@
+    $activatePath = Join-Path $env:TEMP "openless-activate-target.py"
+    Write-TextUtf8 $activatePath $activateScript
+    try {
+      python $activatePath $title | Out-Null
+    } finally {
+      Remove-Item -LiteralPath $activatePath -Force -ErrorAction SilentlyContinue
+    }
+    Start-Sleep -Milliseconds 800
+    return [pscustomobject]@{
+      Process = $null
+      FixturePath = $null
+      ProfilePath = $null
+      TargetTitle = $title
+      TargetKind = "terminal"
+    }
   }
 
   $browserPath = Resolve-BrowserPath
@@ -307,7 +403,100 @@ function Start-InputTarget($TargetName) {
     throw "Browser window could not be focused."
   }
   Start-Sleep -Seconds 1
-  return [pscustomobject]@{ Process = $process; FixturePath = $fixture; ProfilePath = $profilePath }
+  return [pscustomobject]@{ Process = $process; FixturePath = $fixture; ProfilePath = $profilePath; TargetKind = "browser" }
+}
+
+function Read-TargetContent($TargetInfo, $TargetName) {
+  if ($TargetName -eq "notepad") {
+    $readbackScript = @"
+import sys
+from pywinauto import Desktop
+
+pid = int(sys.argv[1])
+title = sys.argv[2]
+out = sys.argv[3]
+windows = [w for w in Desktop(backend='uia').windows() if getattr(w, 'process_id', lambda: None)() == pid]
+win = None
+for candidate in windows:
+    if candidate.window_text() == title:
+        win = candidate
+        break
+if win is None and windows:
+    win = windows[0]
+if win is None:
+    raise SystemExit(2)
+for descendant in win.descendants():
+    if descendant.class_name() == 'RichEditD2DPT':
+        descendant.set_focus()
+        descendant.type_keys('^a^c')
+        import win32clipboard, win32con
+        win32clipboard.OpenClipboard()
+        try:
+            value = win32clipboard.GetClipboardData(win32con.CF_UNICODETEXT)
+        finally:
+            win32clipboard.CloseClipboard()
+        open(out, 'w', encoding='utf-8').write(value)
+        raise SystemExit(0)
+raise SystemExit(1)
+"@
+    $readbackPath = Join-Path $env:TEMP "openless-notepad-readback.py"
+    $outputPath = Join-Path $env:TEMP "openless-notepad-readback.txt"
+    Write-TextUtf8 $readbackPath $readbackScript
+    try {
+      Remove-Item -LiteralPath $outputPath -Force -ErrorAction SilentlyContinue
+      python -X utf8 $readbackPath $TargetInfo.TargetPid $TargetInfo.TargetTitle $outputPath | Out-Null
+      Start-Sleep -Milliseconds 400
+      if (Test-Path $outputPath) {
+        return Get-Content -Raw -Encoding UTF8 $outputPath
+      }
+      return $null
+    } finally {
+      Remove-Item -LiteralPath $readbackPath -Force -ErrorAction SilentlyContinue
+      Remove-Item -LiteralPath $outputPath -Force -ErrorAction SilentlyContinue
+    }
+  }
+
+  if ($TargetName -eq "browser") {
+    Focus-Window $TargetInfo.Process | Out-Null
+    Start-Sleep -Milliseconds 400
+    Send-CtrlChord 0x41
+    Start-Sleep -Milliseconds 200
+    Send-CtrlChord 0x43
+    Start-Sleep -Milliseconds 400
+    return Get-Clipboard -Raw -ErrorAction SilentlyContinue
+  }
+
+  if ($TargetName -in @("wt-cmd", "wt-powershell")) {
+    $readbackScript = @"
+import sys
+from pywinauto import Desktop
+
+title = sys.argv[1]
+out = sys.argv[2]
+win = Desktop(backend='uia').window(title=title)
+for descendant in win.descendants():
+    if descendant.class_name() == 'TermControl':
+        open(out, 'w', encoding='utf-8').write(descendant.window_text())
+        raise SystemExit(0)
+raise SystemExit(1)
+"@
+    $readbackPath = Join-Path $env:TEMP "openless-terminal-readback.py"
+    $outputPath = Join-Path $env:TEMP "openless-terminal-readback.txt"
+    Write-TextUtf8 $readbackPath $readbackScript
+    try {
+      Remove-Item -LiteralPath $outputPath -Force -ErrorAction SilentlyContinue
+      python -X utf8 $readbackPath $TargetInfo.TargetTitle $outputPath | Out-Null
+      if (Test-Path $outputPath) {
+        return Get-Content -Raw -Encoding UTF8 $outputPath
+      }
+      return $null
+    } finally {
+      Remove-Item -LiteralPath $readbackPath -Force -ErrorAction SilentlyContinue
+      Remove-Item -LiteralPath $outputPath -Force -ErrorAction SilentlyContinue
+    }
+  }
+
+  return $null
 }
 
 function Send-CtrlChord($Vk) {
@@ -338,6 +527,14 @@ $historyPath = Join-Path $env:APPDATA "OpenLess\history.json"
 $preferencesPath = Join-Path $env:APPDATA "OpenLess\preferences.json"
 $baselineCount = Get-HistoryCount $historyPath
 $previousPreferences = Set-HoldHotkeyPreference $preferencesPath
+$previousClipboard = Get-Clipboard -Raw -ErrorAction SilentlyContinue
+$clipboardSentinel = "OPENLESS_OLD_CLIPBOARD_SENTINEL_$(Get-Date -Format 'yyyyMMddHHmmssfff')"
+Restore-ClipboardValue $clipboardSentinel
+$debugTranscriptPath = $null
+if (-not [string]::IsNullOrWhiteSpace($InjectedTranscriptText)) {
+  $debugTranscriptPath = Join-Path $env:TEMP "openless-debug-transcript.txt"
+  Write-TextUtf8 $debugTranscriptPath $InjectedTranscriptText
+}
 
 Get-Process openless -ErrorAction SilentlyContinue | Stop-Process -Force
 Remove-Item -LiteralPath $logPath -Force -ErrorAction SilentlyContinue
@@ -348,12 +545,16 @@ $env:OPENLESS_ACCEPT_SYNTHETIC_HOTKEY_EVENTS = "1"
 if ($DebugHotkeyEvents) {
   $env:OPENLESS_DEBUG_HOTKEY_EVENTS = "1"
 }
+if ($debugTranscriptPath) {
+  $env:OPENLESS_DEBUG_TRANSCRIPT_FILE = $debugTranscriptPath
+}
 try {
   $openless = Start-Process -FilePath $ExePath -WorkingDirectory (Split-Path $ExePath -Parent) -PassThru
 } finally {
   Remove-Item Env:OPENLESS_SHOW_MAIN_ON_START -ErrorAction SilentlyContinue
   Remove-Item Env:OPENLESS_ACCEPT_SYNTHETIC_HOTKEY_EVENTS -ErrorAction SilentlyContinue
   Remove-Item Env:OPENLESS_DEBUG_HOTKEY_EVENTS -ErrorAction SilentlyContinue
+  Remove-Item Env:OPENLESS_DEBUG_TRANSCRIPT_FILE -ErrorAction SilentlyContinue
 }
 
 $inputTarget = $null
@@ -364,9 +565,18 @@ try {
 
   $inputTarget = Start-InputTarget $Target
 
-  Press-Hotkey
-  if (-not (Wait-LogPattern $logPath "\[hotkey\] Windows trigger pressed" 10)) {
-    throw "Windows low-level hook did not observe the right Control press."
+  $observedPress = $false
+  for ($attempt = 1; $attempt -le 3 -and -not $observedPress; $attempt++) {
+    Ensure-TargetFocused $inputTarget | Out-Null
+    Press-Hotkey
+    $observedPress = Wait-LogPattern $logPath "\[hotkey\] Windows trigger pressed" 4
+    if (-not $observedPress) {
+      Release-Hotkey
+      Start-Sleep -Milliseconds 500
+    }
+  }
+  if (-not $observedPress) {
+    throw "Windows low-level hook did not observe the synthetic Control press."
   }
   if (-not (Wait-LogPattern $logPath "\[coord\] session started" 30)) {
     throw "OpenLess recording session did not start."
@@ -399,18 +609,15 @@ try {
     throw "Expected Windows insertStatus pasteSent after guarded foreground restore, got '$($latest.insertStatus)'."
   }
 
-  Focus-Window $inputTarget.Process | Out-Null
-  Start-Sleep -Milliseconds 400
-  Send-CtrlChord 0x41
-  Start-Sleep -Milliseconds 200
-  Send-CtrlChord 0x43
-  Start-Sleep -Milliseconds 400
-  $targetText = Get-Clipboard -Raw -ErrorAction SilentlyContinue
+  $targetText = Read-TargetContent $inputTarget $Target
 
   if ([string]::IsNullOrWhiteSpace($targetText)) {
-    throw "$Target clipboard readback is empty after Ctrl+A/C."
+    throw "$Target readback is empty."
   }
   if (-not $targetText.Contains($latest.finalText)) {
+    if ($targetText.Contains($clipboardSentinel)) {
+      throw "$Target readback contains the pre-dictation clipboard sentinel instead of latest finalText."
+    }
     throw "$Target readback does not contain latest finalText; insertion was not proven at the target caret."
   }
 
@@ -422,7 +629,7 @@ try {
   if ($null -ne $inputTarget) {
     if ($inputTarget.ProfilePath) {
       Stop-BrowserProfileProcesses $inputTarget.ProfilePath
-    } else {
+    } elseif ($null -ne $inputTarget.Process) {
       Stop-Process -Id $inputTarget.Process.Id -Force -ErrorAction SilentlyContinue
     }
     if ($inputTarget.FixturePath) {
@@ -437,6 +644,10 @@ try {
     Remove-Item -LiteralPath $preferencesPath -Force -ErrorAction SilentlyContinue
   } else {
     Write-TextUtf8 $preferencesPath $previousPreferences
+  }
+  Restore-ClipboardValue $previousClipboard
+  if ($debugTranscriptPath) {
+    Remove-Item -LiteralPath $debugTranscriptPath -Force -ErrorAction SilentlyContinue
   }
 }
 
