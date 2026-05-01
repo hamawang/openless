@@ -1,5 +1,5 @@
 param(
-  [ValidateSet("all", "msvc", "gnu")]
+  [ValidateSet("all", "msvc", "gnu", "ime")]
   [string]$Toolchain = "all"
 )
 
@@ -15,6 +15,34 @@ function Test-Command($Name) {
   }
   Write-Host "[missing] $Name"
   return $false
+}
+
+function Find-MSBuild {
+  $cmd = Get-Command MSBuild.exe -ErrorAction SilentlyContinue
+  if ($cmd) {
+    return $cmd.Source
+  }
+
+  $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+  if (Test-Path $vswhere) {
+    $found = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -find "MSBuild\Current\Bin\MSBuild.exe" 2>$null |
+      Select-Object -First 1
+    if ($found -and (Test-Path $found)) {
+      return $found
+    }
+  }
+
+  $candidates = @(
+    "${env:ProgramFiles}\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\MSBuild.exe",
+    "${env:ProgramFiles}\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\MSBuild.exe"
+  )
+  foreach ($candidate in $candidates) {
+    if (Test-Path $candidate) {
+      return $candidate
+    }
+  }
+
+  return $null
 }
 
 function Find-Kernel32Lib {
@@ -97,6 +125,28 @@ if ($Toolchain -eq "all" -or $Toolchain -eq "gnu") {
   }
   if ((Get-Location).Path -match "\s") {
     Write-Host "[warn] Current path contains spaces. Use scripts/windows-build-gnu.ps1 or build from a no-space path."
+  }
+}
+
+if ($Toolchain -eq "all" -or $Toolchain -eq "ime") {
+  Write-Host ""
+  Write-Host "== Windows IME route =="
+  $msbuild = Find-MSBuild
+  if ($msbuild) {
+    Write-Host "[ok] MSBuild.exe -> $msbuild"
+  } else {
+    Write-Host "[missing] MSBuild.exe"
+    Write-Host "[hint] Install Visual Studio Build Tools workload 'Desktop development with C++'."
+    $failed = $true
+  }
+
+  $kernel32 = Find-Kernel32Lib
+  if ($kernel32) {
+    Write-Host "[ok] kernel32.lib -> $kernel32"
+  } else {
+    Write-Host "[missing] kernel32.lib"
+    Write-Host "[hint] Install a Windows 10/11 SDK with x64 libraries."
+    $failed = $true
   }
 }
 
