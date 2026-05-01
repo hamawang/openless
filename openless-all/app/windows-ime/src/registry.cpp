@@ -102,6 +102,12 @@ HRESULT CreateProfiles(ITfInputProcessorProfiles** profiles) {
                           reinterpret_cast<void**>(profiles));
 }
 
+HRESULT CreateCategoryManager(ITfCategoryMgr** category_mgr) {
+  return CoCreateInstance(CLSID_TF_CategoryMgr, nullptr, CLSCTX_INPROC_SERVER,
+                          IID_ITfCategoryMgr,
+                          reinterpret_cast<void**>(category_mgr));
+}
+
 HRESULT RegisterLanguageProfile() {
   ScopedComInit com;
   HRESULT hr = com.hr();
@@ -132,6 +138,26 @@ HRESULT RegisterLanguageProfile() {
   return hr;
 }
 
+HRESULT RegisterKeyboardCategory() {
+  ScopedComInit com;
+  HRESULT hr = com.hr();
+  if (FAILED(hr)) {
+    return hr;
+  }
+
+  ITfCategoryMgr* category_mgr = nullptr;
+  hr = CreateCategoryManager(&category_mgr);
+  if (FAILED(hr)) {
+    return hr;
+  }
+
+  hr = category_mgr->RegisterCategory(CLSID_OpenLessTextService,
+                                      GUID_TFCAT_TIP_KEYBOARD,
+                                      CLSID_OpenLessTextService);
+  category_mgr->Release();
+  return hr;
+}
+
 HRESULT UnregisterLanguageProfile() {
   ScopedComInit com;
   HRESULT hr = com.hr();
@@ -150,6 +176,26 @@ HRESULT UnregisterLanguageProfile() {
   return hr;
 }
 
+HRESULT UnregisterKeyboardCategory() {
+  ScopedComInit com;
+  HRESULT hr = com.hr();
+  if (FAILED(hr)) {
+    return hr;
+  }
+
+  ITfCategoryMgr* category_mgr = nullptr;
+  hr = CreateCategoryManager(&category_mgr);
+  if (FAILED(hr)) {
+    return hr;
+  }
+
+  hr = category_mgr->UnregisterCategory(CLSID_OpenLessTextService,
+                                        GUID_TFCAT_TIP_KEYBOARD,
+                                        CLSID_OpenLessTextService);
+  category_mgr->Release();
+  return hr;
+}
+
 }  // namespace
 
 HRESULT RegisterOpenLessTextService(HINSTANCE module) {
@@ -165,12 +211,23 @@ HRESULT RegisterOpenLessTextService(HINSTANCE module) {
   hr = RegisterLanguageProfile();
   if (FAILED(hr)) {
     DeleteComServerRegistration();
+    return hr;
+  }
+
+  hr = RegisterKeyboardCategory();
+  if (FAILED(hr)) {
+    UnregisterLanguageProfile();
+    DeleteComServerRegistration();
   }
   return hr;
 }
 
 HRESULT UnregisterOpenLessTextService() {
+  const HRESULT category_hr = UnregisterKeyboardCategory();
   const HRESULT profile_hr = UnregisterLanguageProfile();
   const HRESULT registry_hr = DeleteComServerRegistration();
+  if (FAILED(category_hr)) {
+    return category_hr;
+  }
   return FAILED(profile_hr) ? profile_hr : registry_hr;
 }
