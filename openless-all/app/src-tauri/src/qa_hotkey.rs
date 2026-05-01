@@ -173,7 +173,7 @@ fn forward_loop(
 fn parse_binding(binding: &QaHotkeyBinding) -> Result<HotKey, QaHotkeyError> {
     let mut mods = Modifiers::empty();
     for raw in &binding.modifiers {
-        let tag = raw.trim().to_ascii_lowercase();
+        let tag = normalize_modifier_tag(raw);
         let bit = match tag.as_str() {
             "cmd" | "command" | "super" | "meta" | "win" => Modifiers::SUPER,
             "ctrl" | "control" => Modifiers::CONTROL,
@@ -185,6 +185,17 @@ fn parse_binding(binding: &QaHotkeyBinding) -> Result<HotKey, QaHotkeyError> {
     }
     let code = parse_primary(&binding.primary)?;
     Ok(HotKey::new(Some(mods), code))
+}
+
+fn normalize_modifier_tag(raw: &str) -> String {
+    let tag = raw.trim().to_ascii_lowercase();
+    #[cfg(target_os = "windows")]
+    {
+        if matches!(tag.as_str(), "cmd" | "command") {
+            return "ctrl".to_string();
+        }
+    }
+    tag
 }
 
 /// 把用户配置的主键字符串解析成 keyboard_types::Code。
@@ -338,5 +349,25 @@ mod tests {
             parse_binding(&binding),
             Err(QaHotkeyError::UnsupportedKey(_))
         ));
+    }
+
+    #[test]
+    fn cmd_modifier_normalizes_per_platform() {
+        let binding = QaHotkeyBinding {
+            primary: ";".into(),
+            modifiers: vec!["cmd".into(), "shift".into()],
+        };
+        let parsed = parse_binding(&binding).expect("binding parses");
+
+        #[cfg(target_os = "windows")]
+        {
+            assert!(parsed.mods.contains(Modifiers::CONTROL));
+            assert!(!parsed.mods.contains(Modifiers::SUPER));
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            assert!(parsed.mods.contains(Modifiers::SUPER));
+        }
     }
 }
