@@ -26,7 +26,9 @@ use crate::persistence::{
 };
 
 use crate::polish::{OpenAICompatibleConfig, OpenAICompatibleLLMProvider};
+use crate::qa_hotkey::{QaHotkeyEvent, QaHotkeyMonitor};
 use crate::recorder::{Recorder, RecorderError};
+use crate::selection::{capture_selection, SelectionContext};
 use crate::types::{
     CapsulePayload, CapsuleState, DictationSession, HotkeyCapability, HotkeyMode, HotkeyStatus,
     HotkeyStatusState, InsertStatus, PolishMode,
@@ -104,6 +106,46 @@ struct Inner {
     /// end_session 在调 polish/translate 前读这个 flag + translation_target_language
     /// 决定走哪条管线。详见 issue #4。
     translation_modifier_seen: AtomicBool,
+    /// 划词语音问答（issue #118）：与 dictation hotkey 平行的全局快捷键
+    /// 监听器（global-hotkey crate）。`None` 表示功能关闭或还没成功安装。
+    qa_hotkey: Mutex<Option<QaHotkeyMonitor>>,
+    /// QA 单独的 session 状态，与 dictation 的 SessionPhase 不冲突。
+    qa_state: Mutex<QaSessionState>,
+    /// QA 用的 ASR 句柄（始终是 Volcengine 流式）。
+    qa_asr: Mutex<Option<Arc<VolcengineStreamingASR>>>,
+    /// QA 用的 Recorder 句柄。
+    qa_recorder: Mutex<Option<Recorder>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum QaPhase {
+    Idle,
+    Recording,
+    Processing,
+}
+
+struct QaSessionState {
+    phase: QaPhase,
+    cancelled: bool,
+    selection: Option<SelectionContext>,
+    front_app: Option<String>,
+    /// 用于忽略迟到的 RMS / runtime error。
+    session_id: u64,
+    /// QA 浮窗是否被用户钉住（pinned）。pinned=true 时不自动隐藏。
+    pinned: bool,
+}
+
+impl Default for QaSessionState {
+    fn default() -> Self {
+        Self {
+            phase: QaPhase::Idle,
+            cancelled: false,
+            selection: None,
+            front_app: None,
+            session_id: 0,
+            pinned: false,
+        }
+    }
 }
 
 impl Coordinator {
@@ -129,6 +171,10 @@ impl Coordinator {
                 hotkey_status: Mutex::new(HotkeyStatus::default()),
                 hotkey_trigger_held: AtomicBool::new(false),
                 translation_modifier_seen: AtomicBool::new(false),
+                qa_hotkey: Mutex::new(None),
+                qa_state: Mutex::new(QaSessionState::default()),
+                qa_asr: Mutex::new(None),
+                qa_recorder: Mutex::new(None),
             }),
         }
     }
@@ -149,6 +195,66 @@ impl Coordinator {
 
     pub fn stop_hotkey_listener(&self) {
         self.inner.hotkey.lock().take();
+    }
+
+    /// 启动 QA hotkey supervisor（issue #118）。和 `start_hotkey_listener` 平行：
+    /// 守护线程反复尝试注册（用户可能改了组合键），失败则 3s 后重试。
+    pub fn start_qa_hotkey_listener(&self) {
+        let inner = Arc::clone(&self.inner);
+        std::thread::Builder::new()
+            .name("openless-qa-hotkey-supervisor".into())
+            .spawn(move || qa_hotkey_supervisor_loop(inner))
+            .ok();
+    }
+
+    pub fn stop_qa_hotkey_listener(&self) {
+        self.inner.qa_hotkey.lock().take();
+    }
+
+    /// 用户在设置里改了 QA 组合键时调用。先持久化（由 prefs.set 完成），
+    /// 然后通知活着的 monitor 重新注册；monitor 不存在时 supervisor 会自然
+    /// 在下一次循环里读到新的 prefs。
+    pub fn update_qa_hotkey_binding(&self) {
+        let prefs = self.inner.prefs.get();
+        let Some(binding) = prefs.qa_hotkey.clone() else {
+            // 用户把功能关了 → 直接 drop monitor
+            self.inner.qa_hotkey.lock().take();
+            log::info!("[coord] QA hotkey 已关闭");
+            return;
+        };
+        if let Some(monitor) = self.inner.qa_hotkey.lock().as_ref() {
+            if let Err(e) = monitor.update_binding(binding) {
+                log::warn!("[coord] update QA hotkey binding 失败: {e}");
+            }
+        }
+    }
+
+    /// 给前端 Settings 渲染当前 QA 快捷键 label（如 "Cmd+Shift+;"）。
+    /// `qa_hotkey == None` 时返回空串，UI 据此显示「未启用」。
+    pub fn qa_hotkey_label(&self) -> String {
+        self.inner
+            .prefs
+            .get()
+            .qa_hotkey
+            .as_ref()
+            .map(|b| b.display_label())
+            .unwrap_or_default()
+    }
+
+    /// 用户点 ✕ / 按 Esc 关 QA 浮窗时调。会：
+    /// - 把 QA 浮窗 hide（保留前端状态）
+    /// - 取消 QA session（recorder/asr drop）
+    pub fn qa_window_dismiss(&self) {
+        cancel_qa_session(&self.inner);
+        if let Some(app) = self.inner.app.lock().clone() {
+            crate::hide_qa_window(&app);
+        }
+    }
+
+    /// 用户点 📌 切换 pinned 状态。pinned=true 时浮窗不自动隐藏。
+    pub fn qa_window_pin(&self, pinned: bool) {
+        self.inner.qa_state.lock().pinned = pinned;
+        log::info!("[coord] QA window pinned={pinned}");
     }
 
     pub fn history(&self) -> &HistoryStore {
@@ -284,6 +390,81 @@ fn hotkey_supervisor_loop(inner: Arc<Inner>) {
                 std::thread::sleep(std::time::Duration::from_secs(3));
             }
         }
+    }
+}
+
+// ─────────────────────────── QA hotkey supervisor ───────────────────────────
+
+fn qa_hotkey_supervisor_loop(inner: Arc<Inner>) {
+    let mut attempts: u32 = 0;
+    loop {
+        // 用户已经把 QA 关掉就睡着等 prefs 改动；改动通过 update_qa_hotkey_binding 唤醒。
+        let binding = match inner.prefs.get().qa_hotkey.clone() {
+            Some(b) => b,
+            None => {
+                inner.qa_hotkey.lock().take();
+                std::thread::sleep(std::time::Duration::from_secs(5));
+                continue;
+            }
+        };
+
+        if inner.qa_hotkey.lock().is_some() {
+            // 已注册成功 → 不重复装；睡 5s 复查（ binding 变化由 update 路径手动触发 ）。
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            continue;
+        }
+
+        let (tx, rx) = mpsc::channel::<QaHotkeyEvent>();
+        match QaHotkeyMonitor::start(binding, tx) {
+            Ok(monitor) => {
+                *inner.qa_hotkey.lock() = Some(monitor);
+                log::info!(
+                    "[coord] QA hotkey listener installed (after {} attempt(s))",
+                    attempts + 1
+                );
+                let inner_clone = Arc::clone(&inner);
+                std::thread::Builder::new()
+                    .name("openless-qa-hotkey-bridge".into())
+                    .spawn(move || qa_hotkey_bridge_loop(inner_clone, rx))
+                    .ok();
+                attempts = 0;
+            }
+            Err(e) => {
+                attempts += 1;
+                if attempts <= 3 || attempts % 10 == 0 {
+                    log::warn!(
+                        "[coord] QA hotkey 第 {attempts} 次注册失败: {e}; 3s 后重试"
+                    );
+                }
+                std::thread::sleep(std::time::Duration::from_secs(3));
+            }
+        }
+    }
+}
+
+fn qa_hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<QaHotkeyEvent>) {
+    while let Ok(evt) = rx.recv() {
+        let inner_cloned = Arc::clone(&inner);
+        match evt {
+            QaHotkeyEvent::Pressed => {
+                async_runtime::spawn(async move { handle_qa_hotkey_pressed(&inner_cloned).await });
+            }
+        }
+    }
+}
+
+async fn handle_qa_hotkey_pressed(inner: &Arc<Inner>) {
+    let phase = inner.qa_state.lock().phase;
+    log::info!("[coord] QA hotkey edge (phase={phase:?})");
+    match phase {
+        QaPhase::Idle => {
+            let _ = begin_qa_session(inner).await;
+        }
+        QaPhase::Recording => {
+            let _ = end_qa_session(inner).await;
+        }
+        // Processing 阶段再次按键忽略（避免与正在跑的 LLM 冲突）。
+        QaPhase::Processing => {}
     }
 }
 
@@ -1268,6 +1449,374 @@ fn enabled_hotwords(inner: &Arc<Inner>) -> Vec<DictionaryHotword> {
             enabled: e.enabled,
         })
         .collect()
+}
+
+// ─────────────────────────── QA session lifecycle ───────────────────────────
+
+/// 划词语音问答会话（issue #118）。
+///
+/// 与 dictation 完全分离：
+/// - 不进 SessionPhase（互不抢锁）
+/// - 不写 history.json（除非 prefs.qa_save_history=true 才旁路写一条 placeholder）
+/// - 用独立的 qa_recorder + qa_asr，复用现有 Volcengine ASR 通路
+async fn begin_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
+    {
+        let mut state = inner.qa_state.lock();
+        if state.phase != QaPhase::Idle {
+            return Ok(());
+        }
+        state.phase = QaPhase::Recording;
+        state.cancelled = false;
+        state.session_id = state.session_id.wrapping_add(1);
+        state.front_app = capture_frontmost_app();
+        state.selection = None;
+    }
+
+    // 1. 显示 QA 浮窗（loading 状态）+ 同步抓选区。
+    //    选区抓取在 show_qa_window 之前做，避免浮窗抢前台 app 焦点导致选区丢失。
+    let selection = capture_selection();
+    let selection_preview_text = selection.as_ref().map(|s| s.text.clone());
+    inner.qa_state.lock().selection = selection.clone();
+
+    if let Some(app) = inner.app.lock().clone() {
+        crate::show_qa_window(&app, "loading");
+        let _ = app.emit_to(
+            "qa",
+            "qa:state",
+            serde_json::json!({
+                "kind": "loading",
+                "selectionPreview": selection_preview_text.clone(),
+            }),
+        );
+    }
+
+    // 2. 凭据缺失走静默 fallback：与 dictation 一致的"用户的话不丢"约定。
+    //    缺火山凭据 → 后续 Recorder 仍会跑，只是 ASR 拿不到结果，end_qa_session
+    //    会发 idle 事件关浮窗。
+    if let Err(message) = ensure_asr_credentials() {
+        log::warn!("[coord] QA: ASR credentials missing: {message}");
+        finish_qa_with_error(inner, format!("缺少 ASR 凭据：{message}"));
+        return Err(message);
+    }
+
+    if let Err(message) = ensure_microphone_permission(inner) {
+        log::warn!("[coord] QA: microphone permission gate failed: {message}");
+        finish_qa_with_error(inner, message.clone());
+        return Err(message);
+    }
+
+    // 3. 启动 Recorder + ASR（强制走 Volcengine 流式：QA 必须低延迟）。
+    let hotwords = enabled_hotwords(inner);
+    let creds = read_volc_credentials();
+    let asr = Arc::new(VolcengineStreamingASR::new(creds, hotwords));
+    let bridge = Arc::new(DeferredAsrBridge::new());
+    let consumer: Arc<dyn crate::recorder::AudioConsumer> = bridge.clone();
+    *inner.qa_asr.lock() = Some(Arc::clone(&asr));
+
+    // QA recorder 不需要 RMS 节流到胶囊；前端 QA 浮窗有自己的电平视图，
+    // 这里发一份事件给 "qa" label 用就够了。
+    let inner_for_level = Arc::clone(inner);
+    let last_emit_at = Arc::new(Mutex::new(None::<Instant>));
+    const LEVEL_EMIT_MIN_INTERVAL_MS: u64 = 33;
+    let level_handler: Arc<dyn Fn(f32) + Send + Sync> = Arc::new(move |level| {
+        let phase = inner_for_level.qa_state.lock().phase;
+        if phase != QaPhase::Recording {
+            return;
+        }
+        let now = Instant::now();
+        {
+            let mut last = last_emit_at.lock();
+            if let Some(prev) = *last {
+                if now.duration_since(prev).as_millis() < LEVEL_EMIT_MIN_INTERVAL_MS as u128 {
+                    return;
+                }
+            }
+            *last = Some(now);
+        }
+        if let Some(app) = inner_for_level.app.lock().clone() {
+            let _ = app.emit_to(
+                "qa",
+                "qa:level",
+                serde_json::json!({ "level": level }),
+            );
+        }
+    });
+
+    match Recorder::start(consumer, level_handler) {
+        Ok((rec, _runtime_errors)) => {
+            *inner.qa_recorder.lock() = Some(rec);
+        }
+        Err(e) => {
+            log::error!("[coord] QA recorder start failed: {e}");
+            inner.qa_asr.lock().take();
+            finish_qa_with_error(inner, format!("录音启动失败: {e}"));
+            return Err(e.to_string());
+        }
+    }
+
+    if let Err(e) = asr.open_session().await {
+        log::error!("[coord] QA: open ASR session failed: {e}");
+        if let Some(rec) = inner.qa_recorder.lock().take() {
+            rec.stop();
+        }
+        if let Some(asr) = inner.qa_asr.lock().take() {
+            asr.cancel();
+        }
+        finish_qa_with_error(inner, format!("ASR 连接失败: {e}"));
+        return Err(e.to_string());
+    }
+
+    // cancel race：在 await 期间用户可能 dismiss 了浮窗。
+    if inner.qa_state.lock().cancelled {
+        log::info!("[coord] QA cancel raced during open_session — aborting begin");
+        asr.cancel();
+        if let Some(rec) = inner.qa_recorder.lock().take() {
+            rec.stop();
+        }
+        inner.qa_state.lock().phase = QaPhase::Idle;
+        return Ok(());
+    }
+
+    let target: Arc<dyn crate::asr::AudioConsumer> = asr;
+    let flushed = bridge.attach(target);
+    log::info!("[coord] QA ASR connected; flushed {flushed} deferred audio bytes");
+
+    // 通知前端进入 recording 状态（"loading" 已经在第 1 步发过；这里附带选区预览）。
+    if let Some(app) = inner.app.lock().clone() {
+        let _ = app.emit_to(
+            "qa",
+            "qa:state",
+            serde_json::json!({
+                "kind": "recording",
+                "selectionPreview": selection_preview_text,
+            }),
+        );
+    }
+
+    Ok(())
+}
+
+async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
+    {
+        let mut state = inner.qa_state.lock();
+        if state.phase != QaPhase::Recording {
+            return Ok(());
+        }
+        state.phase = QaPhase::Processing;
+    }
+
+    if let Some(app) = inner.app.lock().clone() {
+        let _ = app.emit_to(
+            "qa",
+            "qa:state",
+            serde_json::json!({ "kind": "transcribing" }),
+        );
+    }
+
+    if let Some(rec) = inner.qa_recorder.lock().take() {
+        rec.stop();
+    }
+
+    let asr = match inner.qa_asr.lock().take() {
+        Some(a) => a,
+        None => {
+            inner.qa_state.lock().phase = QaPhase::Idle;
+            return Ok(());
+        }
+    };
+
+    if let Err(e) = asr.send_last_frame().await {
+        log::error!("[coord] QA: send last frame failed: {e}");
+    }
+    let raw = match asr.await_final_result().await {
+        Ok(r) => r,
+        Err(e) => {
+            log::error!("[coord] QA: await final failed: {e}");
+            finish_qa_with_error(inner, format!("识别失败: {e}"));
+            return Err(e.to_string());
+        }
+    };
+
+    // cancel race：用户在 transcribe 中按 Esc / dismiss → 静默退出。
+    if inner.qa_state.lock().cancelled {
+        log::info!("[coord] QA cancel detected after ASR — discarding transcript");
+        finish_qa_idle_silently(inner);
+        return Ok(());
+    }
+
+    let question = raw.text.trim().to_string();
+    if question.is_empty() {
+        // 静默录音：不调 LLM，不弹错误，直接关浮窗。
+        log::info!("[coord] QA: empty transcript → silent dismiss");
+        finish_qa_idle_silently(inner);
+        return Ok(());
+    }
+
+    if let Some(app) = inner.app.lock().clone() {
+        let _ = app.emit_to(
+            "qa",
+            "qa:state",
+            serde_json::json!({
+                "kind": "thinking",
+                "question": question,
+            }),
+        );
+    }
+
+    let prefs = inner.prefs.get();
+    let working_languages = prefs.working_languages.clone();
+    let (selection_text, front_app) = {
+        let st = inner.qa_state.lock();
+        let sel_text = st
+            .selection
+            .as_ref()
+            .map(|s| s.text.clone())
+            .unwrap_or_default();
+        (sel_text, st.front_app.clone())
+    };
+
+    let answer = match answer_with_selection_dispatch(
+        &question,
+        &selection_text,
+        &working_languages,
+        front_app.as_deref(),
+    )
+    .await
+    {
+        Ok(s) => s,
+        Err(e) => {
+            log::error!("[coord] QA: LLM answer failed: {e}");
+            finish_qa_with_error(inner, format!("回答失败: {e}"));
+            return Err(e.to_string());
+        }
+    };
+
+    if inner.qa_state.lock().cancelled {
+        log::info!("[coord] QA cancel detected before answer — discarding");
+        finish_qa_idle_silently(inner);
+        return Ok(());
+    }
+
+    if let Some(app) = inner.app.lock().clone() {
+        let _ = app.emit_to(
+            "qa",
+            "qa:state",
+            serde_json::json!({
+                "kind": "answer",
+                "text": answer,
+                "question": question,
+            }),
+        );
+    }
+
+    // 可选：写一条 history（QA 类型）。当前 DictationSession schema 不能直接表达
+    // "QuestionAnswer" 类型，因此简单做法：勾选 qa_save_history 时写一条
+    // mode=Raw、error_code=Some("qaSession") 的 placeholder，避免污染 schema 同时
+    // 让用户能在历史里翻到这次问答的字面值。详见 issue #118。
+    if prefs.qa_save_history {
+        let session = DictationSession {
+            id: Uuid::new_v4().to_string(),
+            created_at: Utc::now().to_rfc3339(),
+            raw_transcript: question.clone(),
+            final_text: answer.clone(),
+            mode: PolishMode::Raw,
+            app_bundle_id: None,
+            app_name: front_app.clone(),
+            insert_status: InsertStatus::CopiedFallback,
+            error_code: Some("qaSession".to_string()),
+            duration_ms: Some(raw.duration_ms),
+            dictionary_entry_count: None,
+        };
+        if let Err(e) = inner.history.append(session) {
+            log::error!("[coord] QA history append failed: {e}");
+        }
+    }
+
+    inner.qa_state.lock().phase = QaPhase::Idle;
+    Ok(())
+}
+
+/// 把出错状态送到前端浮窗 + 复位 phase；不弹胶囊错误（QA 浮窗内部自己渲染）。
+fn finish_qa_with_error(inner: &Arc<Inner>, message: String) {
+    if let Some(app) = inner.app.lock().clone() {
+        let _ = app.emit_to(
+            "qa",
+            "qa:state",
+            serde_json::json!({
+                "kind": "error",
+                "message": message,
+            }),
+        );
+    }
+    let mut state = inner.qa_state.lock();
+    state.phase = QaPhase::Idle;
+    state.cancelled = false;
+}
+
+/// 静默收尾：发 idle 事件给前端关浮窗（pinned 时保留），phase 复位到 Idle。
+fn finish_qa_idle_silently(inner: &Arc<Inner>) {
+    let pinned = inner.qa_state.lock().pinned;
+    if let Some(app) = inner.app.lock().clone() {
+        let _ = app.emit_to(
+            "qa",
+            "qa:state",
+            serde_json::json!({ "kind": "idle" }),
+        );
+        if !pinned {
+            crate::hide_qa_window(&app);
+        }
+    }
+    let mut state = inner.qa_state.lock();
+    state.phase = QaPhase::Idle;
+    state.cancelled = false;
+    state.selection = None;
+}
+
+fn cancel_qa_session(inner: &Arc<Inner>) {
+    let phase = inner.qa_state.lock().phase;
+    if phase == QaPhase::Idle {
+        return;
+    }
+    inner.qa_state.lock().cancelled = true;
+    if let Some(rec) = inner.qa_recorder.lock().take() {
+        rec.stop();
+    }
+    if let Some(asr) = inner.qa_asr.lock().take() {
+        asr.cancel();
+    }
+    // Processing 阶段保持 phase 让 end_qa_session 自然走完 cancel 检查；
+    // 否则直接复位。
+    if phase != QaPhase::Processing {
+        inner.qa_state.lock().phase = QaPhase::Idle;
+    }
+    log::info!("[coord] QA session cancelled (was {phase:?})");
+}
+
+async fn answer_with_selection_dispatch(
+    question: &str,
+    selection: &str,
+    working_languages: &[String],
+    front_app: Option<&str>,
+) -> anyhow::Result<String> {
+    let api_key = CredentialsVault::get(CredentialAccount::ArkApiKey)?.unwrap_or_default();
+    if api_key.is_empty() {
+        anyhow::bail!("ark api key missing");
+    }
+    let model = CredentialsVault::get(CredentialAccount::ArkModelId)?
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "deepseek-v3-2".to_string());
+    let endpoint = CredentialsVault::get(CredentialAccount::ArkEndpoint)?
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "https://ark.cn-beijing.volces.com/api/v3/chat/completions".to_string());
+    let base_url = endpoint
+        .trim_end_matches("/chat/completions")
+        .trim_end_matches('/')
+        .to_string();
+    let config = OpenAICompatibleConfig::new("ark", "Doubao Ark", base_url, api_key, model);
+    let provider = OpenAICompatibleLLMProvider::new(config);
+    Ok(provider
+        .answer_with_selection(question, selection, working_languages, front_app)
+        .await?)
 }
 
 #[cfg(test)]

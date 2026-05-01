@@ -98,6 +98,19 @@ pub struct UserPreferences {
     /// 由前端从内置语言列表中选择，后端只接收最终的原生名字符串拼进 prompt。详见 issue #4。
     #[serde(default)]
     pub translation_target_language: String,
+    /// 划词语音问答（QA）的全局快捷键。`None` = 关闭功能；`Some(...)` 时
+    /// coordinator 用 global-hotkey crate 注册组合键（modifier + 主键）。
+    /// 默认 Cmd+Shift+; (macOS) / Ctrl+Shift+; (Windows)。详见 issue #118。
+    #[serde(default = "default_qa_hotkey")]
+    pub qa_hotkey: Option<QaHotkeyBinding>,
+    /// 是否把每次 QA 会话写进 history.json。默认 false：QA 默认临时不留痕。
+    /// 详见 issue #118。
+    #[serde(default)]
+    pub qa_save_history: bool,
+}
+
+fn default_qa_hotkey() -> Option<QaHotkeyBinding> {
+    Some(QaHotkeyBinding::default())
 }
 
 fn default_working_languages() -> Vec<String> {
@@ -122,8 +135,95 @@ impl Default for UserPreferences {
             restore_clipboard_after_paste: true,
             working_languages: default_working_languages(),
             translation_target_language: String::new(),
+            qa_hotkey: default_qa_hotkey(),
+            qa_save_history: false,
         }
     }
+}
+
+/// 划词语音问答的全局快捷键绑定。原生名字符串：
+/// - `primary`：主键（如 `";"`、`"."`、`"A"`、`"F1"`）。
+/// - `modifiers`：修饰键集合，元素来自 `{"cmd","ctrl","alt","shift","super"}`。
+///   小写名简单序列化即可，前端 / 后端解析时统一 lowercase。
+///
+/// 默认 `Cmd+Shift+;` (macOS) / `Ctrl+Shift+;` (Windows)。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct QaHotkeyBinding {
+    pub primary: String,
+    pub modifiers: Vec<String>,
+}
+
+impl Default for QaHotkeyBinding {
+    fn default() -> Self {
+        #[cfg(target_os = "macos")]
+        {
+            Self {
+                primary: ";".into(),
+                modifiers: vec!["cmd".into(), "shift".into()],
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            Self {
+                primary: ";".into(),
+                modifiers: vec!["ctrl".into(), "shift".into()],
+            }
+        }
+    }
+}
+
+impl QaHotkeyBinding {
+    /// 渲染成给前端展示的可读标签（macOS 用 `Cmd`，其他平台用 `Ctrl`）。
+    /// 顺序与人类阅读习惯一致：`Cmd+Shift+;`、`Ctrl+Alt+Shift+.`。
+    pub fn display_label(&self) -> String {
+        let mut parts: Vec<String> = Vec::new();
+        // 固定输出顺序：Ctrl/Cmd → Alt/Option → Shift → Super
+        let modifier_order = ["cmd", "ctrl", "alt", "shift", "super"];
+        for tag in modifier_order {
+            if self.modifiers.iter().any(|m| m.eq_ignore_ascii_case(tag)) {
+                parts.push(modifier_display(tag).to_string());
+            }
+        }
+        let key_label = display_primary(&self.primary);
+        parts.push(key_label);
+        parts.join("+")
+    }
+}
+
+fn modifier_display(tag: &str) -> &'static str {
+    match tag {
+        "cmd" => "Cmd",
+        "ctrl" => "Ctrl",
+        "alt" => {
+            #[cfg(target_os = "macos")]
+            {
+                "Option"
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                "Alt"
+            }
+        }
+        "shift" => "Shift",
+        "super" => "Super",
+        _ => "",
+    }
+}
+
+fn display_primary(primary: &str) -> String {
+    let trimmed = primary.trim();
+    if trimmed.is_empty() {
+        return "?".to_string();
+    }
+    // 单个字母键归一为大写显示（"a" → "A"）；其余原样（如 ";"、"F1"）。
+    if trimmed.chars().count() == 1 {
+        let ch = trimmed.chars().next().unwrap();
+        if ch.is_ascii_alphabetic() {
+            return ch.to_ascii_uppercase().to_string();
+        }
+    }
+    trimmed.to_string()
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

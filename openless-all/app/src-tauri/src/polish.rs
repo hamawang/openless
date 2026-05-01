@@ -100,6 +100,28 @@ impl OpenAICompatibleLLMProvider {
         self.chat_completion(&system_prompt, &user_prompt).await
     }
 
+    /// 划词语音问答：基于用户在前台 app 选中的文本（`selection`）和口述提问（`question`），
+    /// 给出 Markdown 格式的简短回答。`working_languages` 与 `front_app` 通过
+    /// `context_premise` 拼到 system prompt 头部。详见 issue #118。
+    ///
+    /// `selection` 可以为空 —— 用户没选中时退化为纯语音问答；`question` 为空时仍会调
+    /// LLM（让模型在 system 约束下产出"无问题可答"的简短提示），但 coordinator
+    /// 通常会在静默录音时直接 short-circuit 不走到这里。
+    pub async fn answer_with_selection(
+        &self,
+        question: &str,
+        selection: &str,
+        working_languages: &[String],
+        front_app: Option<&str>,
+    ) -> Result<String, LLMError> {
+        let mut system_prompt = prompts::qa_system_prompt();
+        if let Some(premise) = context_premise(working_languages, front_app) {
+            system_prompt = format!("{}\n\n{}", premise, system_prompt);
+        }
+        let user_prompt = prompts::qa_user_prompt(question, selection);
+        self.chat_completion(&system_prompt, &user_prompt).await
+    }
+
     /// 把转写翻译成 `target_language`（前端从内置语言列表里选出来的原生名）。
     /// `working_languages` 与 `front_app` 作为前提注入头部。详见 issue #4 与 #116。
     pub async fn translate_to(
@@ -603,6 +625,33 @@ pub mod prompts {
              <raw_transcript>\n{}\n</raw_transcript>\n\n\
              只输出整理后的文本正文。",
             escaped
+        )
+    }
+
+    /// 划词语音问答 system prompt — 用户选中一段文字后口头提问，要求基于选区给出简短答案。
+    /// 详见 issue #118。
+    pub fn qa_system_prompt() -> String {
+        "# 任务（基于选区的语音问答）\n\
+         用户选中了一段文字，并对它提了一个语音问题。请基于选中内容回答这个问题。\n\
+         \n\
+         ## 输入约定\n\
+         - 选中文本可能很短（一个词），也可能很长（被截断时尾部有 […truncated…]）。\n\
+         - 提问可能很口语化（\u{201C}这是啥意思\u{201D} / \u{201C}和数据库啥区别\u{201D}），按字面理解。\n\
+         - 选中文本可能为空（用户没选中），那就只回答语音问题，不编造选区。\n\
+         \n\
+         ## 输出约定\n\
+         - 用 Markdown，但不要 H1/H2 大标题。可以用粗体、列表、行内代码。\n\
+         - 控制在 3 段以内，约 200 字以内（除非用户明确要求长篇）。\n\
+         - 用大白话，不要客套话（\u{201C}希望能帮到你\u{201D}等）。\n\
+         - 不要重复用户的提问。\n\
+         - 如果选中文本和提问无关，按提问独立回答，**不编造选区里没有的信息**。"
+            .to_string()
+    }
+
+    /// QA user prompt — 把选中文本 + 口述提问拼成 chat user 消息。
+    pub fn qa_user_prompt(question: &str, selection: &str) -> String {
+        format!(
+            "选中文本：\n\"\"\"\n{selection}\n\"\"\"\n\n我的语音提问：\n「{question}」"
         )
     }
 
