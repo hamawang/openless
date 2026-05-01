@@ -24,11 +24,50 @@ pub fn get_settings(coord: CoordinatorState<'_>) -> UserPreferences {
     coord.prefs().get()
 }
 
+trait SettingsWriter {
+    fn write_settings(&self, prefs: UserPreferences) -> Result<(), String>;
+    fn refresh_dictation_hotkey(&self);
+    fn refresh_qa_hotkey(&self);
+}
+
+impl SettingsWriter for Coordinator {
+    fn write_settings(&self, prefs: UserPreferences) -> Result<(), String> {
+        self.prefs().set(prefs).map_err(|e| e.to_string())
+    }
+
+    fn refresh_dictation_hotkey(&self) {
+        self.update_hotkey_binding();
+    }
+
+    fn refresh_qa_hotkey(&self) {
+        self.update_qa_hotkey_binding();
+    }
+}
+
+impl SettingsWriter for Arc<Coordinator> {
+    fn write_settings(&self, prefs: UserPreferences) -> Result<(), String> {
+        self.prefs().set(prefs).map_err(|e| e.to_string())
+    }
+
+    fn refresh_dictation_hotkey(&self) {
+        self.update_hotkey_binding();
+    }
+
+    fn refresh_qa_hotkey(&self) {
+        self.update_qa_hotkey_binding();
+    }
+}
+
+fn persist_settings<T: SettingsWriter>(coord: &T, prefs: UserPreferences) -> Result<(), String> {
+    coord.write_settings(prefs)?;
+    coord.refresh_dictation_hotkey();
+    coord.refresh_qa_hotkey();
+    Ok(())
+}
+
 #[tauri::command]
 pub fn set_settings(coord: CoordinatorState<'_>, prefs: UserPreferences) -> Result<(), String> {
-    coord.prefs().set(prefs).map_err(|e| e.to_string())?;
-    coord.update_hotkey_binding();
-    Ok(())
+    persist_settings(&*coord, prefs)
 }
 
 #[tauri::command]
@@ -484,7 +523,33 @@ fn _ensure_snapshot_used(_: CredentialsSnapshot) {}
 
 #[cfg(test)]
 mod tests {
-    use super::{models_url, parse_model_ids};
+    use super::{models_url, parse_model_ids, persist_settings, SettingsWriter};
+    use crate::types::{
+        HotkeyBinding, HotkeyMode, HotkeyTrigger, QaHotkeyBinding, UserPreferences,
+    };
+    use std::sync::Mutex;
+
+    #[derive(Default)]
+    struct FakeSettingsWriter {
+        saved: Mutex<Option<UserPreferences>>,
+        dictation_refreshes: Mutex<u32>,
+        qa_refreshes: Mutex<u32>,
+    }
+
+    impl SettingsWriter for FakeSettingsWriter {
+        fn write_settings(&self, prefs: UserPreferences) -> Result<(), String> {
+            *self.saved.lock().unwrap() = Some(prefs);
+            Ok(())
+        }
+
+        fn refresh_dictation_hotkey(&self) {
+            *self.dictation_refreshes.lock().unwrap() += 1;
+        }
+
+        fn refresh_qa_hotkey(&self) {
+            *self.qa_refreshes.lock().unwrap() += 1;
+        }
+    }
 
     #[test]
     fn models_url_accepts_base_or_chat_endpoint() {
@@ -504,5 +569,38 @@ mod tests {
             parse_model_ids(r#"{ "data": [{ "id": "b" }, { "id": "a" }, { "id": "b" }] }"#)
                 .unwrap();
         assert_eq!(models, vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn persist_settings_refreshes_both_hotkey_pipelines() {
+        let writer = FakeSettingsWriter::default();
+        let prefs = UserPreferences {
+            hotkey: HotkeyBinding {
+                trigger: HotkeyTrigger::RightControl,
+                mode: HotkeyMode::Toggle,
+            },
+            qa_hotkey: Some(QaHotkeyBinding {
+                primary: ";".to_string(),
+                modifiers: vec!["ctrl".to_string(), "shift".to_string()],
+            }),
+            ..Default::default()
+        };
+
+        persist_settings(&writer, prefs.clone()).unwrap();
+
+        let saved = writer
+            .saved
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("settings saved");
+        assert_eq!(saved.hotkey.trigger, prefs.hotkey.trigger);
+        assert_eq!(saved.hotkey.mode, prefs.hotkey.mode);
+        assert_eq!(
+            saved.qa_hotkey.unwrap().primary,
+            prefs.qa_hotkey.unwrap().primary
+        );
+        assert_eq!(*writer.dictation_refreshes.lock().unwrap(), 1);
+        assert_eq!(*writer.qa_refreshes.lock().unwrap(), 1);
     }
 }
