@@ -40,7 +40,7 @@ pub struct VolcengineCredentials {
 
 impl VolcengineCredentials {
     pub fn default_resource_id() -> &'static str {
-        "volc.bigasr.sauc.duration"
+        "volc.seedasr.sauc.duration"
     }
 }
 
@@ -719,7 +719,7 @@ mod tests {
     fn default_resource_id_is_sauc_duration() {
         assert_eq!(
             VolcengineCredentials::default_resource_id(),
-            "volc.bigasr.sauc.duration"
+            "volc.seedasr.sauc.duration"
         );
     }
 
