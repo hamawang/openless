@@ -60,6 +60,12 @@ function Find-Kernel32Lib {
     }
 }
 
+function Test-IsAdministrator {
+  $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+  $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+  return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
 function Test-WebView2Runtime {
   $paths = @(
     "HKLM:\SOFTWARE\Microsoft\EdgeUpdate\Clients\{F1E7FBD4-9C4C-41A4-AB01-7C0F7A947F1A}",
@@ -147,6 +153,12 @@ if ($Toolchain -eq "all" -or $Toolchain -eq "ime") {
     Write-Host "[missing] kernel32.lib"
     Write-Host "[hint] Install a Windows 10/11 SDK with x64 libraries."
     $failed = $true
+  }
+
+  if (Test-IsAdministrator) {
+    Write-Host "[ok] Administrator shell for TSF registration"
+  } else {
+    Write-Host "[warn] Registering/unregistering the TSF IME requires an elevated Administrator PowerShell."
   }
 }
 
