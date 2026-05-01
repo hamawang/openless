@@ -20,13 +20,13 @@ interface QaHotkeyPreset {
 }
 
 const QA_HOTKEY_PRESETS: readonly QaHotkeyPreset[] = [
-  // 双修饰键 chord（Cmd+Option / Ctrl+Alt）默认排第一——用户偏好的纯组合键。
-  // 后端实现需要 CGEventTap 的"双修饰键按下后无其他键插入即释放"模式（待后端补）。
-  { id: 'cmd+option',   label: 'Cmd+Option',   binding: { primary: '', modifiers: ['cmd', 'option'] } },
-  { id: 'cmd+shift+;',  label: 'Cmd+Shift+;',  binding: { primary: ';', modifiers: ['cmd', 'shift']  } },
-  { id: 'cmd+option+;', label: 'Cmd+Option+;', binding: { primary: ';', modifiers: ['cmd', 'option'] } },
-  { id: 'cmd+shift+/',  label: 'Cmd+Shift+/',  binding: { primary: '/', modifiers: ['cmd', 'shift']  } },
-  { id: 'cmd+option+/', label: 'Cmd+Option+/', binding: { primary: '/', modifiers: ['cmd', 'option'] } },
+  // v2 改成 panel toggle hotkey（不再触发录音）。Option 不能出现在这条 hotkey 里——
+  // 浮窗一旦可见，rightOption 边沿就被 QA 路由抢走了，主听写转给 Option 也共用同一个键。
+  // 只留 Cmd+Shift+... 这种零冲突组合。详见 issue #118 v2。
+  { id: 'cmd+shift+;', label: 'Cmd+Shift+;', binding: { primary: ';', modifiers: ['cmd', 'shift'] } },
+  { id: 'cmd+shift+/', label: 'Cmd+Shift+/', binding: { primary: '/', modifiers: ['cmd', 'shift'] } },
+  { id: 'cmd+shift+.', label: 'Cmd+Shift+.', binding: { primary: '.', modifiers: ['cmd', 'shift'] } },
+  { id: 'cmd+shift+,', label: 'Cmd+Shift+,', binding: { primary: ',', modifiers: ['cmd', 'shift'] } },
 ] as const;
 
 function bindingToPresetId(binding: QaHotkeyBinding | null): string {
@@ -67,10 +67,14 @@ export function SelectionAsk() {
     }
     const preset = QA_HOTKEY_PRESETS.find(p => p.id === id);
     if (!preset) return;
+    // 先让后端真注册成功 → 再写盘 prefs。否则 prefs 跟实际生效的快捷键脱节，
+    // 会让用户陷入"UI 改了但按了没反应"的迷雾（issue #118 v1 实测过）。
     try {
       await setQaHotkey(preset.binding);
     } catch (error) {
       console.error('[selectionAsk] failed to set qa hotkey', error);
+      // 后端拒绝绑定（如不支持的主键）→ 不写盘，UI 下次 render 仍显示旧值。
+      return;
     }
     await savePrefs({ ...prefs, qaHotkey: preset.binding });
   };
@@ -136,22 +140,6 @@ export function SelectionAsk() {
               <option key={p.id} value={p.id}>{p.label}</option>
             ))}
           </select>
-          {currentId === 'cmd+option' && (
-            <div
-              style={{
-                marginTop: 10,
-                padding: '8px 10px',
-                borderRadius: 8,
-                background: 'rgba(217, 119, 6, 0.08)',
-                border: '0.5px solid rgba(217, 119, 6, 0.2)',
-                fontSize: 11.5,
-                color: 'var(--ol-warn)',
-                lineHeight: 1.55,
-              }}
-            >
-              {t('selectionAsk.hotkey.chordWarning')}
-            </div>
-          )}
         </Card>
 
         {/* 2. 历史保存 */}

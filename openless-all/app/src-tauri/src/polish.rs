@@ -10,7 +10,7 @@ use std::time::Duration;
 use serde_json::{json, Value};
 use thiserror::Error;
 
-use crate::types::PolishMode;
+use crate::types::{PolishMode, QaChatMessage};
 
 const DEFAULT_TEMPERATURE: f32 = 0.3;
 const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
@@ -100,26 +100,26 @@ impl OpenAICompatibleLLMProvider {
         self.chat_completion(&system_prompt, &user_prompt).await
     }
 
-    /// 划词语音问答：基于用户在前台 app 选中的文本（`selection`）和口述提问（`question`），
-    /// 给出 Markdown 格式的简短回答。`working_languages` 与 `front_app` 通过
-    /// `context_premise` 拼到 system prompt 头部。详见 issue #118。
-    ///
-    /// `selection` 可以为空 —— 用户没选中时退化为纯语音问答；`question` 为空时仍会调
-    /// LLM（让模型在 system 约束下产出"无问题可答"的简短提示），但 coordinator
-    /// 通常会在静默录音时直接 short-circuit 不走到这里。
-    pub async fn answer_with_selection(
+    /// 多轮划词追问，**流式**返回。`messages` 包含历史对话（user/assistant 交替），
+    /// 最后一条必须是新一轮的 user 提问。第一条 user 消息里如果有选区，调用方应在
+    /// content 里就把选区原文注入。`on_delta` 在每个 SSE chunk 到达时被调；最终返回
+    /// 拼好的完整字符串（用于写入 messages 历史）。详见 issue #118 v2。
+    pub async fn answer_chat_streaming<F>(
         &self,
-        question: &str,
-        selection: &str,
+        messages: &[QaChatMessage],
         working_languages: &[String],
         front_app: Option<&str>,
-    ) -> Result<String, LLMError> {
+        on_delta: F,
+    ) -> Result<String, LLMError>
+    where
+        F: Fn(&str) + Send + Sync,
+    {
         let mut system_prompt = prompts::qa_system_prompt();
         if let Some(premise) = context_premise(working_languages, front_app) {
             system_prompt = format!("{}\n\n{}", premise, system_prompt);
         }
-        let user_prompt = prompts::qa_user_prompt(question, selection);
-        self.chat_completion(&system_prompt, &user_prompt).await
+        self.chat_completion_history_streaming(&system_prompt, messages, on_delta)
+            .await
     }
 
     /// 把转写翻译成 `target_language`（前端从内置语言列表里选出来的原生名）。
@@ -204,6 +204,138 @@ impl OpenAICompatibleLLMProvider {
         }
 
         extract_assistant_content(&body_text)
+    }
+
+    /// 与 `chat_completion` 同条 HTTP 通路，但开 `stream: true` 并把 SSE chunk 一边
+    /// 解析、一边通过 `on_delta` 推给调用方（用于实时把答案塞进浮窗气泡）。
+    /// 最终返回拼好的完整字符串供调用方写入对话历史。
+    async fn chat_completion_history_streaming<F>(
+        &self,
+        system_prompt: &str,
+        history: &[QaChatMessage],
+        on_delta: F,
+    ) -> Result<String, LLMError>
+    where
+        F: Fn(&str) + Send + Sync,
+    {
+        if self.config.api_key.trim().is_empty() {
+            return Err(LLMError::MissingCredentials);
+        }
+
+        let mut msgs: Vec<Value> = Vec::with_capacity(history.len() + 1);
+        msgs.push(json!({ "role": "system", "content": system_prompt }));
+        for m in history {
+            msgs.push(json!({ "role": m.role, "content": m.content }));
+        }
+
+        let url = chat_completions_url(&self.config.base_url);
+        let body = json!({
+            "model": self.config.model,
+            "stream": true,
+            "temperature": self.config.temperature,
+            "messages": msgs,
+        });
+
+        log::info!(
+            "[llm] POST {} provider={} model={} chat_turns={} stream=true",
+            url,
+            self.config.provider_id,
+            self.config.model,
+            history.len()
+        );
+
+        let mut request = self
+            .client
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .header("Accept", "text/event-stream")
+            .header("Authorization", format!("Bearer {}", self.config.api_key));
+        for (k, v) in &self.config.extra_headers {
+            request = request.header(k.as_str(), v.as_str());
+        }
+        let request = request.json(&body);
+
+        let response = match request.send().await {
+            Ok(r) => r,
+            Err(e) => {
+                if e.is_timeout() {
+                    return Err(LLMError::Timeout);
+                }
+                return Err(LLMError::Network(e.to_string()));
+            }
+        };
+
+        let status = response.status();
+        if !status.is_success() {
+            // 失败时仍把 body 读一遍方便诊断
+            let body_text = response
+                .text()
+                .await
+                .map_err(|e| LLMError::Network(e.to_string()))?;
+            let preview_end = BODY_PREVIEW_LIMIT.min(body_text.len());
+            let preview = safe_str_slice(&body_text, preview_end);
+            log::error!("[llm] HTTP {} body={}", status.as_u16(), preview);
+            return Err(LLMError::InvalidResponse {
+                status: status.as_u16(),
+                body: preview.to_string(),
+            });
+        }
+
+        // SSE 流：一帧 = 若干行，以 `\n\n` 分隔。每行如 `data: {...}` 或 `data: [DONE]`。
+        // 一个 chunk() 可能包含半帧或多帧；用 buffer 累积后再按 `\n\n` 切。
+        let mut response = response;
+        let mut buffer = String::new();
+        let mut full_text = String::new();
+        loop {
+            let chunk_opt = response
+                .chunk()
+                .await
+                .map_err(|e| LLMError::Network(e.to_string()))?;
+            let Some(chunk) = chunk_opt else { break };
+            let s = std::str::from_utf8(&chunk)
+                .map_err(|e| LLMError::Network(format!("non-utf8 SSE chunk: {e}")))?;
+            buffer.push_str(s);
+
+            while let Some(idx) = buffer.find("\n\n") {
+                let event = buffer[..idx].to_string();
+                buffer.drain(..idx + 2);
+                for line in event.lines() {
+                    let Some(payload) = line.strip_prefix("data: ").or_else(|| line.strip_prefix("data:")) else {
+                        continue;
+                    };
+                    let payload = payload.trim();
+                    if payload.is_empty() || payload == "[DONE]" {
+                        continue;
+                    }
+                    let v: Value = match serde_json::from_str(payload) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            log::warn!("[llm] SSE parse skip: {e}; payload preview: {}", safe_str_slice(payload, 80));
+                            continue;
+                        }
+                    };
+                    if let Some(delta) = v["choices"][0]["delta"]["content"].as_str() {
+                        if !delta.is_empty() {
+                            full_text.push_str(delta);
+                            on_delta(delta);
+                        }
+                    }
+                }
+            }
+        }
+
+        log::info!(
+            "[llm] HTTP 200 stream done; total chars={}",
+            full_text.chars().count()
+        );
+
+        if full_text.is_empty() {
+            return Err(LLMError::InvalidResponse {
+                status: 200,
+                body: "empty stream".to_string(),
+            });
+        }
+        Ok(full_text)
     }
 }
 
@@ -646,13 +778,6 @@ pub mod prompts {
          - 不要重复用户的提问。\n\
          - 如果选中文本和提问无关，按提问独立回答，**不编造选区里没有的信息**。"
             .to_string()
-    }
-
-    /// QA user prompt — 把选中文本 + 口述提问拼成 chat user 消息。
-    pub fn qa_user_prompt(question: &str, selection: &str) -> String {
-        format!(
-            "选中文本：\n\"\"\"\n{selection}\n\"\"\"\n\n我的语音提问：\n「{question}」"
-        )
     }
 
     /// 翻译模式 system prompt — 用户在「翻译」页选定的目标语言（内置 15 种自然语言原生名）。

@@ -464,3 +464,14 @@ pub struct TodayMetrics {
     pub avg_latency_ms: u64,
     pub total_duration_ms: u64,
 }
+
+
+/// 划词追问浮窗里一条对话消息。多轮提问会累积成 Vec<QaChatMessage>，
+/// 整段送给 LLM 维持上下文。详见 issue #118 v2。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QaChatMessage {
+    /// "user" | "assistant" — 直接对应 OpenAI 消息 role 字段。
+    pub role: String,
+    pub content: String,
+}

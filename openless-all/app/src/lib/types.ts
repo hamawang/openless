@@ -100,17 +100,31 @@ export interface UserPreferences {
 }
 
 /** Rust 通过 `qa:state` 事件下发的 payload。
- *  与 issue #118 的契约一致——字段名采用 snake_case，与后端 JSON 直接对齐。 */
-export type QaStateKind = 'loading' | 'answer' | 'error';
+ *  v2 (issue #118 v2)：支持多轮对话，messages 数组每次由后端整段下发（单一可信源）。
+ *  v2.1：开 `stream:true`，LLM 答案逐 chunk 通过 `answer_delta` 事件推前端边渲染。 */
+export type QaStateKind =
+  | 'idle'
+  | 'recording'
+  | 'thinking'
+  | 'answer_delta'
+  | 'answer'
+  | 'error';
+
+export interface QaChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
 
 export interface QaStatePayload {
   kind: QaStateKind;
-  /** loading 状态下的选区前缀（前 60 字，已截断）。 */
-  selection_preview?: string;
-  /** answer 状态下的 markdown 字符串。 */
-  answer_md?: string;
-  /** error 状态下的错误提示。 */
+  /** 后端权威：当前已有的多轮对话历史（user → assistant 交替）。answer 事件带完整版。 */
+  messages?: QaChatMessage[];
+  /** recording 状态时附带的选区预览（前 60 字）。 */
+  selection_preview?: string | null;
+  /** error 状态时附带的提示。 */
   error?: string;
+  /** answer_delta 事件时附带的本帧增量字符串。 */
+  chunk?: string;
 }
 
 /** 内置语言列表 — 前端 Settings UI 用，后端只接收原生名字符串拼 prompt。
