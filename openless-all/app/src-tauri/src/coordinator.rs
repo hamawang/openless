@@ -943,9 +943,16 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     }
 
     let focus_target = inner.state.lock().focus_target;
-    restore_focus_target_if_possible(focus_target);
+    let focus_ready_for_paste = restore_focus_target_if_possible(focus_target);
     let restore_clipboard = inner.prefs.get().restore_clipboard_after_paste;
-    let status = inner.inserter.insert(&polished, restore_clipboard);
+    let status = if focus_ready_for_paste {
+        inner.inserter.insert(&polished, restore_clipboard)
+    } else {
+        log::warn!(
+            "[coord] original insertion target is not foreground; copied output without paste"
+        );
+        inner.inserter.copy_fallback(&polished)
+    };
     let inserted_chars = polished.chars().count() as u32;
 
     // 累计每条 enabled 词条在最终文本中的命中次数。
@@ -1561,7 +1568,7 @@ fn capture_frontmost_app() -> Option<String> {
 }
 
 #[cfg(target_os = "windows")]
-fn restore_focus_target_if_possible(target: Option<usize>) {
+fn restore_focus_target_if_possible(target: Option<usize>) -> bool {
     use std::ffi::c_void;
     use std::time::Duration;
     use windows::Win32::Foundation::HWND;
@@ -1569,18 +1576,22 @@ fn restore_focus_target_if_possible(target: Option<usize>) {
         GetForegroundWindow, IsIconic, IsWindow, SetForegroundWindow, ShowWindow, SW_RESTORE,
     };
 
-    let Some(raw_target) = target else { return };
+    let Some(raw_target) = target else {
+        log::warn!("[coord] no original Windows insertion target captured");
+        return false;
+    };
     let hwnd = HWND(raw_target as *mut c_void);
     if hwnd.0.is_null() {
-        return;
+        return false;
     }
     if !unsafe { IsWindow(hwnd).as_bool() } {
-        return;
+        log::warn!("[coord] original Windows insertion target is no longer a valid window");
+        return false;
     }
 
     let foreground = unsafe { GetForegroundWindow() };
     if foreground == hwnd {
-        return;
+        return true;
     }
 
     if unsafe { IsIconic(hwnd).as_bool() } {
@@ -1588,10 +1599,19 @@ fn restore_focus_target_if_possible(target: Option<usize>) {
     }
     let _ = unsafe { SetForegroundWindow(hwnd) };
     std::thread::sleep(Duration::from_millis(60));
+
+    let foreground = unsafe { GetForegroundWindow() };
+    if foreground != hwnd {
+        log::warn!("[coord] failed to restore original Windows insertion target before paste");
+        return false;
+    }
+    true
 }
 
 #[cfg(not(target_os = "windows"))]
-fn restore_focus_target_if_possible(_target: Option<usize>) {}
+fn restore_focus_target_if_possible(_target: Option<usize>) -> bool {
+    true
+}
 
 #[cfg(target_os = "windows")]
 fn show_capsule_window_no_activate() -> bool {

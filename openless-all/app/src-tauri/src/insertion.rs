@@ -50,6 +50,19 @@ impl TextInserter {
         }
         insertion_success_status()
     }
+
+    /// Copy text without attempting a synthetic paste. Used when the platform cannot
+    /// prove the original input target is active enough to safely receive Ctrl/Cmd+V.
+    pub fn copy_fallback(&self, text: &str) -> InsertStatus {
+        if text.is_empty() {
+            return InsertStatus::CopiedFallback;
+        }
+        if copy_to_clipboard(text) {
+            InsertStatus::CopiedFallback
+        } else {
+            InsertStatus::Failed
+        }
+    }
 }
 
 impl Default for TextInserter {
