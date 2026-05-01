@@ -148,7 +148,7 @@ export function validateProviderCredentials(kind: 'llm' | 'asr'): Promise<Provid
 }
 
 export function listProviderModels(kind: 'llm' | 'asr'): Promise<ProviderModelsResult> {
-  return invokeOrMock('list_provider_models', { kind }, () => ({ models: kind === 'llm' ? ['gpt-4o', 'deepseek-chat'] : ['whisper-1'] }));
+  return invokeOrMock('list_provider_models', { kind }, () => ({ models: kind === 'llm' ? ['gpt-4o', 'deepseek-v4-flash', 'deepseek-v4-pro'] : ['whisper-1'] }));
 }
 
 // ── History ────────────────────────────────────────────────────────────
