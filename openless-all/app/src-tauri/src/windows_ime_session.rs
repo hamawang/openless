@@ -49,6 +49,18 @@ impl PreparedWindowsImeSession {
     pub fn is_ready_for_tsf_submit(&self) -> bool {
         self.saved_profile.is_some() && self.openless_activated
     }
+
+    pub fn has_saved_profile(&self) -> bool {
+        self.saved_profile.is_some()
+    }
+
+    pub fn openless_was_activated(&self) -> bool {
+        self.openless_activated
+    }
+
+    pub fn should_restore_when_active_profile_check_fails(&self) -> bool {
+        self.has_saved_profile() && self.openless_was_activated()
+    }
 }
 
 pub struct WindowsImeSessionController {
@@ -123,8 +135,15 @@ impl WindowsImeSessionController {
                 restore_decision(prepared.saved_profile.as_ref(), openless_active)
             }
             Err(error) => {
-                log::warn!("[windows-ime] check active profile before restore failed: {error}");
-                ProfileRestoreDecision::KeepCurrentProfile
+                if prepared.should_restore_when_active_profile_check_fails() {
+                    log::warn!(
+                        "[windows-ime] check active profile before restore failed: {error}; attempting restore"
+                    );
+                    ProfileRestoreDecision::RestoreSavedProfile
+                } else {
+                    log::warn!("[windows-ime] check active profile before restore failed: {error}");
+                    ProfileRestoreDecision::KeepCurrentProfile
+                }
             }
         };
 
@@ -186,5 +205,17 @@ mod tests {
         assert!(
             matches!(result, Err(WindowsImeSessionError::Ipc(message)) if message == "OpenLess IME session is not active")
         );
+    }
+
+    #[test]
+    fn active_profile_check_failure_restores_only_prepared_active_session() {
+        let prepared = PreparedWindowsImeSession {
+            saved_profile: Some(ImeProfileSnapshot::keyboard_layout(0x0409, 0x0409_0409)),
+            openless_activated: true,
+        };
+
+        assert!(prepared.should_restore_when_active_profile_check_fails());
+        assert!(!PreparedWindowsImeSession::unavailable()
+            .should_restore_when_active_profile_check_fails());
     }
 }
