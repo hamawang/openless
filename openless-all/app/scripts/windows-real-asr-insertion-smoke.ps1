@@ -356,7 +356,7 @@ try {
 
 $inputTarget = $null
 try {
-  if (-not (Wait-LogPattern $logPath "WH_KEYBOARD_LL installed" 20)) {
+  if (-not (Wait-LogPattern $logPath "hotkey listener installed|Windows low-level keyboard hook" 20)) {
     throw "Windows low-level keyboard hook was not installed."
   }
 
