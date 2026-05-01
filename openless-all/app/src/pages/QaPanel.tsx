@@ -39,6 +39,11 @@ export function QaPanel() {
     (async () => {
       const { listen } = await import('@tauri-apps/api/event');
       const stateHandle = await listen<QaStatePayload>('qa:state', event => {
+        // 后端在 session 结束（含 cancel / 静默 / 完成）时会再发一条 kind:"idle"。
+        // 它的语义是"会话状态机回到 Idle"，**不**应替换 UI（pinned 用户希望继续看 answer）。
+        // 不 pinned 时后端紧接着自己 hide 窗口，前端拿到 idle 也无妨。
+        const kind = (event.payload as { kind?: string }).kind;
+        if (kind === 'idle') return;
         setPayload(event.payload);
       });
       const dismissHandle = await listen<unknown>('qa:dismiss', () => {

@@ -1485,7 +1485,7 @@ async fn begin_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
             "qa:state",
             serde_json::json!({
                 "kind": "loading",
-                "selectionPreview": selection_preview_text.clone(),
+                "selection_preview": selection_preview_text.clone(),
             }),
         );
     }
@@ -1587,8 +1587,8 @@ async fn begin_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
             "qa",
             "qa:state",
             serde_json::json!({
-                "kind": "recording",
-                "selectionPreview": selection_preview_text,
+                "kind": "loading",
+                "selection_preview": selection_preview_text,
             }),
         );
     }
@@ -1609,7 +1609,7 @@ async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
         let _ = app.emit_to(
             "qa",
             "qa:state",
-            serde_json::json!({ "kind": "transcribing" }),
+            serde_json::json!({ "kind": "loading" }),
         );
     }
 
@@ -1657,7 +1657,7 @@ async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
             "qa",
             "qa:state",
             serde_json::json!({
-                "kind": "thinking",
+                "kind": "loading",
                 "question": question,
             }),
         );
@@ -1703,8 +1703,7 @@ async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
             "qa:state",
             serde_json::json!({
                 "kind": "answer",
-                "text": answer,
-                "question": question,
+                "answer_md": answer,
             }),
         );
     }
@@ -1744,7 +1743,7 @@ fn finish_qa_with_error(inner: &Arc<Inner>, message: String) {
             "qa:state",
             serde_json::json!({
                 "kind": "error",
-                "message": message,
+                "error": message,
             }),
         );
     }
