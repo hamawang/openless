@@ -23,6 +23,7 @@ apps/
 promo/
 promo-openless/
 docs/old-promo/
+.worktrees/
 
 # Planning docs are kept local only, not published to the public repo.
 docs/plans/
