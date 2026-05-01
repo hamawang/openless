@@ -436,8 +436,6 @@ const QA_WINDOW_WIDTH: f64 = 380.0;
 const QA_WINDOW_HEIGHT: f64 = 440.0;
 /// 胶囊与 QA 窗口的间距，与设计稿一致。
 const QA_WINDOW_GAP_TO_CAPSULE: f64 = 8.0;
-/// 胶囊高度（与 `position_capsule_bottom_center` 中一致）。
-const CAPSULE_HEIGHT_FOR_QA: f64 = 96.0;
 /// 给 macOS Dock 留的下边距（与 capsule 同源）。
 const DOCK_BOTTOM_PADDING_FOR_QA: f64 = 80.0;
 
@@ -452,10 +450,11 @@ fn position_qa_window<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) -> ta
     let size = monitor.size();
     let logical_w = size.width as f64 / scale;
     let logical_h = size.height as f64 / scale;
+    let capsule_height = capsule_window_size(false).1;
     let x = ((logical_w - QA_WINDOW_WIDTH) / 2.0).max(0.0);
     let y = (logical_h
         - DOCK_BOTTOM_PADDING_FOR_QA
-        - CAPSULE_HEIGHT_FOR_QA
+        - capsule_height
         - QA_WINDOW_GAP_TO_CAPSULE
         - QA_WINDOW_HEIGHT)
         .max(0.0);
@@ -598,9 +597,13 @@ fn capsule_window_size(translation_active: bool) -> (f64, f64) {
     }
 }
 
+fn capsule_height_for_qa() -> f64 {
+    capsule_window_size(false).1
+}
+
 #[cfg(test)]
 mod tests {
-    use super::capsule_window_size;
+    use super::{capsule_height_for_qa, capsule_window_size};
 
     #[test]
     fn capsule_window_size_matches_visible_pill_when_not_translating() {
@@ -620,5 +623,14 @@ mod tests {
 
         #[cfg(not(target_os = "windows"))]
         assert_eq!((width, height), (176.0, 110.0));
+    }
+
+    #[test]
+    fn qa_anchor_uses_normal_capsule_height_source() {
+        #[cfg(target_os = "windows")]
+        assert_eq!(capsule_height_for_qa(), 52.0);
+
+        #[cfg(not(target_os = "windows"))]
+        assert_eq!(capsule_height_for_qa(), 42.0);
     }
 }
