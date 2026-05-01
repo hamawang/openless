@@ -20,6 +20,7 @@ mod persistence;
 mod polish;
 mod recorder;
 mod types;
+mod windows_ime_ipc;
 mod windows_ime_profile;
 mod windows_ime_protocol;
 
