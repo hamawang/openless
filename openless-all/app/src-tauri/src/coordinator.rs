@@ -1505,12 +1505,11 @@ fn debug_transcript_override_text() -> Option<String> {
     }
 }
 
-fn ensure_microphone_permission(inner: &Arc<Inner>) -> Result<(), String> {
+fn ensure_microphone_permission(_inner: &Arc<Inner>) -> Result<(), String> {
     use crate::permissions::{self, PermissionStatus};
 
     #[cfg(target_os = "windows")]
     {
-        let _ = inner;
         if permissions::windows_microphone_access_explicitly_denied() {
             return Err("需要麦克风权限，当前状态: Denied".to_string());
         }
@@ -1525,11 +1524,10 @@ fn ensure_microphone_permission(inner: &Arc<Inner>) -> Result<(), String> {
         return Ok(());
     }
 
-    let requested = if let Some(app) = inner.app.lock().clone() {
-        crate::request_microphone_from_foreground(&app)
-    } else {
-        permissions::request_microphone()
-    };
+    // 听写路径不抢前台焦点：缺 mic 权限时直接请求系统授权，不再先 show_main_window。
+    // 用户在设置页手动点“请求权限”仍走 request_microphone_from_foreground，那是显式操作。
+    // 这里若系统不弹框，后续会通过 capsule error 引导用户主动去权限页处理。详见 #166。
+    let requested = permissions::request_microphone();
     if matches!(
         requested,
         PermissionStatus::Granted | PermissionStatus::NotApplicable
