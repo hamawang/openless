@@ -10,7 +10,7 @@ use tauri::{AppHandle, State};
 use crate::coordinator::Coordinator;
 use crate::permissions::{self, PermissionStatus};
 use crate::persistence::{CredentialAccount, CredentialsSnapshot, CredentialsVault};
-use crate::polish::{OpenAICompatibleConfig, OpenAICompatibleLLMProvider};
+use crate::polish::{LLMError, OpenAICompatibleConfig, OpenAICompatibleLLMProvider};
 use crate::types::{
     CredentialsStatus, DictationSession, DictionaryEntry, HotkeyCapability, HotkeyStatus,
     PolishMode, QaHotkeyBinding, UserPreferences,
@@ -202,7 +202,12 @@ async fn validate_llm_provider() -> Result<(), String> {
         .polish("验证连接", PolishMode::Raw, &[], &[], None)
         .await
         .map(|_| ())
-        .map_err(|e| e.to_string())
+        .map_err(|e| match e {
+            LLMError::InvalidResponse { status, .. } => {
+                format!("providerHttpStatus:{status}")
+            }
+            other => other.to_string(),
+        })
 }
 
 async fn fetch_provider_models(config: &ProviderConfig) -> Result<Vec<String>, String> {
