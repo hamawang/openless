@@ -118,6 +118,10 @@ struct Inner {
     qa_asr: Mutex<Option<Arc<VolcengineStreamingASR>>>,
     /// QA 用的 Recorder 句柄。
     qa_recorder: Mutex<Option<Recorder>>,
+    /// QA SSE 流取消标志。begin_qa_session 重置为 false；cancel_qa_session 设 true；
+    /// polish::chat_completion_history_streaming 的 loop 每帧检查，true 时 break loop
+    /// 避免取消后 LLM 仍 drain HTTP body 烧 token。详见 issue #161。
+    qa_stream_cancelled: Arc<AtomicBool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -187,6 +191,7 @@ impl Coordinator {
                 capsule_layout: Mutex::new(None),
                 qa_asr: Mutex::new(None),
                 qa_recorder: Mutex::new(None),
+                qa_stream_cancelled: Arc::new(AtomicBool::new(false)),
             }),
         }
     }
@@ -755,7 +760,18 @@ async fn handle_window_hotkey_event(
     repeat: bool,
 ) -> Result<(), String> {
     if event_type == "keydown" && key == "Escape" {
-        cancel_session(inner);
+        // Esc 路由（issue #161）：QA 浮窗可见时优先取消 QA（不动 dictation）；
+        // 否则走 dictation 取消通路。之前无条件 cancel_session 导致 QA 浮窗
+        // 按 Esc 杀的是 dictation 而 QA 流还在烧 token。
+        let qa_active = {
+            let st = inner.qa_state.lock();
+            st.panel_visible || st.phase != QaPhase::Idle
+        };
+        if qa_active {
+            close_qa_panel(inner);
+        } else {
+            cancel_session(inner);
+        }
         return Ok(());
     }
 
@@ -1716,6 +1732,8 @@ async fn begin_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
         state.front_app = capture_frontmost_app();
         state.selection = None;
     }
+    // 重置 SSE 取消标志：上一轮可能 set 过的 true 留着会让本轮流式立即 break。
+    inner.qa_stream_cancelled.store(false, Ordering::SeqCst);
 
     // 抓选区。每轮按 Option 都重新抓一次：用户多轮提问中可以重新选别处文字。
     // 浮窗 focus:false，原 app 仍是 frontmost，AX/Cmd+C fallback 都能拿到。
@@ -1951,8 +1969,17 @@ async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
 
     // 流式回调：每个 SSE delta 立刻推一帧 qa:state{kind:"answer_delta"} 给前端，
     // 浮窗里气泡边收边长。最终的 messages 由 answer 事件统一下发（保证一致性）。
+    //
+    // session_id 守卫（issue #161）：闭包捕获本会话 id；用户取消 → 关浮窗 → 开新浮窗
+    // 开新一轮时，旧的 in-flight LLM 流仍可能 emit chunk，必须在 emit 前比对当前
+    // qa_state.session_id == 捕获 id，否则跳过——避免旧会话的字漏进新气泡。
+    let captured_session_id = inner.qa_state.lock().session_id;
     let inner_for_delta = Arc::clone(inner);
     let on_delta = move |chunk: &str| {
+        let cur_id = inner_for_delta.qa_state.lock().session_id;
+        if cur_id != captured_session_id {
+            return; // 旧 session 漏来的 chunk，丢弃
+        }
         if let Some(app) = inner_for_delta.app.lock().clone() {
             let _ = app.emit_to(
                 "qa",
@@ -1965,11 +1992,17 @@ async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
         }
     };
 
+    // SSE 流取消旗标：cancel_qa_session / close_qa_panel 会 set true，
+    // polish 的 SSE loop 每帧检查 → break，释放 HTTP body。详见 issue #161。
+    let cancel_flag = Arc::clone(&inner.qa_stream_cancelled);
+    let should_cancel = move || cancel_flag.load(Ordering::Relaxed);
+
     let answer = match answer_chat_dispatch(
         &messages_for_llm,
         &working_languages,
         front_app.as_deref(),
         on_delta,
+        should_cancel,
     )
     .await
     {
@@ -2093,6 +2126,10 @@ fn cancel_qa_session(inner: &Arc<Inner>) {
         return;
     }
     inner.qa_state.lock().cancelled = true;
+    // SSE 流取消旗标——polish::chat_completion_history_streaming 的 loop 每帧检查
+    // 这个 flag，true 时立即 break 不再 drain HTTP body，避免取消后 LLM 仍烧 token。
+    // 详见 issue #161。
+    inner.qa_stream_cancelled.store(true, Ordering::SeqCst);
     if let Some(rec) = inner.qa_recorder.lock().take() {
         rec.stop();
     }
@@ -2107,14 +2144,16 @@ fn cancel_qa_session(inner: &Arc<Inner>) {
     log::info!("[coord] QA session cancelled (was {phase:?})");
 }
 
-async fn answer_chat_dispatch<F>(
+async fn answer_chat_dispatch<F, C>(
     messages: &[crate::types::QaChatMessage],
     working_languages: &[String],
     front_app: Option<&str>,
     on_delta: F,
+    should_cancel: C,
 ) -> anyhow::Result<String>
 where
     F: Fn(&str) + Send + Sync,
+    C: Fn() -> bool + Send + Sync,
 {
     let api_key = CredentialsVault::get(CredentialAccount::ArkApiKey)?.unwrap_or_default();
     if api_key.is_empty() {
@@ -2133,7 +2172,7 @@ where
     let config = OpenAICompatibleConfig::new("ark", "Doubao Ark", base_url, api_key, model);
     let provider = OpenAICompatibleLLMProvider::new(config);
     Ok(provider
-        .answer_chat_streaming(messages, working_languages, front_app, on_delta)
+        .answer_chat_streaming(messages, working_languages, front_app, on_delta, should_cancel)
         .await?)
 }
 
