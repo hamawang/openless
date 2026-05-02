@@ -105,6 +105,7 @@ export interface UserPreferences {
 export type QaStateKind =
   | 'idle'
   | 'recording'
+  | 'loading'
   | 'thinking'
   | 'answer_delta'
   | 'answer'

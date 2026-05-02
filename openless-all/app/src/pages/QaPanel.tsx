@@ -65,6 +65,15 @@ export function QaPanel() {
               setErrorMsg('');
               setStreamingAnswer('');
               break;
+            case 'loading':
+              // ASR 在 finalize、user message 还没 push 的过渡帧。提前切到 thinking
+              // 视图避免 UI 卡 recording 几百 ms 反馈缺失。详见 issue #161。
+              setStatus('thinking');
+              setSelectionPreview('');
+              setErrorMsg('');
+              setStreamingAnswer('');
+              setLevel(0);
+              break;
             case 'thinking':
               setStatus('thinking');
               setSelectionPreview('');

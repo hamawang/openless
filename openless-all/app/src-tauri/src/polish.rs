@@ -104,21 +104,23 @@ impl OpenAICompatibleLLMProvider {
     /// 最后一条必须是新一轮的 user 提问。第一条 user 消息里如果有选区，调用方应在
     /// content 里就把选区原文注入。`on_delta` 在每个 SSE chunk 到达时被调；最终返回
     /// 拼好的完整字符串（用于写入 messages 历史）。详见 issue #118 v2。
-    pub async fn answer_chat_streaming<F>(
+    pub async fn answer_chat_streaming<F, C>(
         &self,
         messages: &[QaChatMessage],
         working_languages: &[String],
         front_app: Option<&str>,
         on_delta: F,
+        should_cancel: C,
     ) -> Result<String, LLMError>
     where
         F: Fn(&str) + Send + Sync,
+        C: Fn() -> bool + Send + Sync,
     {
         let mut system_prompt = prompts::qa_system_prompt();
         if let Some(premise) = context_premise(working_languages, front_app) {
             system_prompt = format!("{}\n\n{}", premise, system_prompt);
         }
-        self.chat_completion_history_streaming(&system_prompt, messages, on_delta)
+        self.chat_completion_history_streaming(&system_prompt, messages, on_delta, should_cancel)
             .await
     }
 
@@ -209,14 +211,16 @@ impl OpenAICompatibleLLMProvider {
     /// 与 `chat_completion` 同条 HTTP 通路，但开 `stream: true` 并把 SSE chunk 一边
     /// 解析、一边通过 `on_delta` 推给调用方（用于实时把答案塞进浮窗气泡）。
     /// 最终返回拼好的完整字符串供调用方写入对话历史。
-    async fn chat_completion_history_streaming<F>(
+    async fn chat_completion_history_streaming<F, C>(
         &self,
         system_prompt: &str,
         history: &[QaChatMessage],
         on_delta: F,
+        should_cancel: C,
     ) -> Result<String, LLMError>
     where
         F: Fn(&str) + Send + Sync,
+        C: Fn() -> bool + Send + Sync,
     {
         if self.config.api_key.trim().is_empty() {
             return Err(LLMError::MissingCredentials);
@@ -287,6 +291,12 @@ impl OpenAICompatibleLLMProvider {
         let mut buffer = String::new();
         let mut full_text = String::new();
         loop {
+            // 取消旗标：用户取消 / 关浮窗时立即 break，不再 drain HTTP body。
+            // 否则 reqwest 会读完整个流（包括 LLM 后续 token）烧 quota。详见 issue #161。
+            if should_cancel() {
+                log::info!("[llm] stream cancelled by caller; breaking SSE loop");
+                break;
+            }
             let chunk_opt = response
                 .chunk()
                 .await
