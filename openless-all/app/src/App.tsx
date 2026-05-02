@@ -6,6 +6,7 @@ import { detectOS } from './components/WindowChrome';
 import {
   checkAccessibilityPermission,
   checkMicrophonePermission,
+  getHotkeyStatus,
   handleWindowHotkeyEvent,
   isTauri,
 } from './lib/ipc';
@@ -29,25 +30,55 @@ export function App({ isCapsule, isQa }: AppProps) {
 
   const os = detectOS();
   // Windows 启动不应被权限探测阻塞首屏。
-  const [gate, setGate] = useState<Gate>(isTauri && os !== 'win' ? 'checking' : 'ready');
+  const [gate, setGate] = useState<Gate>(isTauri ? 'checking' : 'ready');
 
   useEffect(() => {
     if (!isTauri) return;
+    if (os === 'win' && gate === 'checking') return;
     let cancelled = false;
     requestAnimationFrame(() => {
       if (cancelled) return;
       import('@tauri-apps/api/window')
-        .then(({ getCurrentWindow }) => getCurrentWindow().show())
+        .then(async ({ getCurrentWindow }) => {
+          const currentWindow = getCurrentWindow();
+          if (!(await currentWindow.isVisible())) {
+            await currentWindow.show();
+          }
+        })
         .catch(error => console.warn('[startup] show main window failed', error));
     });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [gate, os]);
 
   useEffect(() => {
-    if (!isTauri || os === 'win') return;
+    if (!isTauri) return;
     let cancelled = false;
+
+    if (os === 'win') {
+      const pollHotkeyStatus = async () => {
+        while (!cancelled) {
+          const status = await getHotkeyStatus();
+          if (cancelled) return;
+          if (status.state !== 'starting') {
+            setGate('ready');
+            return;
+          }
+          await new Promise(resolve => window.setTimeout(resolve, 200));
+        }
+      };
+      void pollHotkeyStatus().catch(error => {
+        console.warn('[startup] hotkey status polling failed', error);
+        if (!cancelled) {
+          setGate('ready');
+        }
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+
     (async () => {
       const [a, m] = await Promise.all([
         checkAccessibilityPermission(),
