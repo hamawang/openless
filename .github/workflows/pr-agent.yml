@@ -18,19 +18,22 @@ jobs:
       - name: Run PR Agent
         uses: the-pr-agent/pr-agent@main
         env:
-          OPENAI_KEY: ${{ secrets.OPENAI_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          
-          # 自定义 Base URL（重点）
-          OPENAI.API_BASE: "https://cpa.chris233.qzz.io/v1"
-          
+
+          # OpenAI-compatible API
+          OPENAI__KEY: ${{ secrets.OPENAI_KEY }}
+          OPENAI__API_BASE: "https://cpa.chris233.qzz.io/v1"
+
           # 中文输出
           pr_reviewer.response_language: "zh-CN"
           pr_description.response_language: "zh-CN"
           pr_code_suggestions.response_language: "zh-CN"
-          
-          # 其他推荐设置
-          config.model: "deepseek-v4-pro"        # 改成你实际使用的模型
+
+          # 模型配置
+          config.model: "deepseek-v4-pro"
+          config.fallback_models: '["deepseek-v4-pro"]'
+          config.custom_model_max_tokens: "1048576"
+
           github_action_config.auto_review: "true"
           github_action_config.auto_describe: "true"
           github_action_config.auto_improve: "false"
