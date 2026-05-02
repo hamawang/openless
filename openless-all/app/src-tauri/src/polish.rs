@@ -146,10 +146,6 @@ impl OpenAICompatibleLLMProvider {
         system_prompt: &str,
         user_prompt: &str,
     ) -> Result<String, LLMError> {
-        if self.config.api_key.trim().is_empty() {
-            return Err(LLMError::MissingCredentials);
-        }
-
         let url = chat_completions_url(&self.config.base_url);
         let body = json!({
             "model": self.config.model,
@@ -171,8 +167,10 @@ impl OpenAICompatibleLLMProvider {
         let mut request = self
             .client
             .post(&url)
-            .header("Content-Type", "application/json")
-            .header("Authorization", format!("Bearer {}", self.config.api_key));
+            .header("Content-Type", "application/json");
+        if !self.config.api_key.trim().is_empty() {
+            request = request.header("Authorization", format!("Bearer {}", self.config.api_key));
+        }
         for (k, v) in &self.config.extra_headers {
             request = request.header(k.as_str(), v.as_str());
         }
@@ -222,10 +220,6 @@ impl OpenAICompatibleLLMProvider {
         F: Fn(&str) + Send + Sync,
         C: Fn() -> bool + Send + Sync,
     {
-        if self.config.api_key.trim().is_empty() {
-            return Err(LLMError::MissingCredentials);
-        }
-
         let mut msgs: Vec<Value> = Vec::with_capacity(history.len() + 1);
         msgs.push(json!({ "role": "system", "content": system_prompt }));
         for m in history {
@@ -252,8 +246,10 @@ impl OpenAICompatibleLLMProvider {
             .client
             .post(&url)
             .header("Content-Type", "application/json")
-            .header("Accept", "text/event-stream")
-            .header("Authorization", format!("Bearer {}", self.config.api_key));
+            .header("Accept", "text/event-stream");
+        if !self.config.api_key.trim().is_empty() {
+            request = request.header("Authorization", format!("Bearer {}", self.config.api_key));
+        }
         for (k, v) in &self.config.extra_headers {
             request = request.header(k.as_str(), v.as_str());
         }
@@ -310,7 +306,10 @@ impl OpenAICompatibleLLMProvider {
                 let event = buffer[..idx].to_string();
                 buffer.drain(..idx + 2);
                 for line in event.lines() {
-                    let Some(payload) = line.strip_prefix("data: ").or_else(|| line.strip_prefix("data:")) else {
+                    let Some(payload) = line
+                        .strip_prefix("data: ")
+                        .or_else(|| line.strip_prefix("data:"))
+                    else {
                         continue;
                     };
                     let payload = payload.trim();
@@ -320,7 +319,10 @@ impl OpenAICompatibleLLMProvider {
                     let v: Value = match serde_json::from_str(payload) {
                         Ok(v) => v,
                         Err(e) => {
-                            log::warn!("[llm] SSE parse skip: {e}; payload preview: {}", safe_str_slice(payload, 80));
+                            log::warn!(
+                                "[llm] SSE parse skip: {e}; payload preview: {}",
+                                safe_str_slice(payload, 80)
+                            );
                             continue;
                         }
                     };
@@ -382,9 +384,7 @@ fn context_premise(working_languages: &[String], front_app: Option<&str>) -> Opt
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .collect();
-    let app = front_app
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
+    let app = front_app.map(str::trim).filter(|s| !s.is_empty());
 
     if langs.is_empty() && app.is_none() {
         return None;
@@ -832,6 +832,9 @@ pub mod prompts {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread;
 
     #[test]
     fn clean_polish_output_strips_think_tag_block() {
@@ -900,11 +903,60 @@ mod tests {
 
     #[test]
     fn compose_system_prompt_prefers_correct_spelling_for_hotwords() {
-        let prompt = compose_system_prompt(PolishMode::Light, &["GitHub".into(), "OpenLess".into()]);
+        let prompt =
+            compose_system_prompt(PolishMode::Light, &["GitHub".into(), "OpenLess".into()]);
 
         assert!(prompt.contains("用户希望以下写法在输出中保持准确"));
         assert!(prompt.contains("同音 / 近形误识别时，优先按上述写法输出"));
         assert!(prompt.contains("- GitHub"));
         assert!(prompt.contains("- OpenLess"));
+    }
+
+    #[tokio::test]
+    async fn chat_completion_omits_authorization_when_api_key_is_empty() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 8192];
+            let mut request = Vec::new();
+            loop {
+                let n = stream.read(&mut buf).unwrap();
+                if n == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buf[..n]);
+                if request.windows(4).any(|w| w == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let request_text = String::from_utf8_lossy(&request);
+            assert!(!request_text.contains("Authorization: Bearer"));
+
+            let body = r#"{"choices":[{"message":{"content":"最终文本。"}}]}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+        });
+
+        let provider = OpenAICompatibleLLMProvider::new(OpenAICompatibleConfig::new(
+            "ark",
+            "Doubao Ark",
+            format!("http://{}", addr),
+            "",
+            "deepseek-v3-2",
+        ));
+
+        let output = provider
+            .polish("原文", PolishMode::Raw, &[], &[], None)
+            .await
+            .unwrap();
+        assert_eq!(output, "最终文本。");
+
+        server.join().unwrap();
     }
 }

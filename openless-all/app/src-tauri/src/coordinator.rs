@@ -1589,9 +1589,6 @@ async fn polish_text(
     front_app: Option<&str>,
 ) -> anyhow::Result<String> {
     let api_key = CredentialsVault::get(CredentialAccount::ArkApiKey)?.unwrap_or_default();
-    if api_key.is_empty() {
-        anyhow::bail!("ark api key missing");
-    }
     let model = CredentialsVault::get(CredentialAccount::ArkModelId)?
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "deepseek-v3-2".to_string());
@@ -1634,9 +1631,6 @@ async fn translate_text(
     front_app: Option<&str>,
 ) -> anyhow::Result<String> {
     let api_key = CredentialsVault::get(CredentialAccount::ArkApiKey)?.unwrap_or_default();
-    if api_key.is_empty() {
-        anyhow::bail!("ark api key missing");
-    }
     let model = CredentialsVault::get(CredentialAccount::ArkModelId)?
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "deepseek-v3-2".to_string());
@@ -2154,9 +2148,6 @@ where
     C: Fn() -> bool + Send + Sync,
 {
     let api_key = CredentialsVault::get(CredentialAccount::ArkApiKey)?.unwrap_or_default();
-    if api_key.is_empty() {
-        anyhow::bail!("ark api key missing");
-    }
     let model = CredentialsVault::get(CredentialAccount::ArkModelId)?
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "deepseek-v3-2".to_string());
@@ -2170,7 +2161,13 @@ where
     let config = OpenAICompatibleConfig::new("ark", "Doubao Ark", base_url, api_key, model);
     let provider = OpenAICompatibleLLMProvider::new(config);
     Ok(provider
-        .answer_chat_streaming(messages, working_languages, front_app, on_delta, should_cancel)
+        .answer_chat_streaming(
+            messages,
+            working_languages,
+            front_app,
+            on_delta,
+            should_cancel,
+        )
         .await?)
 }
 

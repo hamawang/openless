@@ -165,9 +165,17 @@ struct ProviderConfig {
 }
 
 fn read_openai_provider_config(kind: &str) -> Result<ProviderConfig, String> {
-    let (api_key_account, endpoint_account) = match kind {
-        "llm" => (CredentialAccount::ArkApiKey, CredentialAccount::ArkEndpoint),
-        "asr" => (CredentialAccount::AsrApiKey, CredentialAccount::AsrEndpoint),
+    let (api_key_account, endpoint_account, api_key_required) = match kind {
+        "llm" => (
+            CredentialAccount::ArkApiKey,
+            CredentialAccount::ArkEndpoint,
+            false,
+        ),
+        "asr" => (
+            CredentialAccount::AsrApiKey,
+            CredentialAccount::AsrEndpoint,
+            true,
+        ),
         _ => return Err(format!("unknown provider kind: {kind}")),
     };
     let api_key = CredentialsVault::get(api_key_account)
@@ -176,7 +184,7 @@ fn read_openai_provider_config(kind: &str) -> Result<ProviderConfig, String> {
     let base_url = CredentialsVault::get(endpoint_account)
         .map_err(|e| e.to_string())?
         .unwrap_or_default();
-    if api_key.trim().is_empty() {
+    if api_key_required && api_key.trim().is_empty() {
         return Err("API Key 为空".to_string());
     }
     if base_url.trim().is_empty() {
