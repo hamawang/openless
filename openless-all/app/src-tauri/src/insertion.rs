@@ -11,7 +11,14 @@
 //! 3. 其他平台 (Windows/Linux) 仍用 enigo。
 
 #[cfg(not(target_os = "macos"))]
+use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(not(target_os = "macos"))]
 use std::time::Duration;
+
+#[cfg(not(target_os = "macos"))]
+use once_cell::sync::Lazy;
+#[cfg(not(target_os = "macos"))]
+use parking_lot::Mutex;
 
 use crate::types::InsertStatus;
 
@@ -82,6 +89,20 @@ struct ClipboardRestorePlan {
     previous_text: Option<String>,
 }
 
+#[cfg(not(target_os = "macos"))]
+#[derive(Debug, Clone)]
+struct PendingClipboardRestore {
+    latest_restore_id: u64,
+    original_text: Option<String>,
+}
+
+#[cfg(not(target_os = "macos"))]
+static NEXT_CLIPBOARD_RESTORE_ID: AtomicU64 = AtomicU64::new(1);
+
+#[cfg(not(target_os = "macos"))]
+static PENDING_CLIPBOARD_RESTORE: Lazy<Mutex<Option<PendingClipboardRestore>>> =
+    Lazy::new(|| Mutex::new(None));
+
 fn copy_to_clipboard(text: &str) -> bool {
     let mut clipboard = match arboard::Clipboard::new() {
         Ok(c) => c,
@@ -143,16 +164,41 @@ fn insert_with_clipboard_restore(text: &str, restore_clipboard_after_paste: bool
 
 #[cfg(not(target_os = "macos"))]
 fn schedule_clipboard_restore(plan: ClipboardRestorePlan) {
-    std::thread::spawn(move || restore_clipboard_after_delay(plan, CLIPBOARD_RESTORE_DELAY));
+    let restore_id = NEXT_CLIPBOARD_RESTORE_ID.fetch_add(1, Ordering::SeqCst);
+    let original_text = {
+        let mut pending = PENDING_CLIPBOARD_RESTORE.lock();
+        let original = pending
+            .as_ref()
+            .map(|batch| batch.original_text.clone())
+            .unwrap_or_else(|| plan.previous_text.clone());
+        *pending = Some(PendingClipboardRestore {
+            latest_restore_id: restore_id,
+            original_text: original.clone(),
+        });
+        original
+    };
+    std::thread::spawn(move || {
+        restore_clipboard_after_delay(
+            plan,
+            original_text,
+            restore_id,
+            CLIPBOARD_RESTORE_DELAY,
+        )
+    });
 }
 
 #[cfg(not(target_os = "macos"))]
-fn restore_clipboard_after_delay(plan: ClipboardRestorePlan, delay: Duration) {
-    if plan.previous_text.is_none() {
+fn restore_clipboard_after_delay(
+    plan: ClipboardRestorePlan,
+    original_text: Option<String>,
+    restore_id: u64,
+    delay: Duration,
+) {
+    std::thread::sleep(delay);
+
+    if !is_latest_clipboard_restore(restore_id) {
         return;
     }
-
-    std::thread::sleep(delay);
 
     let mut clipboard = match arboard::Clipboard::new() {
         Ok(clipboard) => clipboard,
@@ -161,6 +207,7 @@ fn restore_clipboard_after_delay(plan: ClipboardRestorePlan, delay: Duration) {
                 "[insertion] clipboard re-open failed during restore: {}",
                 err
             );
+            clear_pending_clipboard_restore(restore_id);
             return;
         }
     };
@@ -176,14 +223,34 @@ fn restore_clipboard_after_delay(plan: ClipboardRestorePlan, delay: Duration) {
         }
     };
 
-    if !should_restore_clipboard(current_text.as_deref(), &plan.inserted_text) {
-        return;
+    if should_restore_clipboard(current_text.as_deref(), &plan.inserted_text) {
+        if let Some(previous_text) = original_text {
+            if let Err(err) = clipboard.set_text(previous_text) {
+                log::warn!("[insertion] clipboard restore failed: {}", err);
+            }
+        }
+    } else {
+        log::info!(
+            "[insertion] skip clipboard restore: latest clipboard no longer matches inserted text"
+        );
     }
 
-    if let Some(previous_text) = plan.previous_text {
-        if let Err(err) = clipboard.set_text(previous_text) {
-            log::warn!("[insertion] clipboard restore failed: {}", err);
-        }
+    clear_pending_clipboard_restore(restore_id);
+}
+
+#[cfg(not(target_os = "macos"))]
+fn is_latest_clipboard_restore(restore_id: u64) -> bool {
+    matches!(
+        PENDING_CLIPBOARD_RESTORE.lock().as_ref(),
+        Some(batch) if batch.latest_restore_id == restore_id
+    )
+}
+
+#[cfg(not(target_os = "macos"))]
+fn clear_pending_clipboard_restore(restore_id: u64) {
+    let mut pending = PENDING_CLIPBOARD_RESTORE.lock();
+    if matches!(pending.as_ref(), Some(batch) if batch.latest_restore_id == restore_id) {
+        pending.take();
     }
 }
 
