@@ -10,6 +10,7 @@ use tauri::{AppHandle, State};
 use crate::coordinator::Coordinator;
 use crate::permissions::{self, PermissionStatus};
 use crate::persistence::{CredentialAccount, CredentialsSnapshot, CredentialsVault};
+use crate::polish::{LLMError, OpenAICompatibleConfig, OpenAICompatibleLLMProvider};
 use crate::types::{
     CredentialsStatus, DictationSession, DictionaryEntry, HotkeyCapability, HotkeyStatus,
     PolishMode, QaHotkeyBinding, UserPreferences,
@@ -127,7 +128,6 @@ pub fn read_credential(account: String) -> Result<Option<String>, String> {
 #[serde(rename_all = "camelCase")]
 pub struct ProviderCheckResult {
     ok: bool,
-    model_count: usize,
 }
 
 #[derive(Serialize)]
@@ -137,13 +137,18 @@ pub struct ProviderModelsResult {
 
 #[tauri::command]
 pub async fn validate_provider_credentials(kind: String) -> Result<ProviderCheckResult, String> {
-    let config = read_openai_provider_config(&kind)?;
-    fetch_provider_models(&config)
-        .await
-        .map(|models| ProviderCheckResult {
-            ok: true,
-            model_count: models.len(),
-        })
+    match kind.as_str() {
+        "llm" => validate_llm_provider()
+            .await
+            .map(|()| ProviderCheckResult { ok: true }),
+        "asr" => {
+            let config = read_openai_provider_config(&kind)?;
+            fetch_provider_models(&config)
+                .await
+                .map(|_| ProviderCheckResult { ok: true })
+        }
+        _ => Err(format!("unknown provider kind: {kind}")),
+    }
 }
 
 #[tauri::command]
@@ -178,6 +183,31 @@ fn read_openai_provider_config(kind: &str) -> Result<ProviderConfig, String> {
         return Err("Endpoint 为空".to_string());
     }
     Ok(ProviderConfig { base_url, api_key })
+}
+
+async fn validate_llm_provider() -> Result<(), String> {
+    let config = read_openai_provider_config("llm")?;
+    let model = CredentialsVault::get(CredentialAccount::ArkModelId)
+        .map_err(|e| e.to_string())?
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "llmModelMissing".to_string())?;
+    let provider = OpenAICompatibleLLMProvider::new(OpenAICompatibleConfig::new(
+        "ark",
+        "Doubao Ark",
+        config.base_url,
+        config.api_key,
+        model,
+    ));
+    provider
+        .polish("验证连接", PolishMode::Raw, &[], &[], None)
+        .await
+        .map(|_| ())
+        .map_err(|e| match e {
+            LLMError::InvalidResponse { status, .. } => {
+                format!("providerHttpStatus:{status}")
+            }
+            other => other.to_string(),
+        })
 }
 
 async fn fetch_provider_models(config: &ProviderConfig) -> Result<Vec<String>, String> {
@@ -493,10 +523,7 @@ pub fn get_qa_hotkey_label(coord: CoordinatorState<'_>) -> String {
 /// 传入 `None` 形式的字段不在这里支持——前端用 `binding == null` 时调下面的
 /// "disable" 写法（写 prefs.qa_hotkey = None）即可。
 #[tauri::command]
-pub fn set_qa_hotkey(
-    coord: CoordinatorState<'_>,
-    binding: QaHotkeyBinding,
-) -> Result<(), String> {
+pub fn set_qa_hotkey(coord: CoordinatorState<'_>, binding: QaHotkeyBinding) -> Result<(), String> {
     let mut prefs = coord.prefs().get();
     prefs.qa_hotkey = Some(binding);
     coord.prefs().set(prefs).map_err(|e| e.to_string())?;
