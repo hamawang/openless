@@ -4,15 +4,17 @@ on:
   pull_request:
     types: [opened, reopened, ready_for_review, synchronize]
   issue_comment:
+    types: [created]
 
 jobs:
   pr_agent_job:
     if: ${{ github.event.sender.type != 'Bot' }}
     runs-on: ubuntu-latest
+
     permissions:
       issues: write
       pull-requests: write
-      contents: write
+      contents: read
 
     steps:
       - name: Run PR Agent
@@ -36,6 +38,10 @@ jobs:
           config.fallback_models: '["openai/deepseek-v4-pro"]'
           config.custom_model_max_tokens: "1048576"
 
+          # 自动执行配置
           github_action_config.auto_review: "true"
           github_action_config.auto_describe: "true"
           github_action_config.auto_improve: "false"
+
+          # 关键：允许 synchronize 事件触发 PR-Agent
+          github_action_config.pr_actions: '["opened", "reopened", "ready_for_review", "synchronize"]'
