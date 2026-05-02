@@ -14,13 +14,17 @@
 import { type CSSProperties, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
-export type OS = 'mac' | 'win';
+export type OS = 'mac' | 'win' | 'linux';
 
 export function detectOS(): OS {
   if (typeof navigator === 'undefined') return 'mac';
-  const ua = navigator.userAgent || '';
-  if (/Mac|iPhone|iPad|iPod/.test(ua)) return 'mac';
-  if (/Windows/.test(ua)) return 'win';
+  const uaDataPlatform = (
+    navigator as Navigator & { userAgentData?: { platform?: string } }
+  ).userAgentData?.platform ?? '';
+  const hints = `${navigator.userAgent || ''} ${navigator.platform || ''} ${uaDataPlatform}`;
+  if (/Mac|iPhone|iPad|iPod/.test(hints)) return 'mac';
+  if (/Windows|Win32|Win64/.test(hints)) return 'win';
+  if (/Linux|X11|Wayland/.test(hints)) return 'linux';
   return 'mac';
 }
 

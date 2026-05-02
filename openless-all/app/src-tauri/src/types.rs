@@ -350,7 +350,7 @@ impl HotkeyCapability {
                 supports_side_specific_modifiers: true,
                 explicit_fallback_available: false,
                 status_hint: Some(
-                    "Linux 仅 best-effort：不同桌面环境 / Wayland 组合可能限制全局热键。".into(),
+                    "Linux 仅 best-effort：X11 可尝试 rdev 监听；Wayland 会明确提示暂不支持全局热键。".into(),
                 ),
             }
         }
