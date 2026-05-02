@@ -220,7 +220,20 @@ impl Coordinator {
     }
 
     pub fn stop_qa_hotkey_listener(&self) {
-        self.inner.qa_hotkey.lock().take();
+        // QaHotkeyMonitor::drop 在 macOS 底层是 Carbon RemoveEventHotKey，要求主线程。
+        // RunEvent::Exit 回调不保证在 AppKit 主线程跑，drop 漏到 tokio worker 上会
+        // 触发 macOS dispatch_assert_queue_fail SIGTRAP。包到 run_on_main_thread 让
+        // drop 在主线程发生；AppHandle 已 None 时直接 drop（最坏 crash 也是退出时刻）。
+        // 详见 issue #169。
+        let app = self.inner.app.lock().clone();
+        if let Some(app) = app {
+            let inner = Arc::clone(&self.inner);
+            let _ = app.run_on_main_thread(move || {
+                inner.qa_hotkey.lock().take();
+            });
+        } else {
+            self.inner.qa_hotkey.lock().take();
+        }
     }
 
     /// 用户在设置里改了 QA 组合键时调用。先持久化（由 prefs.set 完成），
