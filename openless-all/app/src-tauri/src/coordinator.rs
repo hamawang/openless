@@ -1052,6 +1052,33 @@ fn spawn_recorder_error_monitor(inner: &Arc<Inner>, rx: mpsc::Receiver<RecorderE
         .ok();
 }
 
+/// QA 录音 runtime error 监听器。镜像 `spawn_recorder_error_monitor` 的语义但走 QA
+/// 收尾路径（`finish_qa_with_error` 替代 `abort_recording_with_error`）。
+/// 用 qa_state.session_id 守卫 stale 事件。详见 issue #168。
+fn spawn_qa_recorder_error_monitor(inner: &Arc<Inner>, rx: mpsc::Receiver<RecorderError>) {
+    let captured_session_id = inner.qa_state.lock().session_id;
+    let inner = Arc::clone(inner);
+    std::thread::Builder::new()
+        .name("openless-qa-recorder-error-monitor".into())
+        .spawn(move || {
+            if let Ok(err) = rx.recv() {
+                let current_session_id = inner.qa_state.lock().session_id;
+                if captured_session_id != current_session_id {
+                    log::warn!(
+                        "[coord] QA recorder error from stale session {} dropped (current={}, err={})",
+                        captured_session_id,
+                        current_session_id,
+                        err
+                    );
+                    return;
+                }
+                log::error!("[coord] QA recorder runtime error: {err}");
+                finish_qa_with_error(&inner, format!("录音设备异常: {err}"));
+            }
+        })
+        .ok();
+}
+
 fn abort_recording_with_error(inner: &Arc<Inner>, message: String) {
     let elapsed = {
         let mut state = inner.state.lock();
@@ -1767,8 +1794,11 @@ async fn begin_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
     });
 
     match Recorder::start(consumer, level_handler) {
-        Ok((rec, _runtime_errors)) => {
+        Ok((rec, runtime_errors)) => {
             *inner.qa_recorder.lock() = Some(rec);
+            // QA 也跟主听写一样监听 cpal runtime error。设备中途消失 / panic 时
+            // 不能让 QA 永远卡在 Recording 没反馈。详见 issue #168。
+            spawn_qa_recorder_error_monitor(inner, runtime_errors);
         }
         Err(e) => {
             log::error!("[coord] QA recorder start failed: {e}");
