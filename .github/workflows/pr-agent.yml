@@ -1,0 +1,36 @@
+name: PR-Agent
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review, synchronize]
+  issue_comment:
+
+jobs:
+  pr_agent_job:
+    if: ${{ github.event.sender.type != 'Bot' }}
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
+      contents: write
+
+    steps:
+      - name: Run PR Agent
+        uses: the-pr-agent/pr-agent@main
+        env:
+          OPENAI_KEY: ${{ secrets.OPENAI_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          
+          # 自定义 Base URL（重点）
+          OPENAI.API_BASE: "https://ds.chris233.qzz.io/v1"
+          
+          # 中文输出
+          pr_reviewer.response_language: "zh-CN"
+          pr_description.response_language: "zh-CN"
+          pr_code_suggestions.response_language: "zh-CN"
+          
+          # 其他推荐设置
+          config.model: "deepseek-v4-pro"        # 改成你实际使用的模型
+          github_action_config.auto_review: "true"
+          github_action_config.auto_describe: "true"
+          github_action_config.auto_improve: "false"
