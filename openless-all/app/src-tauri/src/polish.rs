@@ -606,10 +606,9 @@ const BOILERPLATE_END_CHARS: &[char] = &['。', '：', ':', '，', ',', '\n'];
 
 fn strip_leading_boilerplate(text: &str) -> &str {
     for prefix in LEADING_BOILERPLATE_PREFIXES {
-        if text.starts_with(prefix) {
+        if let Some(after_prefix) = text.strip_prefix(prefix) {
             // Trim characters after the prefix up to (and including) the first
             // sentence-ending punctuation or newline.
-            let after_prefix = &text[prefix.len()..];
             for (idx, c) in after_prefix.char_indices() {
                 if BOILERPLATE_END_CHARS.contains(&c) {
                     let cut = prefix.len() + idx + c.len_utf8();

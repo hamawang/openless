@@ -4,18 +4,15 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum PolishMode {
     Raw,
+    #[default]
     Light,
     Structured,
     Formal,
 }
 
-impl Default for PolishMode {
-    fn default() -> Self {
-        PolishMode::Light
-    }
-}
 
 impl PolishMode {
     pub fn display_name(&self) -> &'static str {
@@ -300,7 +297,7 @@ impl HotkeyCapability {
     pub fn current() -> Self {
         #[cfg(target_os = "macos")]
         {
-            return Self {
+            Self {
                 adapter: HotkeyAdapterKind::MacEventTap,
                 available_triggers: vec![
                     HotkeyTrigger::RightOption,
@@ -315,7 +312,7 @@ impl HotkeyCapability {
                 supports_side_specific_modifiers: true,
                 explicit_fallback_available: false,
                 status_hint: Some("授权辅助功能后，通常需要完全退出并重新打开 OpenLess。".into()),
-            };
+            }
         }
 
         #[cfg(target_os = "windows")]

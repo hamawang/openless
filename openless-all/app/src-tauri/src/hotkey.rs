@@ -164,7 +164,7 @@ mod platform {
             "hotkey hook 启动超时",
             run_listen_loop,
         )?;
-        let _ = listener.startup;
+        listener.startup;
         Ok(Box::new(MacHotkeyAdapter {
             shared: listener.shared,
         }))

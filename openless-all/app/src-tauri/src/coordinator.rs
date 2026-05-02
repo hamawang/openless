@@ -749,7 +749,7 @@ async fn handle_window_hotkey_event(
     #[cfg(not(target_os = "windows"))]
     {
         let _ = (inner, event_type, key, code, repeat);
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(target_os = "windows")]
@@ -2599,7 +2599,6 @@ fn maybe_position_capsule_bottom_center<R: tauri::Runtime>(
     if crate::position_capsule_bottom_center(window, translation_active).is_ok() {
         let mut last = inner.capsule_layout.lock();
         *last = Some(next);
-        return;
     }
 }
 

@@ -9,7 +9,7 @@ mod frame;
 pub mod volcengine;
 pub mod whisper;
 
-pub use volcengine::{VolcengineASRError, VolcengineCredentials, VolcengineStreamingASR};
+pub use volcengine::{VolcengineCredentials, VolcengineStreamingASR};
 pub use whisper::WhisperBatchASR;
 
 /// Sink for raw 16 kHz / 16-bit / mono PCM bytes coming off the recorder.
