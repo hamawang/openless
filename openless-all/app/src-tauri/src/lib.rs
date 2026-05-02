@@ -514,7 +514,16 @@ pub(crate) fn show_qa_window<R: tauri::Runtime>(app: &AppHandle<R>, content_kind
             }
         });
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        if !show_qa_window_no_activate(&window) {
+            log::warn!("[qa] show_no_activate failed; falling back to window.show()");
+            if let Err(e) = window.show() {
+                log::warn!("[qa] show fallback failed: {e}");
+            }
+        }
+    }
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
     if let Err(e) = window.show() {
         log::warn!("[qa] show failed: {e}");
     }
@@ -558,6 +567,41 @@ pub(crate) fn hide_qa_window<R: tauri::Runtime>(app: &AppHandle<R>) {
     if let Some(window) = app.get_webview_window("qa") {
         let _ = window.hide();
     }
+}
+
+#[cfg(target_os = "windows")]
+fn show_qa_window_no_activate<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) -> bool {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SetWindowPos, ShowWindow, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+        SWP_SHOWWINDOW, SW_SHOWNOACTIVATE,
+    };
+
+    let Ok(handle) = window.window_handle() else {
+        return false;
+    };
+    let RawWindowHandle::Win32(raw) = handle.as_raw() else {
+        return false;
+    };
+    let hwnd = HWND(raw.hwnd.get() as *mut _);
+    if hwnd.0.is_null() {
+        return false;
+    }
+
+    let _ = unsafe { ShowWindow(hwnd, SW_SHOWNOACTIVATE) };
+    let _ = unsafe {
+        SetWindowPos(
+            hwnd,
+            HWND_TOPMOST,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW | SWP_NOACTIVATE,
+        )
+    };
+    true
 }
 
 /// 把 capsule 窗口移到屏幕底部居中，与 Swift `CapsuleWindowController.repositionToBottomCenter` 同效。
