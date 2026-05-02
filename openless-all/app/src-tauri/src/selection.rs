@@ -75,11 +75,24 @@ pub fn capture_selection() -> Option<SelectionContext> {
         }
     }
 
-    // 3. Linux：暂不支持
+    // 3. Linux：best-effort 读 PRIMARY selection（wl-paste / xclip / xsel）。
     #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
-    {
-        let _ = source_app;
-        log::info!("[selection] platform unsupported, returning None");
+    if let Some(text) = linux_selection::read_selected_text() {
+        let trimmed = text.trim();
+        if !trimmed.is_empty() {
+            log::info!(
+                "[selection] linux primary selection OK ({} chars){}",
+                trimmed.chars().count(),
+                source_app
+                    .as_deref()
+                    .map(|a| format!(" front_app={a}"))
+                    .unwrap_or_default()
+            );
+            return Some(SelectionContext {
+                text: truncate_selection(trimmed),
+                source_app,
+            });
+        }
     }
 
     None
@@ -175,6 +188,42 @@ fn post_copy_shortcut() -> bool {
 #[cfg(target_os = "windows")]
 fn post_copy_shortcut() -> bool {
     windows_paste::send_ctrl_c().is_ok()
+}
+
+#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+mod linux_selection {
+    use std::process::Command;
+
+    const PRIMARY_SELECTION_COMMANDS: &[(&str, &[&str])] = &[
+        ("wl-paste", &["--primary", "--no-newline"]),
+        ("xclip", &["-o", "-selection", "primary"]),
+        ("xsel", &["--primary", "--output"]),
+    ];
+
+    pub fn read_selected_text() -> Option<String> {
+        for (bin, args) in PRIMARY_SELECTION_COMMANDS {
+            if let Some(text) = run_capture(bin, args) {
+                return Some(text);
+            }
+        }
+        log::info!(
+            "[selection] linux primary selection unavailable (wl-paste/xclip/xsel all failed)"
+        );
+        None
+    }
+
+    fn run_capture(bin: &str, args: &[&str]) -> Option<String> {
+        let output = Command::new(bin).args(args).output().ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let text = String::from_utf8(output.stdout).ok()?;
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        Some(trimmed.to_string())
+    }
 }
 
 // ─────────────────────────── macOS AX read ───────────────────────────

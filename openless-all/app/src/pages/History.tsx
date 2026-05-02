@@ -34,6 +34,7 @@ function useModeLabel(): Record<PolishMode, string> {
 
 export function History() {
   const { t } = useTranslation();
+  const os = detectOS();
   const FILTERS = useFilters();
   const MODE_LABEL = useModeLabel();
   const [filter, setFilter] = useState<'all' | PolishMode>('all');
@@ -203,7 +204,7 @@ export function History() {
                     : item.insertStatus === 'pasteSent'
                       ? t('history.pasteSent')
                     : item.insertStatus === 'copiedFallback'
-                      ? t('history.copiedFallback', { shortcut: detectOS() === 'win' ? 'Ctrl+V' : '⌘V' })
+                      ? t('history.copiedFallback', { shortcut: os === 'mac' ? '⌘V' : 'Ctrl+V' })
                       : t('history.insertFailed')
                 }</span>
               </div>

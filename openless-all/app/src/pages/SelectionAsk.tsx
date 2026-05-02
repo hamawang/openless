@@ -10,7 +10,8 @@ import { Card, PageHeader } from './_atoms';
 import { useHotkeySettings } from '../state/HotkeySettingsContext';
 import { setQaHotkey } from '../lib/ipc';
 import type { QaHotkeyBinding } from '../lib/types';
-import { detectOS } from '../components/WindowChrome';
+import { detectOS, type OS } from '../components/WindowChrome';
+import { getHotkeyTriggerLabel } from '../lib/hotkey';
 
 const QA_HOTKEY_DISABLED_ID = 'disabled' as const;
 
@@ -39,24 +40,50 @@ const QA_HOTKEY_PRESETS_WIN: readonly QaHotkeyPreset[] = [
   { id: 'ctrl+shift+,', label: 'Ctrl+Shift+,', binding: { primary: ',', modifiers: ['ctrl', 'shift'] } },
 ] as const;
 
-const QA_HOTKEY_PRESETS: readonly QaHotkeyPreset[] =
-  detectOS() === 'mac' ? QA_HOTKEY_PRESETS_MAC : QA_HOTKEY_PRESETS_WIN;
+// Linux：UI 展示用 Super，后端 binding 仍用 SUPER 同义词 `cmd` 透传到 global-hotkey。
+const QA_HOTKEY_PRESETS_LINUX: readonly QaHotkeyPreset[] = [
+  { id: 'super+shift+;', label: 'Super+Shift+;', binding: { primary: ';', modifiers: ['cmd', 'shift'] } },
+  { id: 'super+shift+/', label: 'Super+Shift+/', binding: { primary: '/', modifiers: ['cmd', 'shift'] } },
+  { id: 'super+shift+.', label: 'Super+Shift+.', binding: { primary: '.', modifiers: ['cmd', 'shift'] } },
+  { id: 'super+shift+,', label: 'Super+Shift+,', binding: { primary: ',', modifiers: ['cmd', 'shift'] } },
+] as const;
 
-function bindingToPresetId(binding: QaHotkeyBinding | null): string {
+function getQaHotkeyPresets(os: OS): readonly QaHotkeyPreset[] {
+  if (os === 'mac') return QA_HOTKEY_PRESETS_MAC;
+  if (os === 'linux') return QA_HOTKEY_PRESETS_LINUX;
+  return QA_HOTKEY_PRESETS_WIN;
+}
+
+function normalizeQaModifier(modifier: string): string {
+  const tag = modifier.toLowerCase();
+  if (tag === 'command' || tag === 'super' || tag === 'meta' || tag === 'win') {
+    return 'cmd';
+  }
+  return tag;
+}
+
+function bindingToPresetId(
+  binding: QaHotkeyBinding | null,
+  presets: readonly QaHotkeyPreset[],
+): string {
   if (!binding) return QA_HOTKEY_DISABLED_ID;
-  const sortedMods = [...binding.modifiers].map(m => m.toLowerCase()).sort();
-  const match = QA_HOTKEY_PRESETS.find(p => {
-    const pMods = [...p.binding.modifiers].sort();
+  const sortedMods = [...binding.modifiers].map(normalizeQaModifier).sort();
+  const match = presets.find(p => {
+    const pMods = [...p.binding.modifiers].map(normalizeQaModifier).sort();
     return p.binding.primary === binding.primary
       && pMods.length === sortedMods.length
       && pMods.every((m, i) => m === sortedMods[i]);
   });
-  return match ? match.id : QA_HOTKEY_PRESETS[0].id;
+  return match ? match.id : presets[0].id;
 }
 
 export function SelectionAsk() {
   const { t } = useTranslation();
-  const { prefs, updatePrefs: savePrefs } = useHotkeySettings();
+  const { prefs, hotkey, updatePrefs: savePrefs } = useHotkeySettings();
+  const os = detectOS();
+  const qaHotkeyPresets = getQaHotkeyPresets(os);
+  const defaultHotkeyLabel = qaHotkeyPresets[0]?.label ?? '快捷键';
+  const recordHotkeyLabel = getHotkeyTriggerLabel(hotkey?.trigger);
 
   if (!prefs) {
     return (
@@ -64,7 +91,10 @@ export function SelectionAsk() {
         <PageHeader
           kicker={t('selectionAsk.kicker')}
           title={t('selectionAsk.title')}
-          desc={t('selectionAsk.desc')}
+          desc={t('selectionAsk.desc', {
+            hotkey: defaultHotkeyLabel,
+            recordHotkey: recordHotkeyLabel,
+          })}
         />
         <Card>
           <div style={{ fontSize: 12, color: 'var(--ol-ink-4)' }}>{t('common.loading')}</div>
@@ -78,7 +108,7 @@ export function SelectionAsk() {
       await savePrefs({ ...prefs, qaHotkey: null });
       return;
     }
-    const preset = QA_HOTKEY_PRESETS.find(p => p.id === id);
+    const preset = qaHotkeyPresets.find(p => p.id === id);
     if (!preset) return;
     // 先让后端真注册成功 → 再写盘 prefs。否则 prefs 跟实际生效的快捷键脱节，
     // 会让用户陷入"UI 改了但按了没反应"的迷雾（issue #118 v1 实测过）。
@@ -96,15 +126,18 @@ export function SelectionAsk() {
     savePrefs({ ...prefs, qaSaveHistory });
 
   const enabled = prefs.qaHotkey !== null;
-  const currentId = bindingToPresetId(prefs.qaHotkey);
-  const currentLabel = QA_HOTKEY_PRESETS.find(p => p.id === currentId)?.label ?? '';
+  const currentId = bindingToPresetId(prefs.qaHotkey, qaHotkeyPresets);
+  const currentLabel = qaHotkeyPresets.find(p => p.id === currentId)?.label ?? defaultHotkeyLabel;
 
   return (
     <>
       <PageHeader
         kicker={t('selectionAsk.kicker')}
         title={t('selectionAsk.title')}
-        desc={t('selectionAsk.desc')}
+        desc={t('selectionAsk.desc', {
+          hotkey: enabled ? currentLabel : defaultHotkeyLabel,
+          recordHotkey: recordHotkeyLabel,
+        })}
       />
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -129,7 +162,7 @@ export function SelectionAsk() {
             </span>
           </div>
           <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', marginBottom: 12, lineHeight: 1.55 }}>
-            {t('selectionAsk.hotkey.desc')}
+            {t('selectionAsk.hotkey.desc', { recordHotkey: recordHotkeyLabel })}
           </div>
           <select
             value={currentId}
@@ -149,7 +182,7 @@ export function SelectionAsk() {
             }}
           >
             <option value={QA_HOTKEY_DISABLED_ID}>{t('selectionAsk.hotkey.optionDisabled')}</option>
-            {QA_HOTKEY_PRESETS.map(p => (
+            {qaHotkeyPresets.map(p => (
               <option key={p.id} value={p.id}>{p.label}</option>
             ))}
           </select>
@@ -195,11 +228,11 @@ export function SelectionAsk() {
         <Card>
           <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10 }}>{t('selectionAsk.howto.title')}</div>
           <ol style={{ margin: 0, paddingLeft: 18, fontSize: 12.5, color: 'var(--ol-ink-2)', lineHeight: 1.7 }}>
-            <li>{t('selectionAsk.howto.step1')}</li>
-            <li>{t('selectionAsk.howto.step2', { hotkey: enabled ? currentLabel : '快捷键' })}</li>
-            <li>{t('selectionAsk.howto.step3')}</li>
-            <li>{t('selectionAsk.howto.step4', { hotkey: enabled ? currentLabel : '快捷键' })}</li>
-            <li>{t('selectionAsk.howto.step5')}</li>
+            <li>{t('selectionAsk.howto.step1', { hotkey: enabled ? currentLabel : defaultHotkeyLabel })}</li>
+            <li>{t('selectionAsk.howto.step2')}</li>
+            <li>{t('selectionAsk.howto.step3', { recordHotkey: recordHotkeyLabel })}</li>
+            <li>{t('selectionAsk.howto.step4', { recordHotkey: recordHotkeyLabel })}</li>
+            <li>{t('selectionAsk.howto.step5', { hotkey: enabled ? currentLabel : defaultHotkeyLabel })}</li>
           </ol>
 
           <div

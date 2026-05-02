@@ -19,7 +19,7 @@ use crate::types::InsertStatus;
 const CLIPBOARD_RESTORE_DELAY: Duration = Duration::from_millis(750);
 
 #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
-const CLIPBOARD_RESTORE_DELAY: Duration = Duration::from_millis(150);
+const CLIPBOARD_RESTORE_DELAY: Duration = Duration::from_millis(750);
 
 pub struct TextInserter;
 
