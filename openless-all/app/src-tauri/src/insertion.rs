@@ -10,6 +10,8 @@
 //!    → CGEventPost，跟我们这里完全同源。
 //! 3. 其他平台 (Windows/Linux) 仍用 enigo。
 
+#[cfg(not(target_os = "macos"))]
+use std::time::Duration;
 
 use crate::types::InsertStatus;
 
