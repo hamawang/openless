@@ -430,6 +430,11 @@ function ProviderTools({ kind, modelAccount, onModelSelected }: { kind: 'llm' | 
       const result = await validateProviderCredentials(kind);
       setResult(result.ok ? 'success' : 'error', t('settings.providers.validateSuccess'));
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (kind === 'llm' && message === 'llmModelMissing') {
+        setResult('empty', t('settings.providers.modelMissing'));
+        return;
+      }
       setResult('error', providerErrorMessage(error, t));
     }
   };

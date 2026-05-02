@@ -303,6 +303,7 @@ export const en: typeof zhCN = {
       validating: 'Validating…',
       fetchModels: 'Fetch models',
       loadingModels: 'Fetching models…',
+      modelMissing: 'No model is configured. Please enter a model ID first.',
       modelsEmpty: 'Credentials are valid, but no models were returned.',
       modelsLoaded: 'Fetched {{count}} models.',
       selectModel: 'Select a model to fill the field above',

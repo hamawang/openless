@@ -301,6 +301,7 @@ export const zhCN = {
       validating: '验证中…',
       fetchModels: '拉取模型',
       loadingModels: '拉取模型中…',
+      modelMissing: '未配置模型，请先填写模型 ID。',
       modelsEmpty: '鉴权成功，但没有返回可用模型。',
       modelsLoaded: '已拉取 {{count}} 个模型。',
       selectModel: '选择一个模型写入上方字段',

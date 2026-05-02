@@ -190,7 +190,7 @@ async fn validate_llm_provider() -> Result<(), String> {
     let model = CredentialsVault::get(CredentialAccount::ArkModelId)
         .map_err(|e| e.to_string())?
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "deepseek-v3-2".to_string());
+        .ok_or_else(|| "llmModelMissing".to_string())?;
     let provider = OpenAICompatibleLLMProvider::new(OpenAICompatibleConfig::new(
         "ark",
         "Doubao Ark",
