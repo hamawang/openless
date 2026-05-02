@@ -20,8 +20,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-          # OpenAI-compatible API
+          # 同时兼容 PR-Agent 旧写法和 OpenAI-like 新写法
+          OPENAI_KEY: ${{ secrets.OPENAI_KEY }}
           OPENAI__KEY: ${{ secrets.OPENAI_KEY }}
+          OPENAI.API_BASE: "https://cpa.chris233.qzz.io/v1"
           OPENAI__API_BASE: "https://cpa.chris233.qzz.io/v1"
 
           # 中文输出
@@ -30,8 +32,8 @@ jobs:
           pr_code_suggestions.response_language: "zh-CN"
 
           # 模型配置
-          config.model: "deepseek-v4-pro"
-          config.fallback_models: '["deepseek-v4-pro"]'
+          config.model: "openai/deepseek-v4-pro"
+          config.fallback_models: '["openai/deepseek-v4-pro"]'
           config.custom_model_max_tokens: "1048576"
 
           github_action_config.auto_review: "true"
