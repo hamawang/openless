@@ -217,6 +217,18 @@ jobs:
             npm run tauri -- build --bundles deb,rpm,appimage
           fi
 
+      - name: Disambiguate macOS updater bundle filename
+        if: startsWith(matrix.platform, 'macos') && env.TAURI_SIGNING_PRIVATE_KEY != ''
+        shell: bash
+        working-directory: 'openless-all/app/src-tauri/target/release/bundle/macos'
+        run: |
+          if [ -f OpenLess.app.tar.gz ]; then
+            mv OpenLess.app.tar.gz "OpenLess_${{ matrix.updater-arch }}.app.tar.gz"
+          fi
+          if [ -f OpenLess.app.tar.gz.sig ]; then
+            mv OpenLess.app.tar.gz.sig "OpenLess_${{ matrix.updater-arch }}.app.tar.gz.sig"
+          fi
+
       - name: Write updater manifest
         if: env.TAURI_SIGNING_PRIVATE_KEY != ''
         shell: bash
