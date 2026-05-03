@@ -25,7 +25,7 @@ export function Onboarding({ onComplete }: OnboardingProps) {
   const [accessibility, setAccessibility] = useState<PermissionStatus>('notDetermined');
   const [microphone, setMicrophone] = useState<PermissionStatus>('notDetermined');
   const [busy, setBusy] = useState(false);
-  const refreshTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const refreshTimeoutRef = useRef<number | null>(null);
   const { capability } = useHotkeySettings();
 
   const refresh = async () => {
