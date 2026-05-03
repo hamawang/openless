@@ -10,6 +10,7 @@ use tauri::{AppHandle, State};
 use crate::coordinator::Coordinator;
 use crate::permissions::{self, PermissionStatus};
 use crate::persistence::{CredentialAccount, CredentialsSnapshot, CredentialsVault};
+use crate::polish::{LLMError, OpenAICompatibleConfig, OpenAICompatibleLLMProvider};
 use crate::types::{
     CredentialsStatus, DictationSession, DictionaryEntry, HotkeyCapability, HotkeyStatus,
     PolishMode, QaHotkeyBinding, UserPreferences,
@@ -127,7 +128,6 @@ pub fn read_credential(account: String) -> Result<Option<String>, String> {
 #[serde(rename_all = "camelCase")]
 pub struct ProviderCheckResult {
     ok: bool,
-    model_count: usize,
 }
 
 #[derive(Serialize)]
@@ -137,13 +137,18 @@ pub struct ProviderModelsResult {
 
 #[tauri::command]
 pub async fn validate_provider_credentials(kind: String) -> Result<ProviderCheckResult, String> {
-    let config = read_openai_provider_config(&kind)?;
-    fetch_provider_models(&config)
-        .await
-        .map(|models| ProviderCheckResult {
-            ok: true,
-            model_count: models.len(),
-        })
+    match kind.as_str() {
+        "llm" => validate_llm_provider()
+            .await
+            .map(|()| ProviderCheckResult { ok: true }),
+        "asr" => {
+            let config = read_openai_provider_config(&kind)?;
+            fetch_provider_models(&config)
+                .await
+                .map(|_| ProviderCheckResult { ok: true })
+        }
+        _ => Err(format!("unknown provider kind: {kind}")),
+    }
 }
 
 #[tauri::command]
@@ -160,9 +165,17 @@ struct ProviderConfig {
 }
 
 fn read_openai_provider_config(kind: &str) -> Result<ProviderConfig, String> {
-    let (api_key_account, endpoint_account) = match kind {
-        "llm" => (CredentialAccount::ArkApiKey, CredentialAccount::ArkEndpoint),
-        "asr" => (CredentialAccount::AsrApiKey, CredentialAccount::AsrEndpoint),
+    let (api_key_account, endpoint_account, api_key_required) = match kind {
+        "llm" => (
+            CredentialAccount::ArkApiKey,
+            CredentialAccount::ArkEndpoint,
+            false,
+        ),
+        "asr" => (
+            CredentialAccount::AsrApiKey,
+            CredentialAccount::AsrEndpoint,
+            true,
+        ),
         _ => return Err(format!("unknown provider kind: {kind}")),
     };
     let api_key = CredentialsVault::get(api_key_account)
@@ -171,13 +184,38 @@ fn read_openai_provider_config(kind: &str) -> Result<ProviderConfig, String> {
     let base_url = CredentialsVault::get(endpoint_account)
         .map_err(|e| e.to_string())?
         .unwrap_or_default();
-    if api_key.trim().is_empty() {
+    if api_key_required && api_key.trim().is_empty() {
         return Err("API Key 为空".to_string());
     }
     if base_url.trim().is_empty() {
         return Err("Endpoint 为空".to_string());
     }
     Ok(ProviderConfig { base_url, api_key })
+}
+
+async fn validate_llm_provider() -> Result<(), String> {
+    let config = read_openai_provider_config("llm")?;
+    let model = CredentialsVault::get(CredentialAccount::ArkModelId)
+        .map_err(|e| e.to_string())?
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "llmModelMissing".to_string())?;
+    let provider = OpenAICompatibleLLMProvider::new(OpenAICompatibleConfig::new(
+        "ark",
+        "Doubao Ark",
+        config.base_url,
+        config.api_key,
+        model,
+    ));
+    provider
+        .polish("验证连接", PolishMode::Raw, &[], &[], None)
+        .await
+        .map(|_| ())
+        .map_err(|e| match e {
+            LLMError::InvalidResponse { status, .. } => {
+                format!("providerHttpStatus:{status}")
+            }
+            other => other.to_string(),
+        })
 }
 
 async fn fetch_provider_models(config: &ProviderConfig) -> Result<Vec<String>, String> {
@@ -187,18 +225,17 @@ async fn fetch_provider_models(config: &ProviderConfig) -> Result<Vec<String>, S
         .timeout(Duration::from_secs(15))
         .build()
         .map_err(|e| format!("HTTP client 初始化失败: {e}"))?;
-    let response = client
-        .get(&url)
-        .header("Authorization", format!("Bearer {}", config.api_key))
-        .send()
-        .await
-        .map_err(|e| {
-            if e.is_timeout() {
-                "请求超时".to_string()
-            } else {
-                format!("网络错误: {e}")
-            }
-        })?;
+    let mut request = client.get(&url);
+    if !config.api_key.trim().is_empty() {
+        request = request.header("Authorization", format!("Bearer {}", config.api_key));
+    }
+    let response = request.send().await.map_err(|e| {
+        if e.is_timeout() {
+            "请求超时".to_string()
+        } else {
+            format!("网络错误: {e}")
+        }
+    })?;
     let status = response.status();
     let body = response
         .text()
@@ -493,10 +530,7 @@ pub fn get_qa_hotkey_label(coord: CoordinatorState<'_>) -> String {
 /// 传入 `None` 形式的字段不在这里支持——前端用 `binding == null` 时调下面的
 /// "disable" 写法（写 prefs.qa_hotkey = None）即可。
 #[tauri::command]
-pub fn set_qa_hotkey(
-    coord: CoordinatorState<'_>,
-    binding: QaHotkeyBinding,
-) -> Result<(), String> {
+pub fn set_qa_hotkey(coord: CoordinatorState<'_>, binding: QaHotkeyBinding) -> Result<(), String> {
     let mut prefs = coord.prefs().get();
     prefs.qa_hotkey = Some(binding);
     coord.prefs().set(prefs).map_err(|e| e.to_string())?;
@@ -523,11 +557,17 @@ fn _ensure_snapshot_used(_: CredentialsSnapshot) {}
 
 #[cfg(test)]
 mod tests {
-    use super::{models_url, parse_model_ids, persist_settings, SettingsWriter};
+    use super::{
+        fetch_provider_models, models_url, parse_model_ids, persist_settings, ProviderConfig,
+        SettingsWriter,
+    };
     use crate::types::{
         HotkeyBinding, HotkeyMode, HotkeyTrigger, QaHotkeyBinding, UserPreferences,
     };
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
     use std::sync::Mutex;
+    use std::thread;
 
     #[derive(Default)]
     struct FakeSettingsWriter {
@@ -602,5 +642,47 @@ mod tests {
         );
         assert_eq!(*writer.dictation_refreshes.lock().unwrap(), 1);
         assert_eq!(*writer.qa_refreshes.lock().unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn fetch_provider_models_omits_authorization_when_api_key_is_empty() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 8192];
+            let mut request = Vec::new();
+            loop {
+                let n = stream.read(&mut buf).unwrap();
+                if n == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buf[..n]);
+                if request.windows(4).any(|w| w == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let request_text = String::from_utf8_lossy(&request);
+            assert!(!request_text.contains("Authorization: Bearer"));
+
+            let body = r#"{"data":[{"id":"m1"},{"id":"m2"}]}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+        });
+
+        let models = fetch_provider_models(&ProviderConfig {
+            base_url: format!("http://{}", addr),
+            api_key: String::new(),
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(models, vec!["m1".to_string(), "m2".to_string()]);
+        server.join().unwrap();
     }
 }

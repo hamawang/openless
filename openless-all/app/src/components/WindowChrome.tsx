@@ -47,7 +47,7 @@ export function WindowChrome({
   children,
   height = 800,
 }: WindowChromeProps) {
-  const shellRadius = os === 'mac' ? 20 : os === 'win' ? WIN_WINDOW_RADIUS : 14;
+  const shellRadius = os === 'mac' ? 0 : os === 'win' ? WIN_WINDOW_RADIUS : 14;
   const consoleRadius = os === 'mac' ? 20 : os === 'win' ? WIN_CONSOLE_RADIUS : 14;
 
   return (
@@ -66,7 +66,11 @@ export function WindowChrome({
         overflow: 'hidden',
         display: 'flex',
         flexDirection: 'column',
-        border: os === 'win' ? '1px solid rgba(255,255,255,0.18)' : '0.5px solid rgba(0,0,0,.10)',
+        border: os === 'mac'
+          ? 'none'
+          : os === 'win'
+            ? '1px solid rgba(255,255,255,0.18)'
+            : '0.5px solid rgba(0,0,0,.10)',
         background: `
           radial-gradient(120% 80% at 0% 0%, rgba(255,255,255,0.7) 0%, rgba(255,255,255,0) 60%),
           radial-gradient(100% 70% at 100% 100%, rgba(37,99,235,0.07) 0%, rgba(37,99,235,0) 55%),

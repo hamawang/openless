@@ -93,6 +93,9 @@ pub fn run() {
                     use window_vibrancy::{
                         apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState,
                     };
+                    if let Err(e) = main.set_decorations(true) {
+                        log::warn!("[main] enable native decorations failed: {e}");
+                    }
                     if let Err(e) = apply_vibrancy(
                         &main,
                         NSVisualEffectMaterial::HudWindow,

@@ -1589,15 +1589,10 @@ async fn polish_text(
     front_app: Option<&str>,
 ) -> anyhow::Result<String> {
     let api_key = CredentialsVault::get(CredentialAccount::ArkApiKey)?.unwrap_or_default();
-    if api_key.is_empty() {
-        anyhow::bail!("ark api key missing");
-    }
     let model = CredentialsVault::get(CredentialAccount::ArkModelId)?
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "deepseek-v3-2".to_string());
-    let endpoint = CredentialsVault::get(CredentialAccount::ArkEndpoint)?
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "https://ark.cn-beijing.volces.com/api/v3/chat/completions".to_string());
+    let endpoint = resolve_ark_endpoint(&api_key)?;
     let base_url = endpoint
         .trim_end_matches("/chat/completions")
         .trim_end_matches('/')
@@ -1634,15 +1629,10 @@ async fn translate_text(
     front_app: Option<&str>,
 ) -> anyhow::Result<String> {
     let api_key = CredentialsVault::get(CredentialAccount::ArkApiKey)?.unwrap_or_default();
-    if api_key.is_empty() {
-        anyhow::bail!("ark api key missing");
-    }
     let model = CredentialsVault::get(CredentialAccount::ArkModelId)?
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "deepseek-v3-2".to_string());
-    let endpoint = CredentialsVault::get(CredentialAccount::ArkEndpoint)?
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "https://ark.cn-beijing.volces.com/api/v3/chat/completions".to_string());
+    let endpoint = resolve_ark_endpoint(&api_key)?;
     let base_url = endpoint
         .trim_end_matches("/chat/completions")
         .trim_end_matches('/')
@@ -2154,15 +2144,10 @@ where
     C: Fn() -> bool + Send + Sync,
 {
     let api_key = CredentialsVault::get(CredentialAccount::ArkApiKey)?.unwrap_or_default();
-    if api_key.is_empty() {
-        anyhow::bail!("ark api key missing");
-    }
     let model = CredentialsVault::get(CredentialAccount::ArkModelId)?
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "deepseek-v3-2".to_string());
-    let endpoint = CredentialsVault::get(CredentialAccount::ArkEndpoint)?
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "https://ark.cn-beijing.volces.com/api/v3/chat/completions".to_string());
+    let endpoint = resolve_ark_endpoint(&api_key)?;
     let base_url = endpoint
         .trim_end_matches("/chat/completions")
         .trim_end_matches('/')
@@ -2170,8 +2155,30 @@ where
     let config = OpenAICompatibleConfig::new("ark", "Doubao Ark", base_url, api_key, model);
     let provider = OpenAICompatibleLLMProvider::new(config);
     Ok(provider
-        .answer_chat_streaming(messages, working_languages, front_app, on_delta, should_cancel)
+        .answer_chat_streaming(
+            messages,
+            working_languages,
+            front_app,
+            on_delta,
+            should_cancel,
+        )
         .await?)
+}
+
+fn resolve_ark_endpoint(api_key: &str) -> anyhow::Result<String> {
+    let endpoint = CredentialsVault::get(CredentialAccount::ArkEndpoint)?.filter(|s| !s.is_empty());
+    resolve_ark_endpoint_with_policy(api_key, endpoint)
+}
+
+fn resolve_ark_endpoint_with_policy(
+    api_key: &str,
+    endpoint: Option<String>,
+) -> anyhow::Result<String> {
+    if api_key.trim().is_empty() && endpoint.is_none() {
+        anyhow::bail!("API Key 为空");
+    }
+    Ok(endpoint
+        .unwrap_or_else(|| "https://ark.cn-beijing.volces.com/api/v3/chat/completions".to_string()))
 }
 
 #[cfg(test)]
@@ -2224,6 +2231,26 @@ mod tests {
             "AltLeft"
         ));
         assert!(!window_key_matches_trigger(HotkeyTrigger::Fn, "Fn", "Fn"));
+    }
+
+    #[test]
+    fn resolve_ark_endpoint_rejects_blank_key_without_custom_endpoint() {
+        assert_eq!(
+            resolve_ark_endpoint_with_policy("", None)
+                .unwrap_err()
+                .to_string(),
+            "API Key 为空"
+        );
+    }
+
+    #[test]
+    fn resolve_ark_endpoint_allows_blank_key_with_custom_endpoint() {
+        let endpoint = resolve_ark_endpoint_with_policy(
+            "",
+            Some("https://example.com/v1/chat/completions".to_string()),
+        )
+        .unwrap();
+        assert_eq!(endpoint, "https://example.com/v1/chat/completions");
     }
 
     #[test]
