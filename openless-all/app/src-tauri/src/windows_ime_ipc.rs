@@ -178,8 +178,8 @@ mod windows_pipe {
         IME_CLIENT_WAIT_TIMEOUT, IME_PIPE_RETRY_INTERVAL, IME_SUBMIT_TIMEOUT,
     };
     use crate::windows_ime_protocol::{
-        decode_message, encode_message, ime_pipe_name_for_target, ImePipeMessage,
-        OPENLESS_IME_PROTOCOL_VERSION,
+        decode_message, encode_message, ime_pipe_candidate_names_for_target,
+        ime_pipe_name_for_target, ImePipeMessage, OPENLESS_IME_PROTOCOL_VERSION,
     };
 
     extern "system" {
@@ -191,8 +191,7 @@ mod windows_pipe {
     ) -> WindowsImeIpcResult<crate::windows_ime_protocol::ImeSubmitStatus> {
         let target = request.target.ok_or(WindowsImeIpcError::NoReadyClient)?;
         let mut pending = PendingImeSubmit::new(request.session_id.clone());
-        let pipe_name = ime_pipe_name_for_target(target.process_id, target.thread_id);
-        let pipe = open_pipe_with_retry(&pipe_name).await?;
+        let (pipe_name, pipe) = open_pipe_with_retry(target).await?;
         let (read_half, mut write_half) = tokio::io::split(pipe);
         let mut reader = BufReader::new(read_half);
 
@@ -206,6 +205,7 @@ mod windows_pipe {
             .map_err(|error| WindowsImeIpcError::Protocol(error.to_string()))?;
 
         let response = tokio::time::timeout(IME_SUBMIT_TIMEOUT, async {
+            log::debug!("[windows-ime] submitting text over pipe {pipe_name}");
             write_half
                 .write_all(line.as_bytes())
                 .await
@@ -259,34 +259,67 @@ mod windows_pipe {
         }
     }
 
-    async fn open_pipe_with_retry(pipe_name: &str) -> WindowsImeIpcResult<NamedPipeClient> {
+    async fn open_pipe_with_retry(
+        target: super::ImeSubmitTarget,
+    ) -> WindowsImeIpcResult<(String, NamedPipeClient)> {
         let deadline = Instant::now() + IME_CLIENT_WAIT_TIMEOUT;
+        let exact_pipe_name = ime_pipe_name_for_target(target.process_id, target.thread_id);
 
         loop {
-            let retry_error = match wait_for_pipe_client(pipe_name) {
-                Ok(()) => match ClientOptions::new().open(pipe_name) {
-                    Ok(pipe) => return Ok(pipe),
-                    Err(error) => {
-                        let error_code = error.raw_os_error().map(|code| code as u32);
-                        if !super::is_retryable_pipe_error(error_code) {
-                            return Err(WindowsImeIpcError::Io(error.to_string()));
+            let mut retry_error = WindowsImeIpcError::NoReadyClient;
+
+            for pipe_name in pipe_names_for_target(target) {
+                retry_error = match wait_for_pipe_client(&pipe_name) {
+                    Ok(()) => match ClientOptions::new().open(&pipe_name) {
+                        Ok(pipe) => {
+                            if pipe_name != exact_pipe_name {
+                                log::info!(
+                                    "[windows-ime] exact target pipe {exact_pipe_name} was not ready; using same-process pipe {pipe_name}"
+                                );
+                            }
+                            return Ok((pipe_name, pipe));
                         }
-                        super::map_wait_named_pipe_error(error_code)
+                        Err(error) => {
+                            let error_code = error.raw_os_error().map(|code| code as u32);
+                            if !super::is_retryable_pipe_error(error_code) {
+                                return Err(WindowsImeIpcError::Io(error.to_string()));
+                            }
+                            super::map_wait_named_pipe_error(error_code)
+                        }
+                    },
+                    Err(error) => {
+                        if !is_retryable_wait_error(&error) {
+                            return Err(error);
+                        }
+                        error
                     }
-                },
-                Err(error) => {
-                    if !is_retryable_wait_error(&error) {
-                        return Err(error);
-                    }
-                    error
-                }
-            };
+                };
+            }
 
             if Instant::now() >= deadline {
                 return Err(retry_error);
             }
             tokio::time::sleep(next_retry_delay(deadline)).await;
         }
+    }
+
+    fn pipe_names_for_target(target: super::ImeSubmitTarget) -> Vec<String> {
+        ime_pipe_candidate_names_for_target(
+            target.process_id,
+            target.thread_id,
+            available_pipe_names(),
+        )
+    }
+
+    fn available_pipe_names() -> Vec<String> {
+        let Ok(entries) = std::fs::read_dir(r"\\.\pipe\") else {
+            return Vec::new();
+        };
+
+        entries
+            .filter_map(Result::ok)
+            .map(|entry| format!(r"\\.\pipe\{}", entry.file_name().to_string_lossy()))
+            .collect()
     }
 
     fn wait_for_pipe_client(pipe_name: &str) -> WindowsImeIpcResult<()> {

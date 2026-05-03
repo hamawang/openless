@@ -1,6 +1,8 @@
 param(
   [ValidateSet("Debug", "Release")]
-  [string]$Configuration = "Release"
+  [string]$Configuration = "Release",
+  [string]$OutputDirectory = "",
+  [string]$IntermediateDirectory = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -37,13 +39,35 @@ $appRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $solution = Join-Path $appRoot "windows-ime\OpenLessIme.sln"
 $dll = Join-Path $appRoot "windows-ime\x64\$Configuration\OpenLessIme.dll"
 $msbuild = Find-MSBuild
+$msbuildArgs = @($solution, "/p:Configuration=$Configuration", "/p:Platform=x64")
+
+function Get-FullPathWithTrailingSlash($Path) {
+  $fullPath = [System.IO.Path]::GetFullPath($Path)
+  if (-not $fullPath.EndsWith("\")) {
+    return "$fullPath\"
+  }
+  return $fullPath
+}
 
 if (-not (Test-Path $solution)) {
   throw "Solution not found: $solution"
 }
 
 Write-Host "[build] $Configuration x64"
-& $msbuild $solution /p:Configuration=$Configuration /p:Platform=x64
+if (-not [string]::IsNullOrWhiteSpace($OutputDirectory)) {
+  $outputDirectoryPath = Get-FullPathWithTrailingSlash $OutputDirectory
+  New-Item -ItemType Directory -Force -Path $outputDirectoryPath | Out-Null
+  $msbuildArgs += "/p:OutDir=$outputDirectoryPath"
+  $dll = Join-Path $outputDirectoryPath "OpenLessIme.dll"
+}
+
+if (-not [string]::IsNullOrWhiteSpace($IntermediateDirectory)) {
+  $intermediateDirectoryPath = Get-FullPathWithTrailingSlash $IntermediateDirectory
+  New-Item -ItemType Directory -Force -Path $intermediateDirectoryPath | Out-Null
+  $msbuildArgs += "/p:IntDir=$intermediateDirectoryPath"
+}
+
+& $msbuild @msbuildArgs
 if ($LASTEXITCODE -ne 0) {
   throw "OpenLessIme build failed with exit code $LASTEXITCODE"
 }

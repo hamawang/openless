@@ -65,6 +65,16 @@
       "minimumSystemVersion": "12.0",
       "infoPlist": "Info.plist",
       "entitlements": "Entitlements.plist"
+    },
+    "windows": {
+      "wix": {
+        "fragmentPaths": [
+          "wix/openless-ime.wxs"
+        ],
+        "componentRefs": [
+          "OpenLessImeDllComponent"
+        ]
+      }
     }
   },
   "plugins": {

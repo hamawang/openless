@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Fragment>
+    <DirectoryRef Id="INSTALLDIR">
+      <Directory Id="OpenLessImeDirectory" Name="windows-ime">
+        <Component Id="OpenLessImeDllComponent" Guid="{B787DE6F-DF71-4D68-9DE8-04D3665A26F3}" Win64="yes">
+          <File Id="OpenLessImeDll" Name="OpenLessIme.dll" Source="src-tauri\target\windows-ime-msvc\x64\Release\OpenLessIme.dll" KeyPath="yes" />
+        </Component>
+      </Directory>
+    </DirectoryRef>
+    <CustomAction
+      Id="RegisterOpenLessIme"
+      Directory="INSTALLDIR"
+      Execute="deferred"
+      Impersonate="no"
+      ExeCommand='&quot;[System64Folder]regsvr32.exe&quot; /s &quot;[#OpenLessImeDll]&quot;'
+      Return="check" />
+    <CustomAction
+      Id="UnregisterOpenLessIme"
+      Directory="INSTALLDIR"
+      Execute="deferred"
+      Impersonate="no"
+      ExeCommand='&quot;[System64Folder]regsvr32.exe&quot; /s /u &quot;[#OpenLessImeDll]&quot;'
+      Return="ignore" />
+
+    <InstallExecuteSequence>
+      <Custom Action="UnregisterOpenLessIme" Before="RemoveFiles"><![CDATA[REMOVE="ALL"]]></Custom>
+      <Custom Action="RegisterOpenLessIme" After="InstallFiles"><![CDATA[NOT REMOVE]]></Custom>
+    </InstallExecuteSequence>
+  </Fragment>
+</Wix>

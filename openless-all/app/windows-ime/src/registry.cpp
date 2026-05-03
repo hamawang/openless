@@ -36,6 +36,8 @@ HRESULT RegisterComServer(HINSTANCE module) {
     return HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER);
   }
 
+  RegDeleteTreeW(HKEY_CURRENT_USER, kClsidKey);
+
   HKEY clsid_key = nullptr;
   LSTATUS status =
       RegCreateKeyExW(HKEY_LOCAL_MACHINE, kClsidKey, 0, nullptr,
@@ -70,11 +72,16 @@ HRESULT RegisterComServer(HINSTANCE module) {
 }
 
 HRESULT DeleteComServerRegistration() {
-  const LSTATUS status = RegDeleteTreeW(HKEY_LOCAL_MACHINE, kClsidKey);
-  if (status == ERROR_FILE_NOT_FOUND) {
+  const LSTATUS user_status = RegDeleteTreeW(HKEY_CURRENT_USER, kClsidKey);
+  if (user_status != ERROR_SUCCESS && user_status != ERROR_FILE_NOT_FOUND) {
+    return HResultFromWin32Error(user_status);
+  }
+
+  const LSTATUS machine_status = RegDeleteTreeW(HKEY_LOCAL_MACHINE, kClsidKey);
+  if (machine_status == ERROR_FILE_NOT_FOUND) {
     return S_OK;
   }
-  return HResultFromWin32Error(status);
+  return HResultFromWin32Error(machine_status);
 }
 
 class ScopedComInit {
@@ -161,7 +168,8 @@ HRESULT RegisterLanguageProfile() {
   hr = manager->RegisterProfile(
       CLSID_OpenLessTextService, kOpenLessLangId, GUID_OpenLessProfile,
       kOpenLessImeName, static_cast<ULONG>(ARRAYSIZE(kOpenLessImeName) - 1),
-      nullptr, 0, 0, nullptr, 0, TRUE, 0);
+      nullptr, 0, 0, nullptr, 0, TRUE,
+      TF_IPP_CAPS_IMMERSIVESUPPORT | TF_IPP_CAPS_SYSTRAYSUPPORT);
   manager->Release();
   return hr;
 }
@@ -182,10 +190,26 @@ HRESULT RegisterKeyboardCategory() {
   category_mgr->UnregisterCategory(CLSID_OpenLessTextService,
                                    GUID_TFCAT_TIP_KEYBOARD,
                                    CLSID_OpenLessTextService);
+  category_mgr->UnregisterCategory(CLSID_OpenLessTextService,
+                                   GUID_TFCAT_TIPCAP_IMMERSIVESUPPORT,
+                                   CLSID_OpenLessTextService);
+  category_mgr->UnregisterCategory(CLSID_OpenLessTextService,
+                                   GUID_TFCAT_TIPCAP_SYSTRAYSUPPORT,
+                                   CLSID_OpenLessTextService);
 
   hr = category_mgr->RegisterCategory(CLSID_OpenLessTextService,
                                       GUID_TFCAT_TIP_KEYBOARD,
                                       CLSID_OpenLessTextService);
+  if (SUCCEEDED(hr)) {
+    hr = category_mgr->RegisterCategory(CLSID_OpenLessTextService,
+                                        GUID_TFCAT_TIPCAP_IMMERSIVESUPPORT,
+                                        CLSID_OpenLessTextService);
+  }
+  if (SUCCEEDED(hr)) {
+    hr = category_mgr->RegisterCategory(CLSID_OpenLessTextService,
+                                        GUID_TFCAT_TIPCAP_SYSTRAYSUPPORT,
+                                        CLSID_OpenLessTextService);
+  }
   category_mgr->Release();
   return hr;
 }
@@ -232,6 +256,16 @@ HRESULT UnregisterKeyboardCategory() {
   hr = category_mgr->UnregisterCategory(CLSID_OpenLessTextService,
                                         GUID_TFCAT_TIP_KEYBOARD,
                                         CLSID_OpenLessTextService);
+  if (SUCCEEDED(hr)) {
+    hr = category_mgr->UnregisterCategory(CLSID_OpenLessTextService,
+                                          GUID_TFCAT_TIPCAP_IMMERSIVESUPPORT,
+                                          CLSID_OpenLessTextService);
+  }
+  if (SUCCEEDED(hr)) {
+    hr = category_mgr->UnregisterCategory(CLSID_OpenLessTextService,
+                                          GUID_TFCAT_TIPCAP_SYSTRAYSUPPORT,
+                                          CLSID_OpenLessTextService);
+  }
   category_mgr->Release();
   return hr;
 }

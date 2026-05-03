@@ -7,6 +7,36 @@ pub fn ime_pipe_name_for_target(process_id: u32, thread_id: u32) -> String {
     format!("{OPENLESS_IME_PIPE_NAME_PREFIX}-{process_id}-{thread_id}")
 }
 
+pub fn ime_pipe_candidate_names_for_target<I>(
+    process_id: u32,
+    thread_id: u32,
+    available_pipe_names: I,
+) -> Vec<String>
+where
+    I: IntoIterator<Item = String>,
+{
+    let exact_pipe_name = ime_pipe_name_for_target(process_id, thread_id);
+    let process_pipe_prefix = format!("{OPENLESS_IME_PIPE_NAME_PREFIX}-{process_id}-");
+    let mut candidates = vec![exact_pipe_name.clone()];
+    let mut same_process_pipe_names = available_pipe_names
+        .into_iter()
+        .filter(|pipe_name| pipe_name != &exact_pipe_name)
+        .filter(|pipe_name| {
+            pipe_name
+                .strip_prefix(&process_pipe_prefix)
+                .is_some_and(|thread_suffix| {
+                    !thread_suffix.is_empty()
+                        && thread_suffix.bytes().all(|byte| byte.is_ascii_digit())
+                })
+        })
+        .collect::<Vec<_>>();
+
+    same_process_pipe_names.sort();
+    same_process_pipe_names.dedup();
+    candidates.extend(same_process_pipe_names);
+    candidates
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(
     tag = "type",
@@ -102,6 +132,25 @@ mod tests {
         assert_eq!(
             ime_pipe_name_for_target(1234, 5678),
             r"\\.\pipe\OpenLessImeSubmit-1234-5678"
+        );
+    }
+
+    #[test]
+    fn ime_pipe_candidates_include_same_process_clients_after_exact_target() {
+        let available = vec![
+            r"\\.\pipe\OtherPipe".to_string(),
+            r"\\.\pipe\OpenLessImeSubmit-4321-1111".to_string(),
+            r"\\.\pipe\OpenLessImeSubmit-1234-9999".to_string(),
+            r"\\.\pipe\OpenLessImeSubmit-1234-5678".to_string(),
+            r"\\.\pipe\OpenLessImeSubmit-1234-bad".to_string(),
+        ];
+
+        assert_eq!(
+            ime_pipe_candidate_names_for_target(1234, 5678, available),
+            vec![
+                r"\\.\pipe\OpenLessImeSubmit-1234-5678".to_string(),
+                r"\\.\pipe\OpenLessImeSubmit-1234-9999".to_string(),
+            ]
         );
     }
 
