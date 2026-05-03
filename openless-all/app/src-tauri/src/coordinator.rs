@@ -1548,6 +1548,24 @@ fn ensure_asr_credentials() -> Result<(), String> {
         if api_key.trim().is_empty() {
             return Err("请先在设置中填写 ASR 服务商 API Key".to_string());
         }
+        // 切换 preset 时前端会自动预填 endpoint/model，但用户可能手动清空。
+        // 提前在这里报错，比录完后让 reqwest 拼出 `/audio/transcriptions` 相对路径
+        // 再失败友好得多。model 同理：read_whisper_credentials 兜底成 "whisper-1"，
+        // 对 SiliconFlow / GLM 等是错的，提前提示用户去填本厂商模型 ID。
+        let endpoint = CredentialsVault::get(CredentialAccount::AsrEndpoint)
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        if endpoint.trim().is_empty() {
+            return Err("请先在设置中填写 ASR 服务商接口地址".to_string());
+        }
+        let model = CredentialsVault::get(CredentialAccount::AsrModel)
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        if model.trim().is_empty() {
+            return Err("请先在设置中填写 ASR 模型名".to_string());
+        }
         return Ok(());
     }
 
