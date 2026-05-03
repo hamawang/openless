@@ -34,6 +34,7 @@ function Test-IsAdministrator {
 }
 
 $appRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$stagingRoot = Join-Path $appRoot "src-tauri\target\windows-ime-register"
 
 function Get-DllPath {
   param(
@@ -41,8 +42,18 @@ function Get-DllPath {
     [string]$Platform
   )
 
-  $folder = if ($Platform -eq "Win32") { "Win32" } else { $Platform }
-  return Join-Path $appRoot "windows-ime\$folder\$Configuration\OpenLessIme.dll"
+  $folder = if ($Platform -eq "Win32") { "x86" } else { $Platform }
+  return Join-Path $stagingRoot "$folder\$Configuration\OpenLessIme.dll"
+}
+
+function Get-IntermediateDirectory {
+  param(
+    [ValidateSet("x64", "Win32")]
+    [string]$Platform
+  )
+
+  $folder = if ($Platform -eq "Win32") { "x86" } else { $Platform }
+  return Join-Path $stagingRoot "obj\$folder\$Configuration"
 }
 
 if (-not (Test-IsAdministrator)) {
@@ -51,9 +62,11 @@ if (-not (Test-IsAdministrator)) {
 
 foreach ($platform in @("x64", "Win32")) {
   $dll = Get-DllPath $platform
-  if (-not (Test-Path $dll)) {
-    & (Join-Path $PSScriptRoot "windows-ime-build.ps1") -Configuration $Configuration -Platform $platform
-  }
+  & (Join-Path $PSScriptRoot "windows-ime-build.ps1") `
+    -Configuration $Configuration `
+    -Platform $platform `
+    -OutputDirectory (Split-Path $dll -Parent) `
+    -IntermediateDirectory (Get-IntermediateDirectory $platform)
 
   $regsvr32 = Get-Regsvr32ForPlatform $platform
   $process = Start-Process -FilePath $regsvr32 -ArgumentList @("/s", $dll) -Wait -PassThru

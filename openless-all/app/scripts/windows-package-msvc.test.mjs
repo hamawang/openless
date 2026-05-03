@@ -8,16 +8,22 @@ const appRoot = join(scriptsDir, "..");
 const scriptPath = join(scriptsDir, "windows-package-msvc.ps1");
 const launcherPath = join(scriptsDir, "windows-package-msvc.cmd");
 const imeBuildPath = join(scriptsDir, "windows-ime-build.ps1");
+const imeRegisterPath = join(scriptsDir, "windows-ime-register.ps1");
 const imeSolutionPath = join(appRoot, "windows-ime", "OpenLessIme.sln");
 const imeProjectPath = join(appRoot, "windows-ime", "OpenLessIme.vcxproj");
+const imeEditSessionPath = join(appRoot, "windows-ime", "src", "edit_session.cpp");
+const imeTextServicePath = join(appRoot, "windows-ime", "src", "text_service.cpp");
 const tauriConfigPath = join(appRoot, "src-tauri", "tauri.conf.json");
 const wixFragmentPath = join(appRoot, "src-tauri", "wix", "openless-ime.wxs");
 
 const script = readFileSync(scriptPath, "utf8");
 const launcher = readFileSync(launcherPath, "utf8");
 const imeBuild = readFileSync(imeBuildPath, "utf8");
+const imeRegister = readFileSync(imeRegisterPath, "utf8");
 const imeSolution = readFileSync(imeSolutionPath, "utf8");
 const imeProject = readFileSync(imeProjectPath, "utf8");
+const imeEditSession = readFileSync(imeEditSessionPath, "utf8");
+const imeTextService = readFileSync(imeTextServicePath, "utf8");
 const tauriConfig = JSON.parse(readFileSync(tauriConfigPath, "utf8"));
 const wixFragment = readFileSync(wixFragmentPath, "utf8");
 
@@ -58,6 +64,11 @@ assert.match(imeBuild, /\/p:Platform=\$Platform/, "IME build should pass Platfor
 assert.match(imeBuild, /\$defaultOutputDirectory = Join-Path \$appRoot "windows-ime\\\$defaultPlatformFolder\\\$Configuration"/, "IME build should force stable default OutDir per platform");
 assert.match(imeBuild, /\/p:OutDir=/, "IME build should pass OutDir to MSBuild");
 assert.match(imeBuild, /\/p:IntDir=/, "IME build should pass IntDir to MSBuild");
+assert.match(imeRegister, /windows-ime-build\.ps1/, "IME register should build before registering");
+assert.doesNotMatch(imeRegister, /if \(-not \(Test-Path \$dll\)\)/, "IME register must rebuild stale DLLs, not only missing DLLs");
+assert.match(imeRegister, /windows-ime-register/, "IME register should use a side-by-side staging output to avoid locked registered DLLs");
+assert.match(imeRegister, /-OutputDirectory/, "IME register should pass a staging output directory to the build script");
+assert.match(imeRegister, /-IntermediateDirectory/, "IME register should pass a staging intermediate directory to the build script");
 
 assert.deepEqual(tauriConfig.bundle.windows.wix.fragmentPaths, ["wix/openless-ime.wxs"]);
 assert.deepEqual(tauriConfig.bundle.windows.wix.componentRefs, [
@@ -67,6 +78,10 @@ assert.deepEqual(tauriConfig.bundle.windows.wix.componentRefs, [
 
 assert.match(imeSolution, /Release\|Win32/, "IME solution should include a Win32 Release configuration");
 assert.match(imeProject, /Release\|Win32/, "IME project should include a Win32 Release configuration");
+assert.match(imeTextService, /TF_E_SYNCHRONOUS/, "IME should detect hosts like Word that reject synchronous edit sessions");
+assert.match(imeTextService, /TF_ES_ASYNC \| TF_ES_READWRITE/, "IME should retry Word-hosted commits with an async edit session");
+assert.match(imeTextService, /WaitForSingleObject/, "IME pipe submit should wait for async edit-session completion");
+assert.match(imeEditSession, /SetEvent/, "IME edit session should signal async completion back to the pipe submitter");
 
 assert.match(wixFragment, /DirectoryRef Id="INSTALLDIR"/, "WiX fragment should install into the app directory");
 assert.match(wixFragment, /Component Id="OpenLessImeDllX64Component"/, "WiX fragment should define the x64 TSF DLL component");

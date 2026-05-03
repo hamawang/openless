@@ -2,9 +2,31 @@
 
 #include <utility>
 
-OpenLessEditSession::OpenLessEditSession(ITfContext* context,
-                                         std::wstring text)
-    : context_(context), text_(std::move(text)) {
+OpenLessAsyncEditState::OpenLessAsyncEditState()
+    : event(CreateEventW(nullptr, TRUE, FALSE, nullptr)) {
+  if (event == nullptr) {
+    create_error = GetLastError();
+  }
+}
+
+OpenLessAsyncEditState::~OpenLessAsyncEditState() {
+  if (event != nullptr) {
+    CloseHandle(event);
+    event = nullptr;
+  }
+}
+
+bool OpenLessAsyncEditState::IsValid() const {
+  return event != nullptr;
+}
+
+OpenLessEditSession::OpenLessEditSession(
+    ITfContext* context,
+    std::wstring text,
+    std::shared_ptr<OpenLessAsyncEditState> async_state)
+    : context_(context),
+      text_(std::move(text)),
+      async_state_(std::move(async_state)) {
   if (context_ != nullptr) {
     context_->AddRef();
   }
@@ -45,6 +67,17 @@ STDMETHODIMP_(ULONG) OpenLessEditSession::Release() {
 }
 
 STDMETHODIMP OpenLessEditSession::DoEditSession(TfEditCookie edit_cookie) {
+  const HRESULT hr = InsertText(edit_cookie);
+  if (async_state_) {
+    async_state_->result = hr;
+    if (async_state_->event != nullptr) {
+      SetEvent(async_state_->event);
+    }
+  }
+  return hr;
+}
+
+HRESULT OpenLessEditSession::InsertText(TfEditCookie edit_cookie) {
   if (context_ == nullptr) {
     return E_UNEXPECTED;
   }
