@@ -526,8 +526,8 @@ function CredentialField({ label, account, placeholder, mono, mask, defaultValue
   const [loaded, setLoaded] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [status, setStatus] = useState<CredentialFieldStatus>('idle');
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const statusRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const debounceRef = useRef<number | null>(null);
+  const statusRef = useRef<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -588,7 +588,7 @@ function CredentialField({ label, account, placeholder, mono, mask, defaultValue
     if (!loaded) return;
     setDirty(true);
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => save(v, true), 300);
+    debounceRef.current = window.setTimeout(() => save(v, true), 300);
   };
 
   const onBlur = () => {
@@ -913,7 +913,7 @@ function LanguageSection() {
 function AboutSection() {
   const { t } = useTranslation();
   const [qqCopied, setQqCopied] = useState(false);
-  const qqCopiedRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const qqCopiedRef = useRef<number | null>(null);
 
   useEffect(() => {
     return () => {
