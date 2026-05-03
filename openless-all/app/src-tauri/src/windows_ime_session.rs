@@ -46,8 +46,15 @@ impl PreparedWindowsImeSession {
         }
     }
 
+    pub fn activation_failed(saved_profile: ImeProfileSnapshot) -> Self {
+        Self {
+            saved_profile: Some(saved_profile),
+            openless_activated: false,
+        }
+    }
+
     pub fn is_ready_for_tsf_submit(&self) -> bool {
-        self.saved_profile.is_some() && self.openless_activated
+        self.has_saved_profile() && self.openless_was_activated()
     }
 
     pub fn has_saved_profile(&self) -> bool {
@@ -59,7 +66,7 @@ impl PreparedWindowsImeSession {
     }
 
     pub fn should_restore_when_active_profile_check_fails(&self) -> bool {
-        self.has_saved_profile() && self.openless_was_activated()
+        self.has_saved_profile()
     }
 }
 
@@ -96,7 +103,7 @@ impl WindowsImeSessionController {
                 Err(error) => {
                     let error = WindowsImeSessionError::Profile(error.to_string());
                     log::warn!("[windows-ime] activate OpenLess profile failed: {error}");
-                    PreparedWindowsImeSession::unavailable()
+                    PreparedWindowsImeSession::activation_failed(saved_profile)
                 }
             }
         }
@@ -211,14 +218,29 @@ mod tests {
     }
 
     #[test]
-    fn active_profile_check_failure_restores_only_prepared_active_session() {
+    fn active_profile_check_failure_restores_any_session_with_saved_profile() {
         let prepared = PreparedWindowsImeSession {
             saved_profile: Some(ImeProfileSnapshot::keyboard_layout(0x0409, 0x0409_0409)),
             openless_activated: true,
         };
+        let activation_failed = PreparedWindowsImeSession::activation_failed(
+            ImeProfileSnapshot::keyboard_layout(0x0409, 0x0409_0409),
+        );
 
         assert!(prepared.should_restore_when_active_profile_check_fails());
+        assert!(activation_failed.should_restore_when_active_profile_check_fails());
         assert!(!PreparedWindowsImeSession::unavailable()
             .should_restore_when_active_profile_check_fails());
+    }
+
+    #[test]
+    fn activation_failed_session_keeps_snapshot_but_cannot_submit() {
+        let prepared = PreparedWindowsImeSession::activation_failed(
+            ImeProfileSnapshot::keyboard_layout(0x0409, 0x0409_0409),
+        );
+
+        assert!(prepared.has_saved_profile());
+        assert!(!prepared.openless_was_activated());
+        assert!(!prepared.is_ready_for_tsf_submit());
     }
 }
