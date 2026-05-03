@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 use serde_json::Value;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 
 use crate::coordinator::Coordinator;
 use crate::permissions::{self, PermissionStatus};
@@ -67,8 +67,17 @@ fn persist_settings<T: SettingsWriter>(coord: &T, prefs: UserPreferences) -> Res
 }
 
 #[tauri::command]
-pub fn set_settings(coord: CoordinatorState<'_>, prefs: UserPreferences) -> Result<(), String> {
-    persist_settings(&*coord, prefs)
+pub fn set_settings(
+    coord: CoordinatorState<'_>,
+    app: AppHandle,
+    prefs: UserPreferences,
+) -> Result<(), String> {
+    // 广播给所有 webview。issue #205：QaPanel 跑在独立 webview，
+    // 没有 HotkeySettingsContext，必须靠事件感知录音键变化，否则面板可见时
+    // 用户改键会让浮窗里的 "{recordHotkey}" 文案一直停留在旧值。
+    persist_settings(&*coord, prefs.clone())?;
+    let _ = app.emit("prefs:changed", &prefs);
+    Ok(())
 }
 
 #[tauri::command]

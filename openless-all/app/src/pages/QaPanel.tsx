@@ -14,7 +14,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useTranslation } from 'react-i18next';
 import { marked } from 'marked';
 import { getSettings, isTauri, qaWindowDismiss, qaWindowPin } from '../lib/ipc';
-import type { QaChatMessage, QaStatePayload } from '../lib/types';
+import type { QaChatMessage, QaStatePayload, UserPreferences } from '../lib/types';
 import { getHotkeyTriggerLabel } from '../lib/hotkey';
 
 const SELECTION_PREVIEW_MAX = 60;
@@ -49,6 +49,7 @@ export function QaPanel() {
     let unlistenState: (() => void) | undefined;
     let unlistenDismiss: (() => void) | undefined;
     let unlistenLevel: (() => void) | undefined;
+    let unlistenPrefs: (() => void) | undefined;
     let cancelled = false;
     (async () => {
       try {
@@ -118,14 +119,22 @@ export function QaPanel() {
         const levelHandle = await listen<{ level: number }>('qa:level', event => {
           setLevel(event.payload.level ?? 0);
         });
+        // prefs:changed — 后端在 set_settings 后广播。issue #205：QA 浮窗在独立
+        // webview，没有 HotkeySettingsContext；如果用户在主窗口改了录音键，
+        // 浮窗里的 "{recordHotkey}" 文案必须立刻跟上，否则会一直停在旧值。
+        const prefsHandle = await listen<UserPreferences>('prefs:changed', event => {
+          setRecordHotkeyLabel(getHotkeyTriggerLabel(event.payload?.hotkey?.trigger));
+        });
         if (cancelled) {
           stateHandle();
           dismissHandle();
           levelHandle();
+          prefsHandle();
         } else {
           unlistenState = stateHandle;
           unlistenDismiss = dismissHandle;
           unlistenLevel = levelHandle;
+          unlistenPrefs = prefsHandle;
         }
       } catch (error) {
         console.error('[QaPanel] listener setup failed', error);
@@ -136,6 +145,7 @@ export function QaPanel() {
       unlistenState?.();
       unlistenDismiss?.();
       unlistenLevel?.();
+      unlistenPrefs?.();
     };
   }, []);
 
