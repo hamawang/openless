@@ -39,6 +39,24 @@
   <a href="https://www.knin.net" target="_blank" rel="noopener">悠雾云数据 — www.knin.net</a>
 </p>
 
+<p align="center">
+  <strong>开发者</strong>
+</p>
+
+<p align="center">
+  <a href="https://tripmc.top/" target="_blank" rel="noopener">
+    <img alt="TRIP" src="assets/people/tripmc.png" width="80" height="80" />
+  </a>
+  &nbsp;&nbsp;
+  <a href="https://jiangmuran.com/" target="_blank" rel="noopener">
+    <img alt="jiangmuran" src="assets/people/jiangmuran.png" width="80" height="80" />
+  </a>
+  <br/>
+  <a href="https://tripmc.top/" target="_blank" rel="noopener">TRIP — tripmc.top</a>
+  &nbsp;·&nbsp;
+  <a href="https://jiangmuran.com/" target="_blank" rel="noopener">jiangmuran — jiangmuran.com</a>
+</p>
+
 ---
 
 OpenLess 是一个跨平台（macOS & Windows）语音输入应用，对标 [Typeless](https://www.typeless.com/)、[Wispr Flow](https://wisprflow.ai)、[Lazy](https://heylazy.com)、Superwhisper 等商业语音输入工具的 **完全开源** 替代品。
