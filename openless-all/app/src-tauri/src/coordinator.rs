@@ -1559,11 +1559,15 @@ fn ensure_asr_credentials() -> Result<(), String> {
     }
 }
 
-/// `whisper` 是 OpenAI 原生；`qwen` / `siliconflow` / `zhipu` / `groq` 都暴露
+/// `whisper` 是 OpenAI 原生；`siliconflow` / `zhipu` / `groq` 都暴露
 /// OpenAI 兼容的 `/audio/transcriptions`，统一走 `WhisperBatchASR`。
 /// 新增 OpenAI 兼容 ASR 时只需在这里加一项。
+///
+/// 注：DashScope 的 Qwen3-ASR-Flash 不在此列——它用 MultiModalConversation
+/// (messages=[{content:[{audio:...}]}]) 协议，不是 Whisper multipart，需要
+/// 单独 ASR 客户端，留给 V2。
 fn is_whisper_compatible_provider(id: &str) -> bool {
-    matches!(id, "whisper" | "qwen" | "siliconflow" | "zhipu" | "groq")
+    matches!(id, "whisper" | "siliconflow" | "zhipu" | "groq")
 }
 
 /// QA 路径专用：begin_qa_session 永远走 Volcengine 流式（低延迟要求），所以

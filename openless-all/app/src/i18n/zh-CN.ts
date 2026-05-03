@@ -280,7 +280,6 @@ export const zhCN = {
         openai: 'OpenAI',
         custom: '自定义',
         asrVolcengine: '火山引擎 bigasr',
-        asrQwen: '通义千问 Qwen3-ASR（DashScope 兼容）',
         asrSiliconflow: '硅基流动 SenseVoice',
         asrZhipu: '智谱 GLM-ASR',
         asrGroq: 'Groq Whisper-large-v3',

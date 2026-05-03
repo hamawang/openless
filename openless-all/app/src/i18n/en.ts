@@ -282,7 +282,6 @@ export const en: typeof zhCN = {
         openai: 'OpenAI',
         custom: 'Custom',
         asrVolcengine: 'Volcengine bigasr',
-        asrQwen: 'Qwen3-ASR (DashScope compatible mode)',
         asrSiliconflow: 'SiliconFlow SenseVoice',
         asrZhipu: 'Zhipu GLM-ASR',
         asrGroq: 'Groq Whisper-large-v3',

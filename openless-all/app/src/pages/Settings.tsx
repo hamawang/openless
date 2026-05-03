@@ -281,7 +281,6 @@ const ASR_DEFAULT_RESOURCE_ID = 'volc.seedasr.sauc.duration';
 //   3. 在 i18n 的 `settings.providers.presets.<nameKey>` 加文案。
 const ASR_PRESETS = [
   { id: 'volcengine',   nameKey: 'asrVolcengine',   baseUrl: '',                                              model: ''                              },
-  { id: 'qwen',         nameKey: 'asrQwen',         baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen3-asr-flash'           },
   { id: 'siliconflow',  nameKey: 'asrSiliconflow',  baseUrl: 'https://api.siliconflow.cn/v1',                  model: 'FunAudioLLM/SenseVoiceSmall' },
   { id: 'zhipu',        nameKey: 'asrZhipu',        baseUrl: 'https://open.bigmodel.cn/api/paas/v4',           model: 'glm-asr-2512'                },
   { id: 'groq',         nameKey: 'asrGroq',         baseUrl: 'https://api.groq.com/openai/v1',                 model: 'whisper-large-v3-turbo'      },
