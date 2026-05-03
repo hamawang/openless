@@ -27,6 +27,18 @@
   <strong>Join our QQ Group: 1078960553</strong>
 </p>
 
+<p align="center">
+  <strong>Sponsor</strong>
+</p>
+
+<p align="center">
+  <a href="https://www.knin.net" target="_blank" rel="noopener">
+    <img alt="悠雾云数据 (Youwu Cloud Data)" src="https://www.knin.net/upload/logo.png" height="48" />
+  </a>
+  <br/>
+  <a href="https://www.knin.net" target="_blank" rel="noopener">悠雾云数据 — www.knin.net</a>
+</p>
+
 ---
 
 OpenLess is a cross-platform (macOS & Windows) voice-input app — a **fully open-source** alternative to commercial tools like [Typeless](https://www.typeless.com/), [Wispr Flow](https://wisprflow.ai), [Lazy](https://heylazy.com), and Superwhisper.

@@ -27,6 +27,18 @@
   <strong>加入 QQ 群：1078960553</strong>
 </p>
 
+<p align="center">
+  <strong>赞助商</strong>
+</p>
+
+<p align="center">
+  <a href="https://www.knin.net" target="_blank" rel="noopener">
+    <img alt="悠雾云数据" src="https://www.knin.net/upload/logo.png" height="48" />
+  </a>
+  <br/>
+  <a href="https://www.knin.net" target="_blank" rel="noopener">悠雾云数据 — www.knin.net</a>
+</p>
+
 ---
 
 OpenLess 是一个跨平台（macOS & Windows）语音输入应用，对标 [Typeless](https://www.typeless.com/)、[Wispr Flow](https://wisprflow.ai)、[Lazy](https://heylazy.com)、Superwhisper 等商业语音输入工具的 **完全开源** 替代品。
