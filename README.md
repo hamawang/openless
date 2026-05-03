@@ -57,8 +57,14 @@
   <a href="https://tripmc.top/" target="_blank" rel="noopener">
     <img alt="TRIP" src="assets/people/tripmc.png" width="80" height="80" />
   </a>
+  &nbsp;&nbsp;
+  <a href="https://chris233.qzz.io" target="_blank" rel="noopener">
+    <img alt="Chris233" src="assets/people/Chris233.png" width="80" height="80" />
+  </a>
   <br/>
   <a href="https://tripmc.top/" target="_blank" rel="noopener">TRIP — tripmc.top</a>
+  &nbsp;·&nbsp;
+  <a href="https://chris233.qzz.io" target="_blank" rel="noopener">Chris233 — chris233.qzz.io</a>
 </p>
 
 ---
