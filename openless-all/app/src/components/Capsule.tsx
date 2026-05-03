@@ -261,12 +261,13 @@ export function Capsule() {
   const { t } = useTranslation();
   const os = detectOS();
   const metrics = getCapsulePillMetrics(os);
-  const hostMetrics = getCapsuleHostMetrics(os, false);
   const [state, setState] = useState<CapsuleState>(isTauri ? 'idle' : 'recording');
   const [level, setLevel] = useState<number>(isTauri ? 0 : 0.6);
   const [insertedChars, setInsertedChars] = useState<number>(0);
   const [message, setMessage] = useState<string | undefined>();
   const [translation, setTranslation] = useState<boolean>(false);
+  // Windows 端 host 在翻译模式从 84 长到 118；macOS / Linux 上 capsuleLayout 已固定 42 忽略此参数。
+  const hostMetrics = getCapsuleHostMetrics(os, translation);
 
   useEffect(() => {
     if (!isTauri) return;
