@@ -38,11 +38,16 @@ export type HotkeyTrigger =
   | 'fn'
   | 'rightAlt';
 
-export type HotkeyMode = 'toggle' | 'hold';
+export type HotkeyMode = 'toggle' | 'hold' | 'doubleClick';
+
+export interface HotkeyKey {
+  code: string;
+}
 
 export interface HotkeyBinding {
   trigger: HotkeyTrigger;
   mode: HotkeyMode;
+  keys?: HotkeyKey[] | null;
 }
 
 export type HotkeyAdapterKind = 'macEventTap' | 'windowsLowLevel' | 'rdev';

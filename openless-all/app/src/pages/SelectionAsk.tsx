@@ -11,7 +11,7 @@ import { useHotkeySettings } from '../state/HotkeySettingsContext';
 import { setQaHotkey } from '../lib/ipc';
 import type { QaHotkeyBinding } from '../lib/types';
 import { detectOS, type OS } from '../components/WindowChrome';
-import { getHotkeyTriggerLabel } from '../lib/hotkey';
+import { getHotkeyBindingLabel } from '../lib/hotkey';
 
 const QA_HOTKEY_DISABLED_ID = 'disabled' as const;
 
@@ -83,7 +83,7 @@ export function SelectionAsk() {
   const os = detectOS();
   const qaHotkeyPresets = getQaHotkeyPresets(os);
   const defaultHotkeyLabel = qaHotkeyPresets[0]?.label ?? '快捷键';
-  const recordHotkeyLabel = getHotkeyTriggerLabel(hotkey?.trigger);
+  const recordHotkeyLabel = getHotkeyBindingLabel(hotkey);
 
   if (!prefs) {
     return (

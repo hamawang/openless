@@ -8,7 +8,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use parking_lot::Mutex;
@@ -30,8 +30,8 @@ use crate::qa_hotkey::{QaHotkeyError, QaHotkeyEvent, QaHotkeyMonitor};
 use crate::recorder::{Recorder, RecorderError};
 use crate::selection::{capture_selection, SelectionContext};
 use crate::types::{
-    CapsulePayload, CapsuleState, DictationSession, HotkeyCapability, HotkeyMode, HotkeyStatus,
-    HotkeyStatusState, InsertStatus, PolishMode,
+    CapsulePayload, CapsuleState, DictationSession, HotkeyBinding, HotkeyCapability, HotkeyMode,
+    HotkeyStatus, HotkeyStatusState, InsertStatus, PolishMode,
 };
 #[cfg(target_os = "windows")]
 use crate::windows_ime_ipc::ImeSubmitTarget;
@@ -50,6 +50,8 @@ enum SessionPhase {
     /// 但实际还是插入了的诡异状态。详见 PR 修 Codex audit HIGH #2。
     Inserting,
 }
+
+const HOTKEY_DOUBLE_CLICK_INTERVAL: Duration = Duration::from_millis(450);
 
 enum ActiveAsr {
     Volcengine(Arc<VolcengineStreamingASR>),
@@ -127,6 +129,7 @@ struct Inner {
     hotkey: Mutex<Option<HotkeyMonitor>>,
     hotkey_status: Mutex<HotkeyStatus>,
     hotkey_trigger_held: AtomicBool,
+    hotkey_last_click_at: Mutex<Option<Instant>>,
     /// 翻译模式触发标志。每次 begin_session 重置为 false；hotkey 监听器在
     /// Listening / Starting 阶段看到 Shift down 边沿时 set true。
     /// end_session 在调 polish/translate 前读这个 flag + translation_target_language
@@ -222,6 +225,7 @@ impl Coordinator {
                 hotkey: Mutex::new(None),
                 hotkey_status: Mutex::new(HotkeyStatus::default()),
                 hotkey_trigger_held: AtomicBool::new(false),
+                hotkey_last_click_at: Mutex::new(None),
                 translation_modifier_seen: AtomicBool::new(false),
                 qa_hotkey: Mutex::new(None),
                 qa_state: Mutex::new(QaSessionState::default()),
@@ -698,6 +702,9 @@ fn hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEvent>) {
 async fn handle_pressed_edge(inner: &Arc<Inner>) {
     let was_held = inner.hotkey_trigger_held.swap(true, Ordering::SeqCst);
     if !was_held {
+        if !should_accept_pressed_edge(inner) {
+            return;
+        }
         // 路由：QA 浮窗可见时，rightOption 边沿走 QA；否则走主听写。详见 issue #118 v2。
         let panel_visible = inner.qa_state.lock().panel_visible;
         if panel_visible {
@@ -708,15 +715,30 @@ async fn handle_pressed_edge(inner: &Arc<Inner>) {
     }
 }
 
+fn should_accept_pressed_edge(inner: &Arc<Inner>) -> bool {
+    if inner.prefs.get().hotkey.mode != HotkeyMode::DoubleClick {
+        *inner.hotkey_last_click_at.lock() = None;
+        return true;
+    }
+
+    let now = Instant::now();
+    let mut last_click_at = inner.hotkey_last_click_at.lock();
+    let accepted = last_click_at
+        .map(|previous| now.duration_since(previous) <= HOTKEY_DOUBLE_CLICK_INTERVAL)
+        .unwrap_or(false);
+    *last_click_at = if accepted { None } else { Some(now) };
+    accepted
+}
+
 async fn handle_pressed(inner: &Arc<Inner>) {
     let mode = inner.prefs.get().hotkey.mode;
     let phase = inner.state.lock().phase;
     log::info!("[coord] hotkey pressed (mode={mode:?}, phase={phase:?})");
     match (mode, phase) {
-        (HotkeyMode::Toggle, SessionPhase::Idle) => {
+        (HotkeyMode::Toggle | HotkeyMode::DoubleClick, SessionPhase::Idle) => {
             let _ = begin_session(inner).await;
         }
-        (HotkeyMode::Toggle, SessionPhase::Listening) => {
+        (HotkeyMode::Toggle | HotkeyMode::DoubleClick, SessionPhase::Listening) => {
             let _ = end_session(inner).await;
         }
         (HotkeyMode::Hold, SessionPhase::Idle) => {
@@ -724,7 +746,7 @@ async fn handle_pressed(inner: &Arc<Inner>) {
         }
         // Toggle 模式 Starting 阶段第二次按 → 用户想停。
         // 不能直接 end_session（ASR session 还没建好），存边沿，握手完成后立即触发。
-        (HotkeyMode::Toggle, SessionPhase::Starting) => {
+        (HotkeyMode::Toggle | HotkeyMode::DoubleClick, SessionPhase::Starting) => {
             request_stop_during_starting(inner, "toggle stop edge");
         }
         _ => {}
@@ -886,8 +908,8 @@ async fn handle_window_hotkey_event(
             return Ok(());
         }
 
-        let trigger = inner.prefs.get().hotkey.trigger;
-        if !window_key_matches_trigger(trigger, &key, &code) {
+        let binding = inner.prefs.get().hotkey;
+        if !window_key_matches_binding(&binding, &key, &code) {
             return Ok(());
         }
 
@@ -896,13 +918,11 @@ async fn handle_window_hotkey_event(
                 if repeat {
                     return Ok(());
                 }
-                log::info!(
-                    "[window-hotkey] pressed trigger={trigger:?} code={code} repeat={repeat}"
-                );
+                log::info!("[window-hotkey] pressed code={code} repeat={repeat}");
                 handle_pressed_edge(inner).await;
             }
             "keyup" => {
-                log::info!("[window-hotkey] released trigger={trigger:?} code={code}");
+                log::info!("[window-hotkey] released code={code}");
                 handle_released_edge(inner).await;
             }
             _ => {}
@@ -916,18 +936,34 @@ fn window_hotkey_fallback_enabled() -> bool {
 }
 
 #[cfg(any(target_os = "windows", test))]
-fn window_key_matches_trigger(trigger: crate::types::HotkeyTrigger, key: &str, code: &str) -> bool {
-    use crate::types::HotkeyTrigger;
+fn window_key_matches_binding(binding: &HotkeyBinding, key: &str, code: &str) -> bool {
+    let normalized = normalize_window_hotkey_code(key, code);
+    !normalized.is_empty()
+        && binding
+            .effective_codes()
+            .iter()
+            .any(|candidate| candidate == &normalized)
+}
 
-    match trigger {
-        HotkeyTrigger::RightControl => key == "Control" && code == "ControlRight",
-        HotkeyTrigger::LeftControl => key == "Control" && code == "ControlLeft",
-        HotkeyTrigger::RightOption | HotkeyTrigger::RightAlt => {
-            (key == "Alt" || key == "AltGraph") && code == "AltRight"
+#[cfg(any(target_os = "windows", test))]
+fn normalize_window_hotkey_code(key: &str, code: &str) -> String {
+    if !code.is_empty() {
+        return code.to_string();
+    }
+    match key {
+        "Control" => "ControlLeft".into(),
+        "Alt" | "AltGraph" => "AltLeft".into(),
+        "Shift" => "ShiftLeft".into(),
+        "Meta" => "MetaLeft".into(),
+        " " => "Space".into(),
+        "ArrowUp" | "ArrowDown" | "ArrowLeft" | "ArrowRight" => key.into(),
+        other if other.len() == 1 && other.as_bytes()[0].is_ascii_alphabetic() => {
+            format!("Key{}", other.to_ascii_uppercase())
         }
-        HotkeyTrigger::LeftOption => (key == "Alt" || key == "AltGraph") && code == "AltRight",
-        HotkeyTrigger::RightCommand => key == "Meta" && code == "MetaRight",
-        HotkeyTrigger::Fn => key == "Control" && code == "ControlRight",
+        other if other.len() == 1 && other.as_bytes()[0].is_ascii_digit() => {
+            format!("Digit{other}")
+        }
+        other => other.into(),
     }
 }
 
@@ -2548,7 +2584,7 @@ fn resolve_ark_endpoint_with_policy(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::HotkeyTrigger;
+    use crate::types::{HotkeyKey, HotkeyTrigger};
 
     #[tokio::test]
     async fn hotkey_injection_gate_logs_pressed_and_cancels() {
@@ -2566,35 +2602,21 @@ mod tests {
     }
 
     #[test]
-    fn window_key_matcher_mirrors_windows_trigger_aliases() {
-        let cases = [
-            (HotkeyTrigger::RightControl, "Control", "ControlRight"),
-            (HotkeyTrigger::LeftControl, "Control", "ControlLeft"),
-            (HotkeyTrigger::RightOption, "Alt", "AltRight"),
-            (HotkeyTrigger::RightAlt, "AltGraph", "AltRight"),
-            (HotkeyTrigger::RightCommand, "Meta", "MetaRight"),
-            // Mirrors Windows trigger_to_vk_code aliases.
-            (HotkeyTrigger::LeftOption, "Alt", "AltRight"),
-            (HotkeyTrigger::Fn, "Control", "ControlRight"),
-        ];
-        for (trigger, key, code) in cases {
-            assert!(
-                window_key_matches_trigger(trigger, key, code),
-                "{trigger:?} should match {key}/{code}"
-            );
-        }
+    fn window_key_matcher_accepts_legacy_and_configured_codes() {
+        let legacy = HotkeyBinding {
+            trigger: HotkeyTrigger::RightControl,
+            ..Default::default()
+        };
+        assert!(window_key_matches_binding(&legacy, "Control", "ControlRight"));
+        assert!(!window_key_matches_binding(&legacy, "Control", "ControlLeft"));
 
-        assert!(!window_key_matches_trigger(
-            HotkeyTrigger::RightControl,
-            "Control",
-            "ControlLeft"
-        ));
-        assert!(!window_key_matches_trigger(
-            HotkeyTrigger::LeftOption,
-            "Alt",
-            "AltLeft"
-        ));
-        assert!(!window_key_matches_trigger(HotkeyTrigger::Fn, "Fn", "Fn"));
+        let caps_lock = HotkeyBinding {
+            trigger: HotkeyTrigger::RightControl,
+            keys: Some(vec![HotkeyKey::new("CapsLock")]),
+            ..Default::default()
+        };
+        assert!(window_key_matches_binding(&caps_lock, "CapsLock", "CapsLock"));
+        assert!(!window_key_matches_binding(&caps_lock, "Control", "ControlRight"));
     }
 
     #[test]
@@ -2710,6 +2732,31 @@ mod tests {
         assert_eq!(state.session_id, 41);
     }
 
+    #[test]
+    fn double_click_mode_requires_second_press_within_window() {
+        let coordinator = Coordinator::new();
+        coordinator
+            .inner
+            .prefs
+            .set(crate::types::UserPreferences {
+                hotkey: crate::types::HotkeyBinding {
+                    trigger: HotkeyTrigger::RightControl,
+                    mode: HotkeyMode::DoubleClick,
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .unwrap();
+
+        assert!(!should_accept_pressed_edge(&coordinator.inner));
+        assert!(should_accept_pressed_edge(&coordinator.inner));
+        assert!(!should_accept_pressed_edge(&coordinator.inner));
+
+        *coordinator.inner.hotkey_last_click_at.lock() =
+            Some(Instant::now() - HOTKEY_DOUBLE_CLICK_INTERVAL - Duration::from_millis(1));
+        assert!(!should_accept_pressed_edge(&coordinator.inner));
+    }
+
     #[tokio::test]
     async fn repeated_pressed_edge_during_hold_session_does_not_restart() {
         let coordinator = Coordinator::new();
@@ -2720,6 +2767,7 @@ mod tests {
                 hotkey: crate::types::HotkeyBinding {
                     trigger: HotkeyTrigger::RightControl,
                     mode: HotkeyMode::Hold,
+                    ..Default::default()
                 },
                 ..Default::default()
             })

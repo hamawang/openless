@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../components/Icon';
-import { getHotkeyTriggerLabel } from '../lib/hotkey';
+import { getHotkeyBindingLabel } from '../lib/hotkey';
 import { getCredentials, listHistory } from '../lib/ipc';
 import type { CredentialsStatus, DictationSession, PolishMode } from '../lib/types';
 import { useHotkeySettings } from '../state/HotkeySettingsContext';
@@ -114,7 +114,7 @@ export function Overview({ onOpenHistory }: OverviewProps) {
           <div>
             {history.length === 0 && (
               <div style={{ padding: 24, textAlign: 'center', fontSize: 12, color: 'var(--ol-ink-4)' }}>
-                {t('overview.recentEmpty', { trigger: getHotkeyTriggerLabel(hotkey?.trigger) })}
+                {t('overview.recentEmpty', { trigger: getHotkeyBindingLabel(hotkey) })}
               </div>
             )}
             {history.slice(0, 5).map(s => (
