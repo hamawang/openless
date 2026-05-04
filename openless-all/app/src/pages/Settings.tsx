@@ -5,10 +5,10 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../components/Icon';
+import { ShortcutRecorder } from '../components/ShortcutRecorder';
 import { isDialogStatus, UpdateDialog, useAutoUpdate } from '../components/AutoUpdate';
 import { APP_VERSION_LABEL } from '../lib/appVersion';
 import { isHotkeyModeMigrationNoticeActive } from '../lib/hotkeyMigration';
-import { getHotkeyStartStopLabel, getHotkeyTriggerLabel } from '../lib/hotkey';
 import {
   checkAccessibilityPermission,
   checkMicrophonePermission,
@@ -22,14 +22,19 @@ import {
   setActiveAsrProvider,
   setActiveLlmProvider,
   setCredential,
+  setDictationHotkey,
+  setOpenAppHotkey,
+  setQaHotkey,
+  setSwitchStyleHotkey,
+  setTranslationHotkey,
   validateProviderCredentials,
 } from '../lib/ipc';
 import type {
   HotkeyCapability,
   HotkeyMode,
   HotkeyStatus,
-  HotkeyTrigger,
   PermissionStatus,
+  ShortcutBinding,
 } from '../lib/types';
 import { useHotkeySettings } from '../state/HotkeySettingsContext';
 import i18n, {
@@ -146,8 +151,6 @@ function RecordingSection() {
     );
   }
 
-  const onTriggerChange = (trigger: HotkeyTrigger) =>
-    savePrefs({ ...prefs, hotkey: { ...prefs.hotkey, trigger } });
   const onModeChange = (mode: HotkeyMode) =>
     savePrefs({ ...prefs, hotkey: { ...prefs.hotkey, mode } });
   const onShowCapsuleChange = (showCapsule: boolean) =>
@@ -187,19 +190,13 @@ function RecordingSection() {
         </div>
       )}
       <SettingRow label={t('settings.recording.hotkeyLabel')} desc={hotkeyDesc}>
-        <select
-          value={prefs.hotkey.trigger}
-          onChange={e => onTriggerChange(e.target.value as HotkeyTrigger)}
-          style={{
-            ...inputStyle,
-            maxWidth: 200,
-            fontFamily: 'var(--ol-font-mono)',
+        <ShortcutRecorder
+          value={prefs.dictationHotkey}
+          onSave={async binding => {
+            await setDictationHotkey(binding);
+            await savePrefs({ ...prefs, dictationHotkey: binding });
           }}
-        >
-          {capability.availableTriggers.map(tr => (
-            <option key={tr} value={tr}>{getHotkeyTriggerLabel(tr)}</option>
-          ))}
-        </select>
+        />
       </SettingRow>
       <SettingRow label={t('settings.recording.modeLabel')} desc={t('settings.recording.modeDesc')}>
         <div style={{ display: 'inline-flex', padding: 2, borderRadius: 8, background: 'rgba(0,0,0,0.05)' }}>
@@ -526,8 +523,8 @@ function CredentialField({ label, account, placeholder, mono, mask, defaultValue
   const [loaded, setLoaded] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [status, setStatus] = useState<CredentialFieldStatus>('idle');
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const statusRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const debounceRef = useRef<number | null>(null);
+  const statusRef = useRef<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -588,7 +585,7 @@ function CredentialField({ label, account, placeholder, mono, mask, defaultValue
     if (!loaded) return;
     setDirty(true);
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => save(v, true), 300);
+    debounceRef.current = window.setTimeout(() => save(v, true), 300);
   };
 
   const onBlur = () => {
@@ -712,9 +709,9 @@ const iconBtnStyle: CSSProperties = {
 
 function ShortcutsSection() {
   const { t } = useTranslation();
-  const { hotkey, capability } = useHotkeySettings();
+  const { prefs, hotkey, capability, updatePrefs: savePrefs } = useHotkeySettings();
 
-  if (!hotkey || !capability) {
+  if (!prefs || !hotkey || !capability) {
     return (
       <Card>
         <div style={{ fontSize: 12, color: 'var(--ol-ink-4)' }}>{t('common.loading')}</div>
@@ -725,19 +722,83 @@ function ShortcutsSection() {
   const desc = capability.requiresAccessibilityPermission
     ? t('settings.shortcuts.descAcc')
     : t('settings.shortcuts.descNoAcc');
-  const notSupported = t('settings.shortcuts.notSupported');
-  const rows: Array<[string, string]> = [
-    [t('settings.shortcuts.startStop'), getHotkeyStartStopLabel(hotkey)],
+  const readonlyRows: Array<[string, string]> = [
     [t('settings.shortcuts.cancel'), 'Esc'],
     [t('settings.shortcuts.confirm'), t('settings.shortcuts.confirmHint')],
-    [t('settings.shortcuts.switchStyle'), capability.requiresAccessibilityPermission ? '⌘ ⇧ S' : notSupported],
-    [t('settings.shortcuts.openApp'), capability.requiresAccessibilityPermission ? '⌘ ⇧ O' : notSupported],
   ];
   return (
     <Card>
       <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>{t('settings.shortcuts.title')}</div>
       <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', marginBottom: 6 }}>{desc}</div>
-      {rows.map(([k, v]) => (
+      <SettingRow label={t('settings.shortcuts.startStop')}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, width: '100%' }}>
+          <ShortcutRecorder
+            value={prefs.dictationHotkey}
+            alignRecordButton
+            onSave={async binding => {
+              await setDictationHotkey(binding);
+              await savePrefs({ ...prefs, dictationHotkey: binding });
+            }}
+          />
+          <div style={{ fontSize: 11, color: 'var(--ol-ink-4)' }}>
+            {hotkey.mode === 'hold' ? t('hotkey.modeHoldSuffix') : t('hotkey.modeToggleSuffix')}
+          </div>
+        </div>
+      </SettingRow>
+      <SettingRow label={t('translation.hotkey.title', 'Translation shortcut')}>
+        <ShortcutRecorder
+          value={prefs.translationHotkey}
+          alignRecordButton
+          onSave={async binding => {
+            await setTranslationHotkey(binding);
+            await savePrefs({ ...prefs, translationHotkey: binding });
+          }}
+        />
+      </SettingRow>
+      <SettingRow label={t('selectionAsk.hotkey.title')}>
+        {prefs.qaHotkey ? (
+          <ShortcutRecorder
+            value={prefs.qaHotkey}
+            alignRecordButton
+            onSave={async binding => {
+              await setQaHotkey(binding);
+              await savePrefs({ ...prefs, qaHotkey: binding });
+            }}
+          />
+        ) : (
+          <button
+            onClick={async () => {
+              const binding = defaultQaShortcut();
+              await setQaHotkey(binding);
+              await savePrefs({ ...prefs, qaHotkey: binding });
+            }}
+            style={{ fontSize: 12, padding: '5px 14px', background: 'var(--ol-blue)', color: '#fff', border: 0, borderRadius: 6, fontFamily: 'inherit', fontWeight: 500, cursor: 'default' }}
+          >
+            {t('selectionAsk.hotkey.enable', 'Enable')}
+          </button>
+        )}
+      </SettingRow>
+      <SettingRow label={t('settings.shortcuts.switchStyle')}>
+        <ShortcutRecorder
+          value={prefs.switchStyleHotkey}
+          alignRecordButton
+          onSave={async binding => {
+            await setSwitchStyleHotkey(binding);
+            await savePrefs({ ...prefs, switchStyleHotkey: binding });
+          }}
+        />
+      </SettingRow>
+      <SettingRow label={t('settings.shortcuts.openApp')}>
+        <ShortcutRecorder
+          value={prefs.openAppHotkey}
+          alignRecordButton
+          onSave={async binding => {
+            await setOpenAppHotkey(binding);
+            await savePrefs({ ...prefs, openAppHotkey: binding });
+          }}
+        />
+      </SettingRow>
+      {readonlyRows.map(([k, v]) => (
         <SettingRow key={k} label={k}>
           <kbd style={{
             display: 'inline-flex', alignItems: 'center', gap: 4,
@@ -751,6 +812,13 @@ function ShortcutsSection() {
       ))}
     </Card>
   );
+}
+
+function defaultQaShortcut(): ShortcutBinding {
+  const isMac = navigator.platform.includes('Mac') || navigator.userAgent.includes('Mac');
+  return isMac
+    ? { primary: ';', modifiers: ['cmd', 'shift'] }
+    : { primary: ';', modifiers: ['ctrl', 'shift'] };
 }
 
 function PermissionsSection() {
@@ -913,7 +981,7 @@ function LanguageSection() {
 function AboutSection() {
   const { t } = useTranslation();
   const [qqCopied, setQqCopied] = useState(false);
-  const qqCopiedRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const qqCopiedRef = useRef<number | null>(null);
 
   useEffect(() => {
     return () => {

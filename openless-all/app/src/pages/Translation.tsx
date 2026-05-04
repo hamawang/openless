@@ -8,11 +8,13 @@ import { useTranslation } from 'react-i18next';
 import { Card, PageHeader } from './_atoms';
 import { SUPPORTED_LANGUAGES } from '../lib/types';
 import { useHotkeySettings } from '../state/HotkeySettingsContext';
-import { getHotkeyTriggerLabel } from '../lib/hotkey';
+import { formatComboLabel } from '../lib/hotkey';
+import { ShortcutRecorder } from '../components/ShortcutRecorder';
+import { setTranslationHotkey } from '../lib/ipc';
 
 export function Translation() {
   const { t } = useTranslation();
-  const { prefs, updatePrefs: savePrefs, hotkey } = useHotkeySettings();
+  const { prefs, updatePrefs: savePrefs } = useHotkeySettings();
 
   if (!prefs) {
     return (
@@ -40,7 +42,8 @@ export function Translation() {
   const onTargetChange = (translationTargetLanguage: string) =>
     savePrefs({ ...prefs, translationTargetLanguage });
 
-  const triggerLabel = getHotkeyTriggerLabel(hotkey?.trigger);
+  const triggerLabel = formatComboLabel(prefs.dictationHotkey);
+  const translationHotkeyLabel = formatComboLabel(prefs.translationHotkey);
   const enabled = prefs.translationTargetLanguage.trim() !== '';
 
   return (
@@ -132,13 +135,27 @@ export function Translation() {
           </select>
         </Card>
 
+        <Card>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>{t('translation.hotkey.title', 'Translation shortcut')}</div>
+          <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', marginBottom: 12, lineHeight: 1.55 }}>
+            {t('translation.hotkey.desc', 'Press this during recording to switch the current dictation into translation mode.')}
+          </div>
+          <ShortcutRecorder
+            value={prefs.translationHotkey}
+            onSave={async binding => {
+              await setTranslationHotkey(binding);
+              await savePrefs({ ...prefs, translationHotkey: binding });
+            }}
+          />
+        </Card>
+
         {/* 3. 使用方法 */}
         <Card>
           <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10 }}>{t('translation.howto.title')}</div>
           <ol style={{ margin: 0, paddingLeft: 18, fontSize: 12.5, color: 'var(--ol-ink-2)', lineHeight: 1.7 }}>
             <li>{t('translation.howto.step1', { trigger: triggerLabel })}</li>
             <li>{t('translation.howto.step2')}</li>
-            <li>{t('translation.howto.step3')}</li>
+            <li>{t('translation.howto.step3', { shortcut: translationHotkeyLabel })}</li>
             <li>{t('translation.howto.step4')}</li>
             <li>{t('translation.howto.step5')}</li>
           </ol>

@@ -22,7 +22,7 @@ import {
   HOTKEY_MODE_MIGRATION_DEFERRED_KEY,
   shouldShowHotkeyModeMigrationPrompt,
 } from '../lib/hotkeyMigration';
-import { getHotkeyTriggerLabel } from '../lib/hotkey';
+import { formatComboLabel } from '../lib/hotkey';
 import { applyFontScale, readFontScale } from '../lib/fontScale';
 import { getCredentials, openExternal } from '../lib/ipc';
 import { OL_DATA } from '../lib/mockData';
@@ -75,7 +75,7 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
   const [providerPromptOpen, setProviderPromptOpen] = useState(false);
   const [hotkeyModePromptOpen, setHotkeyModePromptOpen] = useState(false);
   const [helpPopoverOpen, setHelpPopoverOpen] = useState(false);
-  const { hotkey } = useHotkeySettings();
+  const { prefs } = useHotkeySettings();
 
   // 字体档位 — 启动时按 localStorage 应用一次；之后改动来自 Settings 的"个性化"section。
   useEffect(() => {
@@ -138,6 +138,18 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
     setSettingsInitialSection(section);
     setSettingsOpen(true);
   };
+
+  // ⌘, 打开设置页面
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.metaKey && e.key === ',') {
+        e.preventDefault();
+        openSettings();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
+  }, []);
 
   const openProviderSettings = () => {
     rememberProviderPrompt();
@@ -235,7 +247,7 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
                 border: '0.5px solid var(--ol-line-strong)',
                 fontFamily: 'var(--ol-font-mono)', color: 'var(--ol-ink)',
                 boxShadow: '0 1px 0 rgba(0,0,0,.04)',
-              }}>{getHotkeyTriggerLabel(hotkey?.trigger)}</kbd>
+              }}>{prefs ? formatComboLabel(prefs.dictationHotkey) : ''}</kbd>
               <span style={{ color: 'var(--ol-ink-4)' }}>{t('shell.shortcutHint')}</span>
             </div>
           </div>

@@ -17,6 +17,7 @@ use std::time::Duration;
 
 use parking_lot::RwLock;
 
+use crate::types::HotkeyTrigger;
 use crate::types::{HotkeyAdapterKind, HotkeyBinding, HotkeyCapability, HotkeyInstallError};
 
 #[derive(Clone, Copy, Debug)]
@@ -27,11 +28,17 @@ pub enum HotkeyEvent {
     /// Shift（或未来配置项指定的修饰键）按下边沿。可在录音过程中任何时刻产生；
     /// 上层据此切换到翻译输出管线。详见 issue #4。
     TranslationModifierPressed,
+    QaShortcutPressed,
 }
 
 pub trait HotkeyAdapter: Send + Sync {
     fn kind(&self) -> HotkeyAdapterKind;
     fn update_binding(&self, binding: HotkeyBinding);
+    fn update_modifier_shortcuts(
+        &self,
+        qa_trigger: Option<HotkeyTrigger>,
+        translation_trigger: Option<HotkeyTrigger>,
+    );
     fn shutdown(&self) {}
 }
 
@@ -39,6 +46,10 @@ struct Shared {
     binding: RwLock<HotkeyBinding>,
     /// 触发键当前是否处于"按住"状态。OS 自动重复事件用此去重。
     trigger_held: AtomicBool,
+    qa_trigger: RwLock<Option<HotkeyTrigger>>,
+    qa_trigger_held: AtomicBool,
+    translation_trigger: RwLock<Option<HotkeyTrigger>>,
+    translation_trigger_held: AtomicBool,
     /// Shift（翻译修饰键）当前是否按住。用于在 FLAGS_CHANGED 上识别 down 边沿
     /// （只在 false → true 时往上层发 TranslationModifierPressed）。详见 issue #4。
     translation_modifier_held: AtomicBool,
@@ -63,6 +74,15 @@ impl HotkeyMonitor {
 
     pub fn update_binding(&self, binding: HotkeyBinding) {
         self.adapter.update_binding(binding);
+    }
+
+    pub fn update_modifier_shortcuts(
+        &self,
+        qa_trigger: Option<HotkeyTrigger>,
+        translation_trigger: Option<HotkeyTrigger>,
+    ) {
+        self.adapter
+            .update_modifier_shortcuts(qa_trigger, translation_trigger);
     }
 
     pub fn kind(&self) -> HotkeyAdapterKind {
@@ -114,6 +134,10 @@ where
     let shared = Arc::new(Shared {
         binding: RwLock::new(binding),
         trigger_held: AtomicBool::new(false),
+        qa_trigger: RwLock::new(None),
+        qa_trigger_held: AtomicBool::new(false),
+        translation_trigger: RwLock::new(None),
+        translation_trigger_held: AtomicBool::new(false),
         translation_modifier_held: AtomicBool::new(false),
     });
 
@@ -138,6 +162,21 @@ fn update_shared_binding(shared: &Shared, binding: HotkeyBinding) {
         .store(false, std::sync::atomic::Ordering::SeqCst);
 }
 
+fn update_shared_modifier_shortcuts(
+    shared: &Shared,
+    qa_trigger: Option<HotkeyTrigger>,
+    translation_trigger: Option<HotkeyTrigger>,
+) {
+    *shared.qa_trigger.write() = qa_trigger;
+    *shared.translation_trigger.write() = translation_trigger;
+    shared
+        .qa_trigger_held
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    shared
+        .translation_trigger_held
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+}
+
 // ─────────────────────────── macOS implementation ───────────────────────────
 
 #[cfg(target_os = "macos")]
@@ -148,8 +187,8 @@ mod platform {
     use std::sync::Arc;
 
     use super::{
-        install_error, send_or_log, start_listener_thread, update_shared_binding, HotkeyAdapter,
-        HotkeyEvent, Shared, StartupTx,
+        install_error, send_or_log, start_listener_thread, update_shared_binding,
+        update_shared_modifier_shortcuts, HotkeyAdapter, HotkeyEvent, Shared, StartupTx,
     };
     use crate::types::{HotkeyAdapterKind, HotkeyBinding, HotkeyInstallError, HotkeyTrigger};
 
@@ -181,6 +220,14 @@ mod platform {
 
         fn update_binding(&self, binding: HotkeyBinding) {
             update_shared_binding(&self.shared, binding);
+        }
+
+        fn update_modifier_shortcuts(
+            &self,
+            qa_trigger: Option<HotkeyTrigger>,
+            translation_trigger: Option<HotkeyTrigger>,
+        ) {
+            update_shared_modifier_shortcuts(&self.shared, qa_trigger, translation_trigger);
         }
     }
 
@@ -349,14 +396,38 @@ mod platform {
         let shift_active = (flags & FLAG_MASK_SHIFT) != 0;
         let shift_was_held = ctx.shared.translation_modifier_held.load(Ordering::SeqCst);
         if shift_active && !shift_was_held {
-            ctx.shared.translation_modifier_held.store(true, Ordering::SeqCst);
+            ctx.shared
+                .translation_modifier_held
+                .store(true, Ordering::SeqCst);
             send_or_log(&ctx.tx, HotkeyEvent::TranslationModifierPressed);
         } else if !shift_active && shift_was_held {
-            ctx.shared.translation_modifier_held.store(false, Ordering::SeqCst);
+            ctx.shared
+                .translation_modifier_held
+                .store(false, Ordering::SeqCst);
         }
 
         let keycode = unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) };
+        handle_optional_modifier_trigger(
+            ctx,
+            keycode,
+            flags,
+            *ctx.shared.qa_trigger.read(),
+            &ctx.shared.qa_trigger_held,
+            HotkeyEvent::QaShortcutPressed,
+        );
+        handle_optional_modifier_trigger(
+            ctx,
+            keycode,
+            flags,
+            *ctx.shared.translation_trigger.read(),
+            &ctx.shared.translation_trigger_held,
+            HotkeyEvent::TranslationModifierPressed,
+        );
+
         let trigger = ctx.shared.binding.read().trigger;
+        if trigger == HotkeyTrigger::Custom {
+            return;
+        }
         let expected_keycode = trigger_to_keycode(trigger);
         if keycode != expected_keycode {
             return;
@@ -371,6 +442,30 @@ mod platform {
         } else if !is_active && was_held {
             ctx.shared.trigger_held.store(false, Ordering::SeqCst);
             send_or_log(&ctx.tx, HotkeyEvent::Released);
+        }
+    }
+
+    fn handle_optional_modifier_trigger(
+        ctx: &CallbackContext,
+        keycode: i64,
+        flags: CgEventFlags,
+        trigger: Option<HotkeyTrigger>,
+        held: &std::sync::atomic::AtomicBool,
+        event: HotkeyEvent,
+    ) {
+        let Some(trigger) = trigger else {
+            return;
+        };
+        if trigger == HotkeyTrigger::Custom || keycode != trigger_to_keycode(trigger) {
+            return;
+        }
+        let active = (flags & trigger_to_flag_mask(trigger)) != 0;
+        let was_held = held.load(Ordering::SeqCst);
+        if active && !was_held {
+            held.store(true, Ordering::SeqCst);
+            send_or_log(&ctx.tx, event);
+        } else if !active && was_held {
+            held.store(false, Ordering::SeqCst);
         }
     }
 
@@ -389,6 +484,7 @@ mod platform {
             HotkeyTrigger::RightOption | HotkeyTrigger::RightAlt => 61,
             HotkeyTrigger::RightCommand => 54,
             HotkeyTrigger::Fn => 63,
+            HotkeyTrigger::Custom => unreachable!("custom combo hotkeys use ComboHotkeyMonitor"),
         }
     }
 
@@ -400,6 +496,7 @@ mod platform {
                 FLAG_MASK_ALTERNATE
             }
             HotkeyTrigger::Fn => FLAG_MASK_SECONDARY_FN,
+            HotkeyTrigger::Custom => unreachable!("custom combo hotkeys use ComboHotkeyMonitor"),
         }
     }
 }
@@ -422,8 +519,8 @@ mod platform {
     };
 
     use super::{
-        install_error, send_or_log, start_listener_thread, update_shared_binding, HotkeyAdapter,
-        HotkeyEvent, Shared, StartupTx,
+        install_error, send_or_log, start_listener_thread, update_shared_binding,
+        update_shared_modifier_shortcuts, HotkeyAdapter, HotkeyEvent, Shared, StartupTx,
     };
     use crate::types::{HotkeyAdapterKind, HotkeyBinding, HotkeyInstallError, HotkeyTrigger};
 
@@ -474,6 +571,14 @@ mod platform {
 
         fn update_binding(&self, binding: HotkeyBinding) {
             update_shared_binding(&self.shared, binding);
+        }
+
+        fn update_modifier_shortcuts(
+            &self,
+            qa_trigger: Option<HotkeyTrigger>,
+            translation_trigger: Option<HotkeyTrigger>,
+        ) {
+            update_shared_modifier_shortcuts(&self.shared, qa_trigger, translation_trigger);
         }
 
         fn shutdown(&self) {
@@ -582,20 +687,45 @@ mod platform {
         if matches!(vk_code, VK_SHIFT | VK_LSHIFT | VK_RSHIFT) {
             match message {
                 WM_KEYDOWN | WM_SYSKEYDOWN => {
-                    let was_held = ctx.shared.translation_modifier_held.swap(true, Ordering::SeqCst);
+                    let was_held = ctx
+                        .shared
+                        .translation_modifier_held
+                        .swap(true, Ordering::SeqCst);
                     if !was_held {
                         send_or_log(&ctx.tx, HotkeyEvent::TranslationModifierPressed);
                     }
                 }
                 WM_KEYUP | WM_SYSKEYUP => {
-                    ctx.shared.translation_modifier_held.store(false, Ordering::SeqCst);
+                    ctx.shared
+                        .translation_modifier_held
+                        .store(false, Ordering::SeqCst);
                 }
                 _ => {}
             }
             return;
         }
 
+        handle_optional_modifier_trigger(
+            ctx,
+            vk_code,
+            message,
+            *ctx.shared.qa_trigger.read(),
+            &ctx.shared.qa_trigger_held,
+            HotkeyEvent::QaShortcutPressed,
+        );
+        handle_optional_modifier_trigger(
+            ctx,
+            vk_code,
+            message,
+            *ctx.shared.translation_trigger.read(),
+            &ctx.shared.translation_trigger_held,
+            HotkeyEvent::TranslationModifierPressed,
+        );
+
         let trigger = ctx.shared.binding.read().trigger;
+        if trigger == HotkeyTrigger::Custom {
+            return;
+        }
         if vk_code != trigger_to_vk_code(trigger) {
             return;
         }
@@ -619,6 +749,34 @@ mod platform {
         }
     }
 
+    fn handle_optional_modifier_trigger(
+        ctx: &CallbackContext,
+        vk_code: u32,
+        message: usize,
+        trigger: Option<HotkeyTrigger>,
+        held: &std::sync::atomic::AtomicBool,
+        event: HotkeyEvent,
+    ) {
+        let Some(trigger) = trigger else {
+            return;
+        };
+        if trigger == HotkeyTrigger::Custom || vk_code != trigger_to_vk_code(trigger) {
+            return;
+        }
+        match message {
+            WM_KEYDOWN | WM_SYSKEYDOWN => {
+                let was_held = held.swap(true, Ordering::SeqCst);
+                if !was_held {
+                    send_or_log(&ctx.tx, event);
+                }
+            }
+            WM_KEYUP | WM_SYSKEYUP => {
+                held.store(false, Ordering::SeqCst);
+            }
+            _ => {}
+        }
+    }
+
     fn trigger_to_vk_code(trigger: HotkeyTrigger) -> u32 {
         // Windows only gives us a small set of modifier virtual keys that can be
         // used as reliable modifier-only global triggers, so the cross-platform
@@ -633,6 +791,7 @@ mod platform {
             HotkeyTrigger::RightCommand => VK_RWIN,
             HotkeyTrigger::LeftOption => VK_RMENU,
             HotkeyTrigger::Fn => VK_RCONTROL,
+            HotkeyTrigger::Custom => unreachable!("custom combo hotkeys use ComboHotkeyMonitor"),
         }
     }
 
@@ -653,8 +812,8 @@ mod platform {
     use rdev::{listen, Event, EventType, Key};
 
     use super::{
-        install_error, start_listener_thread, update_shared_binding, HotkeyAdapter, HotkeyEvent,
-        Shared, StartupTx,
+        install_error, start_listener_thread, update_shared_binding,
+        update_shared_modifier_shortcuts, HotkeyAdapter, HotkeyEvent, Shared, StartupTx,
     };
     use crate::types::{HotkeyAdapterKind, HotkeyBinding, HotkeyInstallError, HotkeyTrigger};
 
@@ -662,11 +821,7 @@ mod platform {
         binding: HotkeyBinding,
         tx: Sender<HotkeyEvent>,
     ) -> Result<Box<dyn HotkeyAdapter>, HotkeyInstallError> {
-        if std::env::var("XDG_SESSION_TYPE")
-            .ok()
-            .as_deref()
-            == Some("wayland")
-        {
+        if std::env::var("XDG_SESSION_TYPE").ok().as_deref() == Some("wayland") {
             return Err(install_error(
                 "wayland_unsupported",
                 "Wayland 暂不支持全局热键，请切到 X11 session 后再试",
@@ -696,6 +851,14 @@ mod platform {
 
         fn update_binding(&self, binding: HotkeyBinding) {
             update_shared_binding(&self.shared, binding);
+        }
+
+        fn update_modifier_shortcuts(
+            &self,
+            qa_trigger: Option<HotkeyTrigger>,
+            translation_trigger: Option<HotkeyTrigger>,
+        ) {
+            update_shared_modifier_shortcuts(&self.shared, qa_trigger, translation_trigger);
         }
     }
 
@@ -734,10 +897,31 @@ mod platform {
                 }
                 // Shift（任一侧）= 翻译模式修饰键。详见 issue #4。
                 if matches!(key, Key::ShiftLeft | Key::ShiftRight) {
-                    let was_held = shared.translation_modifier_held.swap(true, Ordering::SeqCst);
+                    let was_held = shared
+                        .translation_modifier_held
+                        .swap(true, Ordering::SeqCst);
                     if !was_held {
                         let _ = tx.send(HotkeyEvent::TranslationModifierPressed);
                     }
+                    return;
+                }
+                handle_optional_modifier_press(
+                    shared,
+                    tx,
+                    key,
+                    *shared.qa_trigger.read(),
+                    &shared.qa_trigger_held,
+                    HotkeyEvent::QaShortcutPressed,
+                );
+                handle_optional_modifier_press(
+                    shared,
+                    tx,
+                    key,
+                    *shared.translation_trigger.read(),
+                    &shared.translation_trigger_held,
+                    HotkeyEvent::TranslationModifierPressed,
+                );
+                if trigger == HotkeyTrigger::Custom {
                     return;
                 }
                 if key == trigger_to_rdev_key(trigger) {
@@ -749,7 +933,24 @@ mod platform {
             }
             EventType::KeyRelease(key) => {
                 if matches!(key, Key::ShiftLeft | Key::ShiftRight) {
-                    shared.translation_modifier_held.store(false, Ordering::SeqCst);
+                    shared
+                        .translation_modifier_held
+                        .store(false, Ordering::SeqCst);
+                    return;
+                }
+                handle_optional_modifier_release(
+                    shared,
+                    key,
+                    *shared.qa_trigger.read(),
+                    &shared.qa_trigger_held,
+                );
+                handle_optional_modifier_release(
+                    shared,
+                    key,
+                    *shared.translation_trigger.read(),
+                    &shared.translation_trigger_held,
+                );
+                if trigger == HotkeyTrigger::Custom {
                     return;
                 }
                 if key == trigger_to_rdev_key(trigger) {
@@ -763,6 +964,40 @@ mod platform {
         }
     }
 
+    fn handle_optional_modifier_press(
+        shared: &Shared,
+        tx: &Sender<HotkeyEvent>,
+        key: Key,
+        trigger: Option<HotkeyTrigger>,
+        held: &std::sync::atomic::AtomicBool,
+        event: HotkeyEvent,
+    ) {
+        let Some(trigger) = trigger else {
+            return;
+        };
+        if trigger == HotkeyTrigger::Custom || key != trigger_to_rdev_key(trigger) {
+            return;
+        }
+        let was_held = held.swap(true, Ordering::SeqCst);
+        if !was_held {
+            let _ = tx.send(event);
+        }
+    }
+
+    fn handle_optional_modifier_release(
+        _shared: &Shared,
+        key: Key,
+        trigger: Option<HotkeyTrigger>,
+        held: &std::sync::atomic::AtomicBool,
+    ) {
+        let Some(trigger) = trigger else {
+            return;
+        };
+        if trigger != HotkeyTrigger::Custom && key == trigger_to_rdev_key(trigger) {
+            held.store(false, Ordering::SeqCst);
+        }
+    }
+
     fn trigger_to_rdev_key(trigger: HotkeyTrigger) -> Key {
         match trigger {
             HotkeyTrigger::RightOption | HotkeyTrigger::RightAlt => Key::AltGr,
@@ -771,6 +1006,7 @@ mod platform {
             HotkeyTrigger::LeftControl => Key::ControlLeft,
             HotkeyTrigger::RightCommand => Key::MetaRight,
             HotkeyTrigger::Fn => Key::Function,
+            HotkeyTrigger::Custom => unreachable!("custom combo hotkeys use ComboHotkeyMonitor"),
         }
     }
 }

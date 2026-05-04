@@ -11,8 +11,10 @@
 //! - commands: Tauri IPC surface
 
 mod asr;
+mod combo_hotkey;
 mod commands;
 mod coordinator;
+mod global_hotkey_runtime;
 mod hotkey;
 mod insertion;
 mod permissions;
@@ -21,11 +23,12 @@ mod polish;
 mod qa_hotkey;
 mod recorder;
 mod selection;
+mod shortcut_binding;
 mod types;
 
+use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(target_os = "macos")]
 use std::sync::mpsc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 #[cfg(target_os = "macos")]
 use std::time::Duration;
@@ -165,8 +168,8 @@ pub fn run() {
             let app_handle = app.handle().clone();
             coordinator.bind_app(app_handle);
             coordinator.start_hotkey_listener();
-            // 同步启动 QA hotkey listener。和 dictation hotkey 平行，互不抢状态。
-            coordinator.start_qa_hotkey_listener();
+            // QA / custom combo hotkeys use `global-hotkey` (Carbon on macOS).
+            // Start those after RunEvent::Ready, when the AppKit event loop is live.
             if std::env::var("OPENLESS_SHOW_MAIN_ON_START").ok().as_deref() == Some("1") {
                 show_main_window(app.handle());
             }
@@ -178,6 +181,7 @@ pub fn run() {
             commands::set_settings,
             commands::get_hotkey_status,
             commands::get_hotkey_capability,
+            commands::set_shortcut_recording_active,
             commands::get_credentials,
             commands::set_credential,
             commands::list_history,
@@ -207,8 +211,15 @@ pub fn run() {
             commands::set_active_llm_provider,
             commands::get_qa_hotkey_label,
             commands::set_qa_hotkey,
+            commands::validate_shortcut_binding,
+            commands::set_dictation_hotkey,
+            commands::set_translation_hotkey,
+            commands::set_switch_style_hotkey,
+            commands::set_open_app_hotkey,
             commands::qa_window_dismiss,
             commands::qa_window_pin,
+            commands::validate_combo_hotkey,
+            commands::set_combo_hotkey,
             commands::validate_provider_credentials,
             commands::list_provider_models,
             restart_app,
@@ -216,6 +227,16 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| match event {
+            RunEvent::Ready => {
+                let coordinator = app.state::<Arc<coordinator::Coordinator>>();
+                // 同步启动 QA hotkey listener。和 dictation hotkey 平行，互不抢状态。
+                coordinator.start_qa_hotkey_listener();
+                // 启动自定义组合键监听器。当 trigger == Custom 时替代 modifier-only 监听器。
+                coordinator.start_combo_hotkey_listener();
+                coordinator.start_translation_hotkey_listener();
+                coordinator.start_switch_style_hotkey_listener();
+                coordinator.start_open_app_hotkey_listener();
+            }
             #[cfg(target_os = "macos")]
             RunEvent::Reopen { .. } => show_main_window(app),
             RunEvent::WindowEvent { label, event, .. } => {
@@ -225,7 +246,11 @@ pub fn run() {
                         hide_main_window(app);
                     }
                     #[cfg(target_os = "windows")]
-                    if matches!(event, tauri::WindowEvent::Resized(_) | tauri::WindowEvent::ScaleFactorChanged { .. }) {
+                    if matches!(
+                        event,
+                        tauri::WindowEvent::Resized(_)
+                            | tauri::WindowEvent::ScaleFactorChanged { .. }
+                    ) {
                         if let Some(main) = app.get_webview_window("main") {
                             apply_windows_rounded_frame(&main);
                         }
@@ -236,6 +261,8 @@ pub fn run() {
                 let coordinator = app.state::<Arc<coordinator::Coordinator>>();
                 coordinator.stop_hotkey_listener();
                 coordinator.stop_qa_hotkey_listener();
+                coordinator.stop_combo_hotkey_listener();
+                coordinator.stop_translation_hotkey_listener();
             }
             _ => {}
         });
@@ -572,9 +599,7 @@ fn position_qa_window<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) -> ta
 /// fallback 仍能从原 app 拿到选区）。
 pub(crate) fn show_qa_window<R: tauri::Runtime>(app: &AppHandle<R>, content_kind: &str) {
     let Some(window) = app.get_webview_window("qa") else {
-        log::info!(
-            "[qa] show 跳过：qa 窗口不存在 (content_kind={content_kind})"
-        );
+        log::info!("[qa] show 跳过：qa 窗口不存在 (content_kind={content_kind})");
         return;
     };
     // 仅首次 show 时居中；之后保留用户拖动后的位置。
@@ -782,20 +807,32 @@ mod tests {
     fn capsule_window_bounds_leave_room_for_windows_shadow() {
         let bounds = capsule_window_bounds(false);
         #[cfg(target_os = "windows")]
-        assert_eq!((bounds.width, bounds.height, bounds.bottom_inset), (220.0, 84.0, 12.0));
+        assert_eq!(
+            (bounds.width, bounds.height, bounds.bottom_inset),
+            (220.0, 84.0, 12.0)
+        );
 
         #[cfg(not(target_os = "windows"))]
-        assert_eq!((bounds.width, bounds.height, bounds.bottom_inset), (176.0, 42.0, 0.0));
+        assert_eq!(
+            (bounds.width, bounds.height, bounds.bottom_inset),
+            (176.0, 42.0, 0.0)
+        );
     }
 
     #[test]
     fn capsule_window_bounds_expand_for_translation_badge() {
         let bounds = capsule_window_bounds(true);
         #[cfg(target_os = "windows")]
-        assert_eq!((bounds.width, bounds.height, bounds.bottom_inset), (220.0, 118.0, 12.0));
+        assert_eq!(
+            (bounds.width, bounds.height, bounds.bottom_inset),
+            (220.0, 118.0, 12.0)
+        );
 
         #[cfg(not(target_os = "windows"))]
-        assert_eq!((bounds.width, bounds.height, bounds.bottom_inset), (176.0, 110.0, 0.0));
+        assert_eq!(
+            (bounds.width, bounds.height, bounds.bottom_inset),
+            (176.0, 110.0, 0.0)
+        );
     }
 
     #[test]

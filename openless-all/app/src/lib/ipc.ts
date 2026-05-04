@@ -3,6 +3,7 @@
 // the UI is still operable for visual review.
 
 import type {
+  ComboBinding,
   CredentialsStatus,
   DictationSession,
   DictionaryEntry,
@@ -11,6 +12,7 @@ import type {
   PermissionStatus,
   PolishMode,
   QaHotkeyBinding,
+  ShortcutBinding,
   UserPreferences,
 } from './types';
 import { OL_DATA } from './mockData';
@@ -38,6 +40,7 @@ export async function invokeOrMock<T>(
 // ── Mock fixtures ──────────────────────────────────────────────────────
 const mockSettings: UserPreferences = {
   hotkey: { trigger: 'rightControl', mode: 'toggle' },
+  dictationHotkey: { primary: 'RightControl', modifiers: [] },
   defaultMode: 'structured',
   enabledModes: ['raw', 'light', 'structured', 'formal'],
   launchAtLogin: false,
@@ -49,11 +52,15 @@ const mockSettings: UserPreferences = {
   translationTargetLanguage: '',
   qaHotkey: { primary: ';', modifiers: ['cmd', 'shift'] },
   qaSaveHistory: false,
+  customComboHotkey: null,
+  translationHotkey: { primary: 'Shift', modifiers: [] },
+  switchStyleHotkey: { primary: 'S', modifiers: ['cmd', 'shift'] },
+  openAppHotkey: { primary: 'O', modifiers: ['cmd', 'shift'] },
 };
 
 const mockHotkeyCapability: HotkeyCapability = {
   adapter: 'windowsLowLevel',
-  availableTriggers: ['rightControl', 'rightAlt', 'leftControl', 'rightCommand'],
+  availableTriggers: ['rightControl', 'rightAlt', 'leftControl', 'rightCommand', 'custom'],
   requiresAccessibilityPermission: false,
   supportsModifierOnlyTrigger: true,
   supportsSideSpecificModifiers: true,
@@ -262,7 +269,7 @@ export function getQaHotkeyLabel(): Promise<string> {
   return invokeOrMock('get_qa_hotkey_label', undefined, () => 'Cmd+Shift+;');
 }
 
-export function setQaHotkey(binding: QaHotkeyBinding): Promise<void> {
+export function setQaHotkey(binding: QaHotkeyBinding | null): Promise<void> {
   return invokeOrMock('set_qa_hotkey', { binding }, () => undefined);
 }
 
@@ -272,6 +279,39 @@ export function qaWindowDismiss(): Promise<void> {
 
 export function qaWindowPin(pinned: boolean): Promise<void> {
   return invokeOrMock('qa_window_pin', { pinned }, () => undefined);
+}
+
+// ── Combo Hotkey (自定义录音组合键) ───────────────────────────────────
+export function validateComboHotkey(binding: ComboBinding): Promise<void> {
+  return invokeOrMock('validate_combo_hotkey', { binding }, () => undefined);
+}
+
+export function setComboHotkey(binding: ComboBinding): Promise<void> {
+  return invokeOrMock('set_combo_hotkey', { binding }, () => undefined);
+}
+
+export function validateShortcutBinding(binding: ShortcutBinding): Promise<void> {
+  return invokeOrMock('validate_shortcut_binding', { binding }, () => undefined);
+}
+
+export function setDictationHotkey(binding: ShortcutBinding): Promise<void> {
+  return invokeOrMock('set_dictation_hotkey', { binding }, () => undefined);
+}
+
+export function setTranslationHotkey(binding: ShortcutBinding): Promise<void> {
+  return invokeOrMock('set_translation_hotkey', { binding }, () => undefined);
+}
+
+export function setSwitchStyleHotkey(binding: ShortcutBinding): Promise<void> {
+  return invokeOrMock('set_switch_style_hotkey', { binding }, () => undefined);
+}
+
+export function setOpenAppHotkey(binding: ShortcutBinding): Promise<void> {
+  return invokeOrMock('set_open_app_hotkey', { binding }, () => undefined);
+}
+
+export function setShortcutRecordingActive(active: boolean): Promise<void> {
+  return invokeOrMock('set_shortcut_recording_active', { active }, () => undefined);
 }
 
 export async function openExternal(url: string): Promise<void> {

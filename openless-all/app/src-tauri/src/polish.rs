@@ -310,7 +310,10 @@ impl OpenAICompatibleLLMProvider {
                 let event = buffer[..idx].to_string();
                 buffer.drain(..idx + 2);
                 for line in event.lines() {
-                    let Some(payload) = line.strip_prefix("data: ").or_else(|| line.strip_prefix("data:")) else {
+                    let Some(payload) = line
+                        .strip_prefix("data: ")
+                        .or_else(|| line.strip_prefix("data:"))
+                    else {
                         continue;
                     };
                     let payload = payload.trim();
@@ -320,7 +323,10 @@ impl OpenAICompatibleLLMProvider {
                     let v: Value = match serde_json::from_str(payload) {
                         Ok(v) => v,
                         Err(e) => {
-                            log::warn!("[llm] SSE parse skip: {e}; payload preview: {}", safe_str_slice(payload, 80));
+                            log::warn!(
+                                "[llm] SSE parse skip: {e}; payload preview: {}",
+                                safe_str_slice(payload, 80)
+                            );
                             continue;
                         }
                     };
@@ -382,9 +388,7 @@ fn context_premise(working_languages: &[String], front_app: Option<&str>) -> Opt
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .collect();
-    let app = front_app
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
+    let app = front_app.map(str::trim).filter(|s| !s.is_empty());
 
     if langs.is_empty() && app.is_none() {
         return None;
@@ -900,7 +904,8 @@ mod tests {
 
     #[test]
     fn compose_system_prompt_prefers_correct_spelling_for_hotwords() {
-        let prompt = compose_system_prompt(PolishMode::Light, &["GitHub".into(), "OpenLess".into()]);
+        let prompt =
+            compose_system_prompt(PolishMode::Light, &["GitHub".into(), "OpenLess".into()]);
 
         assert!(prompt.contains("用户希望以下写法在输出中保持准确"));
         assert!(prompt.contains("同音 / 近形误识别时，优先按上述写法输出"));

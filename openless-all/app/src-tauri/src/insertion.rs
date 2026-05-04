@@ -178,12 +178,7 @@ fn schedule_clipboard_restore(plan: ClipboardRestorePlan) {
         original
     };
     std::thread::spawn(move || {
-        restore_clipboard_after_delay(
-            plan,
-            original_text,
-            restore_id,
-            CLIPBOARD_RESTORE_DELAY,
-        )
+        restore_clipboard_after_delay(plan, original_text, restore_id, CLIPBOARD_RESTORE_DELAY)
     });
 }
 

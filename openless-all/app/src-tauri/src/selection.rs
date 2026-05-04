@@ -330,7 +330,8 @@ mod macos_ax {
 
     unsafe fn cfstring_from_static(bytes_with_nul: &[u8]) -> Option<CFStringRef> {
         let cstr = CStr::from_bytes_with_nul(bytes_with_nul).ok()?;
-        let s = CFStringCreateWithCString(std::ptr::null(), cstr.as_ptr(), K_CF_STRING_ENCODING_UTF8);
+        let s =
+            CFStringCreateWithCString(std::ptr::null(), cstr.as_ptr(), K_CF_STRING_ENCODING_UTF8);
         if s.is_null() {
             None
         } else {
@@ -442,8 +443,8 @@ mod macos_paste {
 #[cfg(target_os = "windows")]
 mod windows_paste {
     use windows::Win32::UI::Input::KeyboardAndMouse::{
-        SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS,
-        KEYEVENTF_KEYUP, VIRTUAL_KEY, VK_C, VK_CONTROL,
+        SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
+        VIRTUAL_KEY, VK_C, VK_CONTROL,
     };
 
     pub fn send_ctrl_c() -> Result<(), String> {

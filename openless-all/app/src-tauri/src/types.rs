@@ -13,7 +13,6 @@ pub enum PolishMode {
     Formal,
 }
 
-
 impl PolishMode {
     pub fn display_name(&self) -> &'static str {
         match self {
@@ -73,10 +72,11 @@ fn default_true() -> bool {
     true
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct UserPreferences {
     pub hotkey: HotkeyBinding,
+    pub dictation_hotkey: ShortcutBinding,
     pub default_mode: PolishMode,
     pub enabled_modes: Vec<PolishMode>,
     pub launch_at_login: bool,
@@ -99,15 +99,155 @@ pub struct UserPreferences {
     /// coordinator 用 global-hotkey crate 注册组合键（modifier + 主键）。
     /// 默认 Cmd+Shift+; (macOS) / Ctrl+Shift+; (Windows)。详见 issue #118。
     #[serde(default = "default_qa_hotkey")]
-    pub qa_hotkey: Option<QaHotkeyBinding>,
+    pub qa_hotkey: Option<ShortcutBinding>,
     /// 是否把每次 QA 会话写进 history.json。默认 false：QA 默认临时不留痕。
     /// 详见 issue #118。
     #[serde(default)]
     pub qa_save_history: bool,
+    /// 自定义录音组合键。当 `hotkey.trigger == Custom` 时，coordinator 用
+    /// `global-hotkey` crate 注册此组合键（支持 Toggle + Hold 模式）。
+    /// `None` 且 trigger == Custom 表示用户选了自定义但还没录制。
+    #[serde(default)]
+    pub custom_combo_hotkey: Option<ComboBinding>,
+    #[serde(default = "default_translation_hotkey")]
+    pub translation_hotkey: ShortcutBinding,
+    #[serde(default = "default_switch_style_hotkey")]
+    pub switch_style_hotkey: ShortcutBinding,
+    #[serde(default = "default_open_app_hotkey")]
+    pub open_app_hotkey: ShortcutBinding,
 }
 
-fn default_qa_hotkey() -> Option<QaHotkeyBinding> {
-    Some(QaHotkeyBinding::default())
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct UserPreferencesWire {
+    hotkey: HotkeyBinding,
+    dictation_hotkey: Option<ShortcutBinding>,
+    default_mode: PolishMode,
+    enabled_modes: Vec<PolishMode>,
+    launch_at_login: bool,
+    show_capsule: bool,
+    active_asr_provider: String,
+    active_llm_provider: String,
+    restore_clipboard_after_paste: bool,
+    working_languages: Vec<String>,
+    translation_target_language: String,
+    qa_hotkey: Option<ShortcutBinding>,
+    qa_save_history: bool,
+    custom_combo_hotkey: Option<ComboBinding>,
+    translation_hotkey: Option<ShortcutBinding>,
+    switch_style_hotkey: Option<ShortcutBinding>,
+    open_app_hotkey: Option<ShortcutBinding>,
+}
+
+impl Default for UserPreferencesWire {
+    fn default() -> Self {
+        let prefs = UserPreferences::default();
+        Self {
+            hotkey: prefs.hotkey,
+            dictation_hotkey: None,
+            default_mode: prefs.default_mode,
+            enabled_modes: prefs.enabled_modes,
+            launch_at_login: prefs.launch_at_login,
+            show_capsule: prefs.show_capsule,
+            active_asr_provider: prefs.active_asr_provider,
+            active_llm_provider: prefs.active_llm_provider,
+            restore_clipboard_after_paste: prefs.restore_clipboard_after_paste,
+            working_languages: prefs.working_languages,
+            translation_target_language: prefs.translation_target_language,
+            qa_hotkey: prefs.qa_hotkey,
+            qa_save_history: prefs.qa_save_history,
+            custom_combo_hotkey: prefs.custom_combo_hotkey,
+            translation_hotkey: None,
+            switch_style_hotkey: None,
+            open_app_hotkey: None,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for UserPreferences {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let wire = UserPreferencesWire::deserialize(deserializer)?;
+        let dictation_hotkey = wire.dictation_hotkey.unwrap_or_else(|| {
+            default_dictation_hotkey_from_legacy(&wire.hotkey, &wire.custom_combo_hotkey)
+        });
+        Ok(Self {
+            hotkey: wire.hotkey,
+            dictation_hotkey,
+            default_mode: wire.default_mode,
+            enabled_modes: wire.enabled_modes,
+            launch_at_login: wire.launch_at_login,
+            show_capsule: wire.show_capsule,
+            active_asr_provider: wire.active_asr_provider,
+            active_llm_provider: wire.active_llm_provider,
+            restore_clipboard_after_paste: wire.restore_clipboard_after_paste,
+            working_languages: wire.working_languages,
+            translation_target_language: wire.translation_target_language,
+            qa_hotkey: wire.qa_hotkey,
+            qa_save_history: wire.qa_save_history,
+            custom_combo_hotkey: wire.custom_combo_hotkey,
+            translation_hotkey: wire
+                .translation_hotkey
+                .unwrap_or_else(default_translation_hotkey),
+            switch_style_hotkey: wire
+                .switch_style_hotkey
+                .unwrap_or_else(default_switch_style_hotkey),
+            open_app_hotkey: wire.open_app_hotkey.unwrap_or_else(default_open_app_hotkey),
+        })
+    }
+}
+
+fn default_qa_hotkey() -> Option<ShortcutBinding> {
+    Some(ShortcutBinding::default_qa())
+}
+
+fn default_translation_hotkey() -> ShortcutBinding {
+    ShortcutBinding {
+        primary: "Shift".into(),
+        modifiers: Vec::new(),
+    }
+}
+
+fn default_switch_style_hotkey() -> ShortcutBinding {
+    ShortcutBinding {
+        primary: "S".into(),
+        modifiers: default_app_shortcut_modifiers(),
+    }
+}
+
+fn default_open_app_hotkey() -> ShortcutBinding {
+    ShortcutBinding {
+        primary: "O".into(),
+        modifiers: default_app_shortcut_modifiers(),
+    }
+}
+
+fn default_app_shortcut_modifiers() -> Vec<String> {
+    #[cfg(target_os = "macos")]
+    {
+        vec!["cmd".into(), "shift".into()]
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        vec!["ctrl".into(), "shift".into()]
+    }
+}
+
+fn default_dictation_hotkey_from_legacy(
+    hotkey: &HotkeyBinding,
+    custom_combo_hotkey: &Option<ComboBinding>,
+) -> ShortcutBinding {
+    if hotkey.trigger == HotkeyTrigger::Custom {
+        if let Some(combo) = custom_combo_hotkey {
+            return ShortcutBinding {
+                primary: combo.primary.clone(),
+                modifiers: combo.modifiers.clone(),
+            };
+        }
+    }
+    crate::shortcut_binding::binding_from_legacy_trigger(hotkey.trigger)
 }
 
 fn default_working_languages() -> Vec<String> {
@@ -118,6 +258,10 @@ impl Default for UserPreferences {
     fn default() -> Self {
         Self {
             hotkey: HotkeyBinding::default(),
+            dictation_hotkey: default_dictation_hotkey_from_legacy(
+                &HotkeyBinding::default(),
+                &None,
+            ),
             default_mode: PolishMode::Light,
             enabled_modes: vec![
                 PolishMode::Raw,
@@ -134,7 +278,49 @@ impl Default for UserPreferences {
             translation_target_language: String::new(),
             qa_hotkey: default_qa_hotkey(),
             qa_save_history: false,
+            custom_combo_hotkey: None,
+            translation_hotkey: default_translation_hotkey(),
+            switch_style_hotkey: default_switch_style_hotkey(),
+            open_app_hotkey: default_open_app_hotkey(),
         }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ShortcutBinding {
+    pub primary: String,
+    pub modifiers: Vec<String>,
+}
+
+impl ShortcutBinding {
+    pub fn default_qa() -> Self {
+        #[cfg(target_os = "macos")]
+        {
+            Self {
+                primary: ";".into(),
+                modifiers: vec!["cmd".into(), "shift".into()],
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            Self {
+                primary: ";".into(),
+                modifiers: vec!["ctrl".into(), "shift".into()],
+            }
+        }
+    }
+
+    pub fn display_label(&self) -> String {
+        let mut parts: Vec<String> = Vec::new();
+        let modifier_order = ["cmd", "ctrl", "alt", "shift", "super"];
+        for tag in modifier_order {
+            if self.modifiers.iter().any(|m| m.eq_ignore_ascii_case(tag)) {
+                parts.push(modifier_display(tag).to_string());
+            }
+        }
+        parts.push(display_primary(&self.primary));
+        parts.join("+")
     }
 }
 
@@ -188,6 +374,30 @@ impl QaHotkeyBinding {
     }
 }
 
+/// 录音快捷键的自定义组合键绑定。结构与 `QaHotkeyBinding` 相同：
+/// - `primary`：主键（如 `"D"`、`"Space"`、`"F1"`）。
+/// - `modifiers`：修饰键集合，元素来自 `{"cmd","ctrl","alt","shift","super"}`。
+///
+/// 当 `HotkeyBinding.trigger == Custom` 时，coordinator 用 `global-hotkey` crate
+/// 注册此组合键，而非 modifier-only 的 CGEventTap / WH_KEYBOARD_LL。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ComboBinding {
+    pub primary: String,
+    pub modifiers: Vec<String>,
+}
+
+impl ComboBinding {
+    /// 渲染成给前端展示的可读标签。复用 QaHotkeyBinding 的格式化逻辑。
+    pub fn display_label(&self) -> String {
+        let qa = QaHotkeyBinding {
+            primary: self.primary.clone(),
+            modifiers: self.modifiers.clone(),
+        };
+        qa.display_label()
+    }
+}
+
 fn modifier_display(tag: &str) -> &'static str {
     match tag {
         "cmd" => "Cmd",
@@ -233,6 +443,7 @@ pub enum HotkeyTrigger {
     RightCommand,
     Fn,
     RightAlt, // Windows synonym for RightOption
+    Custom,
 }
 
 impl HotkeyTrigger {
@@ -245,6 +456,7 @@ impl HotkeyTrigger {
             HotkeyTrigger::RightCommand => "右 Command",
             HotkeyTrigger::Fn => "Fn (地球键)",
             HotkeyTrigger::RightAlt => "右 Alt",
+            HotkeyTrigger::Custom => "自定义组合键",
         }
     }
 }
@@ -275,7 +487,7 @@ impl HotkeyAdapterKind {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(default, rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
 pub struct HotkeyBinding {
     pub trigger: HotkeyTrigger,
     pub mode: HotkeyMode,
@@ -306,6 +518,7 @@ impl HotkeyCapability {
                     HotkeyTrigger::LeftControl,
                     HotkeyTrigger::RightCommand,
                     HotkeyTrigger::Fn,
+                    HotkeyTrigger::Custom,
                 ],
                 requires_accessibility_permission: true,
                 supports_modifier_only_trigger: true,
@@ -324,6 +537,7 @@ impl HotkeyCapability {
                     HotkeyTrigger::RightAlt,
                     HotkeyTrigger::LeftControl,
                     HotkeyTrigger::RightCommand,
+                    HotkeyTrigger::Custom,
                 ],
                 requires_accessibility_permission: false,
                 supports_modifier_only_trigger: true,
@@ -344,6 +558,7 @@ impl HotkeyCapability {
                     HotkeyTrigger::RightAlt,
                     HotkeyTrigger::RightControl,
                     HotkeyTrigger::LeftControl,
+                    HotkeyTrigger::Custom,
                 ],
                 requires_accessibility_permission: false,
                 supports_modifier_only_trigger: true,
@@ -461,7 +676,6 @@ pub struct TodayMetrics {
     pub avg_latency_ms: u64,
     pub total_duration_ms: u64,
 }
-
 
 /// 划词追问浮窗里一条对话消息。多轮提问会累积成 Vec<QaChatMessage>，
 /// 整段送给 LLM 维持上下文。详见 issue #118 v2。

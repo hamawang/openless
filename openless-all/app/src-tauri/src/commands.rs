@@ -12,8 +12,8 @@ use crate::permissions::{self, PermissionStatus};
 use crate::persistence::{CredentialAccount, CredentialsSnapshot, CredentialsVault};
 use crate::polish::{LLMError, OpenAICompatibleConfig, OpenAICompatibleLLMProvider};
 use crate::types::{
-    CredentialsStatus, DictationSession, DictionaryEntry, HotkeyCapability, HotkeyStatus,
-    PolishMode, QaHotkeyBinding, UserPreferences,
+    ComboBinding, CredentialsStatus, DictationSession, DictionaryEntry, HotkeyCapability,
+    HotkeyStatus, PolishMode, ShortcutBinding, UserPreferences,
 };
 
 type CoordinatorState<'a> = State<'a, Arc<Coordinator>>;
@@ -29,6 +29,10 @@ trait SettingsWriter {
     fn write_settings(&self, prefs: UserPreferences) -> Result<(), String>;
     fn refresh_dictation_hotkey(&self);
     fn refresh_qa_hotkey(&self);
+    fn refresh_combo_hotkey(&self);
+    fn refresh_translation_hotkey(&self);
+    fn refresh_switch_style_hotkey(&self);
+    fn refresh_open_app_hotkey(&self);
 }
 
 impl SettingsWriter for Coordinator {
@@ -42,6 +46,22 @@ impl SettingsWriter for Coordinator {
 
     fn refresh_qa_hotkey(&self) {
         self.update_qa_hotkey_binding();
+    }
+
+    fn refresh_combo_hotkey(&self) {
+        self.update_combo_hotkey_binding();
+    }
+
+    fn refresh_translation_hotkey(&self) {
+        self.update_translation_hotkey_binding();
+    }
+
+    fn refresh_switch_style_hotkey(&self) {
+        self.update_switch_style_hotkey_binding();
+    }
+
+    fn refresh_open_app_hotkey(&self) {
+        self.update_open_app_hotkey_binding();
     }
 }
 
@@ -57,12 +77,32 @@ impl SettingsWriter for Arc<Coordinator> {
     fn refresh_qa_hotkey(&self) {
         self.update_qa_hotkey_binding();
     }
+
+    fn refresh_combo_hotkey(&self) {
+        self.update_combo_hotkey_binding();
+    }
+
+    fn refresh_translation_hotkey(&self) {
+        self.update_translation_hotkey_binding();
+    }
+
+    fn refresh_switch_style_hotkey(&self) {
+        self.update_switch_style_hotkey_binding();
+    }
+
+    fn refresh_open_app_hotkey(&self) {
+        self.update_open_app_hotkey_binding();
+    }
 }
 
 fn persist_settings<T: SettingsWriter>(coord: &T, prefs: UserPreferences) -> Result<(), String> {
     coord.write_settings(prefs)?;
     coord.refresh_dictation_hotkey();
     coord.refresh_qa_hotkey();
+    coord.refresh_combo_hotkey();
+    coord.refresh_translation_hotkey();
+    coord.refresh_switch_style_hotkey();
+    coord.refresh_open_app_hotkey();
     Ok(())
 }
 
@@ -79,6 +119,11 @@ pub fn get_hotkey_status(coord: CoordinatorState<'_>) -> HotkeyStatus {
 #[tauri::command]
 pub fn get_hotkey_capability(coord: CoordinatorState<'_>) -> HotkeyCapability {
     coord.hotkey_capability()
+}
+
+#[tauri::command]
+pub fn set_shortcut_recording_active(coord: CoordinatorState<'_>, active: bool) {
+    coord.set_shortcut_recording_active(active);
 }
 
 #[tauri::command]
@@ -523,9 +568,18 @@ pub fn get_qa_hotkey_label(coord: CoordinatorState<'_>) -> String {
 /// 传入 `None` 形式的字段不在这里支持——前端用 `binding == null` 时调下面的
 /// "disable" 写法（写 prefs.qa_hotkey = None）即可。
 #[tauri::command]
-pub fn set_qa_hotkey(coord: CoordinatorState<'_>, binding: QaHotkeyBinding) -> Result<(), String> {
+pub fn set_qa_hotkey(
+    coord: CoordinatorState<'_>,
+    binding: Option<ShortcutBinding>,
+) -> Result<(), String> {
+    if let Some(binding) = binding.as_ref() {
+        crate::shortcut_binding::validate_binding(binding).map_err(|e| e.to_string())?;
+        if binding.modifiers.is_empty() && binding.primary.eq_ignore_ascii_case("shift") {
+            return Err("Shift 单键目前只能用于翻译快捷键".into());
+        }
+    }
     let mut prefs = coord.prefs().get();
-    prefs.qa_hotkey = Some(binding);
+    prefs.qa_hotkey = binding;
     coord.prefs().set(prefs).map_err(|e| e.to_string())?;
     coord.update_qa_hotkey_binding();
     Ok(())
@@ -543,6 +597,108 @@ pub fn qa_window_pin(coord: CoordinatorState<'_>, pinned: bool) {
     coord.qa_window_pin(pinned);
 }
 
+// ─────────────────────────── 自定义组合键 ───────────────────────────
+
+/// 测试一个组合键是否可以注册（验证格式，不实际注册）。
+#[tauri::command]
+pub fn validate_shortcut_binding(binding: ShortcutBinding) -> Result<(), String> {
+    crate::shortcut_binding::validate_binding(&binding).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn set_dictation_hotkey(
+    coord: CoordinatorState<'_>,
+    binding: ShortcutBinding,
+) -> Result<(), String> {
+    crate::shortcut_binding::validate_binding(&binding).map_err(|e| e.to_string())?;
+    if binding.modifiers.is_empty() && binding.primary.eq_ignore_ascii_case("shift") {
+        return Err("Shift 单键目前只能用于翻译快捷键".into());
+    }
+    let mut prefs = coord.prefs().get();
+    prefs.dictation_hotkey = binding;
+    coord.prefs().set(prefs).map_err(|e| e.to_string())?;
+    coord.update_hotkey_binding();
+    coord.update_combo_hotkey_binding();
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_translation_hotkey(
+    coord: CoordinatorState<'_>,
+    binding: ShortcutBinding,
+) -> Result<(), String> {
+    crate::shortcut_binding::validate_binding(&binding).map_err(|e| e.to_string())?;
+    let mut prefs = coord.prefs().get();
+    prefs.translation_hotkey = binding;
+    coord.prefs().set(prefs).map_err(|e| e.to_string())?;
+    coord.update_translation_hotkey_binding();
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_switch_style_hotkey(
+    coord: CoordinatorState<'_>,
+    binding: ShortcutBinding,
+) -> Result<(), String> {
+    crate::shortcut_binding::validate_binding(&binding).map_err(|e| e.to_string())?;
+    reject_modifier_only_action_shortcut(&binding)?;
+    let mut prefs = coord.prefs().get();
+    prefs.switch_style_hotkey = binding;
+    coord.prefs().set(prefs).map_err(|e| e.to_string())?;
+    coord.update_switch_style_hotkey_binding();
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_open_app_hotkey(
+    coord: CoordinatorState<'_>,
+    binding: ShortcutBinding,
+) -> Result<(), String> {
+    crate::shortcut_binding::validate_binding(&binding).map_err(|e| e.to_string())?;
+    reject_modifier_only_action_shortcut(&binding)?;
+    let mut prefs = coord.prefs().get();
+    prefs.open_app_hotkey = binding;
+    coord.prefs().set(prefs).map_err(|e| e.to_string())?;
+    coord.update_open_app_hotkey_binding();
+    Ok(())
+}
+
+fn reject_modifier_only_action_shortcut(binding: &ShortcutBinding) -> Result<(), String> {
+    if binding.modifiers.is_empty()
+        && (binding.primary.eq_ignore_ascii_case("shift")
+            || crate::shortcut_binding::legacy_modifier_trigger(binding).is_some())
+    {
+        return Err("该快捷键需要使用组合键或非修饰主键".into());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn validate_combo_hotkey(binding: ComboBinding) -> Result<(), String> {
+    validate_shortcut_binding(ShortcutBinding {
+        primary: binding.primary,
+        modifiers: binding.modifiers,
+    })
+}
+
+/// 设置自定义录音组合键并热更新 monitor。
+#[tauri::command]
+pub fn set_combo_hotkey(coord: CoordinatorState<'_>, binding: ComboBinding) -> Result<(), String> {
+    let mut prefs = coord.prefs().get();
+    let shortcut = ShortcutBinding {
+        primary: binding.primary.clone(),
+        modifiers: binding.modifiers.clone(),
+    };
+    crate::shortcut_binding::validate_binding(&shortcut).map_err(|e| e.to_string())?;
+    prefs.custom_combo_hotkey = Some(binding);
+    prefs.dictation_hotkey = shortcut;
+    prefs.hotkey.trigger = crate::types::HotkeyTrigger::Custom;
+    coord.prefs().set(prefs).map_err(|e| e.to_string())?;
+    coord.update_hotkey_binding();
+    coord.update_combo_hotkey_binding();
+    Ok(())
+}
+
 // ─────────────────────────── unused but exported (silences dead_code) ───────────────────────────
 
 #[allow(dead_code)]
@@ -552,7 +708,7 @@ fn _ensure_snapshot_used(_: CredentialsSnapshot) {}
 mod tests {
     use super::{models_url, parse_model_ids, persist_settings, SettingsWriter};
     use crate::types::{
-        HotkeyBinding, HotkeyMode, HotkeyTrigger, QaHotkeyBinding, UserPreferences,
+        HotkeyBinding, HotkeyMode, HotkeyTrigger, ShortcutBinding, UserPreferences,
     };
     use std::sync::Mutex;
 
@@ -561,6 +717,7 @@ mod tests {
         saved: Mutex<Option<UserPreferences>>,
         dictation_refreshes: Mutex<u32>,
         qa_refreshes: Mutex<u32>,
+        combo_refreshes: Mutex<u32>,
     }
 
     impl SettingsWriter for FakeSettingsWriter {
@@ -576,6 +733,14 @@ mod tests {
         fn refresh_qa_hotkey(&self) {
             *self.qa_refreshes.lock().unwrap() += 1;
         }
+
+        fn refresh_combo_hotkey(&self) {
+            *self.combo_refreshes.lock().unwrap() += 1;
+        }
+
+        fn refresh_translation_hotkey(&self) {}
+        fn refresh_switch_style_hotkey(&self) {}
+        fn refresh_open_app_hotkey(&self) {}
     }
 
     #[test]
@@ -606,7 +771,7 @@ mod tests {
                 trigger: HotkeyTrigger::RightControl,
                 mode: HotkeyMode::Toggle,
             },
-            qa_hotkey: Some(QaHotkeyBinding {
+            qa_hotkey: Some(ShortcutBinding {
                 primary: ";".to_string(),
                 modifiers: vec!["ctrl".to_string(), "shift".to_string()],
             }),
@@ -629,5 +794,6 @@ mod tests {
         );
         assert_eq!(*writer.dictation_refreshes.lock().unwrap(), 1);
         assert_eq!(*writer.qa_refreshes.lock().unwrap(), 1);
+        assert_eq!(*writer.combo_refreshes.lock().unwrap(), 1);
     }
 }
