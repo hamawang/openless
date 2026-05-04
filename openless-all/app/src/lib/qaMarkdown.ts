@@ -59,6 +59,7 @@ export function renderQaMarkdown(markdown: string): string {
   return marked.parse(escaped, {
     async: false,
     gfm: true,
+    breaks: true,
     renderer: QA_MARKDOWN_RENDERER,
   }) as string;
 }
