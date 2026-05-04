@@ -366,8 +366,13 @@ function ProvidersSection() {
     setAsrProvider(knownAsr ? knownAsr.id : 'volcengine');
   }, [prefs]);
 
+  // issue #219：底层 providers HashMap 是 per-provider 的，切换 active 后
+  // CredentialField 重挂载读 'ark.api_key' 会自动落到新 active 的 entry。
+  // 所以**必须先 await setActive*Provider 再改前端 state**——顺序反了的话
+  // CredentialField 读到的是旧 active 的 entry，用户看到「切换没生效」。
+  // 默认 endpoint/model 改成「仅在新 active entry 该字段为空时」才填，
+  // 不再无条件覆盖用户自定义值。
   const onLlmProviderChange = async (id: LlmPresetId) => {
-    setLlmProvider(id);
     await setActiveLlmProvider(id);
     if (prefs) {
       const next = { ...prefs, activeLlmProvider: id };
@@ -375,27 +380,34 @@ function ProvidersSection() {
     }
     const preset = LLM_PRESETS.find(p => p.id === id);
     if (preset?.baseUrl) {
-      await setCredential('ark.endpoint', preset.baseUrl);
+      const existing = await readCredential('ark.endpoint');
+      if (!existing) await setCredential('ark.endpoint', preset.baseUrl);
     }
+    setLlmProvider(id);
   };
 
   const onAsrProviderChange = async (id: AsrPresetId) => {
-    setAsrProvider(id);
     await setActiveAsrProvider(id);
     if (prefs) {
       const next = { ...prefs, activeAsrProvider: id };
       await updatePrefs(next);
     }
-    // 切换到 OpenAI 兼容厂商时同步预填 endpoint + model：每家 base URL / 模型 ID
-    // 都是固定的，不预填用户必然踩坑。volcengine 走另一套凭据，跳过。
+    // OpenAI 兼容厂商首次切换时预填 baseUrl / model 默认值，省得用户必踩
+    // 「跨厂商 model 名根本不一样」的坑；但用户已自定义后就不再覆盖。
+    // volcengine 走另一套凭据，跳过。
     const preset = ASR_PRESETS.find(p => p.id === id);
     if (preset && preset.baseUrl) {
-      await setCredential('asr.endpoint', preset.baseUrl);
+      const existing = await readCredential('asr.endpoint');
+      if (!existing) await setCredential('asr.endpoint', preset.baseUrl);
     }
     if (preset && preset.model) {
-      await setCredential('asr.model', preset.model);
-      setAsrModelRevision(v => v + 1);
+      const existing = await readCredential('asr.model');
+      if (!existing) {
+        await setCredential('asr.model', preset.model);
+        setAsrModelRevision(v => v + 1);
+      }
     }
+    setAsrProvider(id);
   };
 
   const preset = LLM_PRESETS.find(p => p.id === llmProvider) ?? LLM_PRESETS[LLM_PRESETS.length - 1];
