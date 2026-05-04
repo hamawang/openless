@@ -214,55 +214,69 @@ jobs:
             Write-Host "[ok] built $dll (exported $($t.EnvName))"
           }
 
-      # ── Windows：跑 tauri build；如果失败，从 appRoot 手动调 light.exe 重链
-      #    （mirror 本地 windows-package-msvc.ps1::Repair-TauriMsiBundle）。
-      #    根因：openless-ime.wxs 用相对路径 src-tauri\target\... 引 IME DLL，
-      #    Tauri wix bundler 内部 cwd 不固定，light 找不到文件；本地脚本通过把
-      #    light 从 openless-all/app/ 跑一遍来 resolve。issue: rounds 1-3 reaches
-      #    same dead end via Tauri-only bundling.
+      # ── Windows tauri build：保持 bash shell，因为 PowerShell 调外部命令
+      #    会把 '{"bundle":...}' 的内部双引号吃掉、让 tauri 收到无效 JSON。
+      #    用 set +e + GITHUB_ENV 把 exit code 传到下一步给 Repair 判断。
       - name: Build (Windows)
         if: matrix.platform == 'windows-latest'
-        shell: pwsh
+        shell: bash
         working-directory: 'openless-all/app'
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
-          $appRoot = (Resolve-Path .).Path
-          if ($env:TAURI_SIGNING_PRIVATE_KEY) {
-            & npm run tauri -- build --config '{"bundle":{"createUpdaterArtifacts":true}}'
-          } else {
-            & npm run tauri build
-          }
-          $tauriExit = $LASTEXITCODE
+          set +e
+          if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+            npm run tauri -- build --config '{"bundle":{"createUpdaterArtifacts":true}}'
+          else
+            npm run tauri build
+          fi
+          echo "TAURI_BUILD_EXIT=$?" >> "$GITHUB_ENV"
+          # 不直接退出失败：下一步 Repair 还有兜底机会。
+          exit 0
 
+      # ── 如果 tauri 在 wix link 阶段失败（candle 出了 wixobj，但 light 因 cwd
+      #    解析 wxs Source 找不到 IME DLL），从 appRoot 手动跑 light 兜底重链。
+      #    这是本地 windows-package-msvc.ps1::Repair-TauriMsiBundle 的同款手术。
+      - name: Repair Windows MSI if Tauri failed at WiX link
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        working-directory: 'openless-all/app'
+        run: |
+          $exitCode = $env:TAURI_BUILD_EXIT
+          $appRoot = (Resolve-Path .).Path
           $msi = Get-ChildItem "src-tauri\target\release\bundle\msi\*.msi" -ErrorAction SilentlyContinue | Select-Object -First 1
-          if (-not $msi -and $tauriExit -ne 0) {
-            Write-Warning "Tauri MSI failed (exit $tauriExit). Trying manual light.exe relink from app root."
-            $wixRoot = Join-Path $appRoot "src-tauri\target\release\wix\x64"
-            $mainObj = Join-Path $wixRoot "main.wixobj"
-            $imeObj  = Join-Path $wixRoot "openless-ime.wixobj"
-            $locale  = Join-Path $wixRoot "locale.wxl"
-            foreach ($p in @($mainObj, $imeObj, $locale)) {
-              if (-not (Test-Path $p)) { throw "Required WiX object missing: $p" }
-            }
-            $light = (Get-ChildItem "$env:LOCALAPPDATA\tauri\WixTools314\light.exe" -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
-            if (-not $light) { throw "WiX light.exe not found in $env:LOCALAPPDATA\tauri\WixTools314" }
-            $version = (Get-Content src-tauri\tauri.conf.json -Raw | ConvertFrom-Json).version
-            $bundleDir = Join-Path $appRoot "src-tauri\target\release\bundle\msi"
-            New-Item -ItemType Directory -Force -Path $bundleDir | Out-Null
-            $msiPath = Join-Path $bundleDir "OpenLess_${version}_x64_en-US.msi"
-            Push-Location $appRoot
-            try {
-              & $light -nologo -ext WixUIExtension -ext WixUtilExtension -loc $locale -out $msiPath $mainObj $imeObj
-              if ($LASTEXITCODE -ne 0) { throw "light.exe relink failed with exit $LASTEXITCODE" }
-            } finally {
-              Pop-Location
-            }
-            Write-Host "[ok] MSI rebuilt at $msiPath"
-          } elseif ($tauriExit -ne 0) {
-            throw "Tauri build failed with exit $tauriExit and no recoverable wixobj."
+          if ($msi) {
+            Write-Host "[ok] MSI already produced by tauri: $($msi.FullName); no repair needed."
+            return
           }
+          if (-not $exitCode -or $exitCode -eq '0') {
+            throw "Tauri exited 0 but no MSI found at src-tauri\target\release\bundle\msi\"
+          }
+          Write-Warning "Tauri MSI failed (exit $exitCode). Attempting manual light.exe relink from app root."
+          $wixRoot = Join-Path $appRoot 'src-tauri\target\release\wix\x64'
+          $mainObj = Join-Path $wixRoot 'main.wixobj'
+          $imeObj  = Join-Path $wixRoot 'openless-ime.wixobj'
+          $locale  = Join-Path $wixRoot 'locale.wxl'
+          foreach ($p in @($mainObj, $imeObj, $locale)) {
+            if (-not (Test-Path $p)) {
+              throw "Required WiX object missing: $p — tauri build aborted before candle ran. Check the Build (Windows) step log."
+            }
+          }
+          $light = (Get-ChildItem "$env:LOCALAPPDATA\tauri\WixTools314\light.exe" -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
+          if (-not $light) { throw "WiX light.exe not found in $env:LOCALAPPDATA\tauri\WixTools314" }
+          $version = (Get-Content src-tauri\tauri.conf.json -Raw | ConvertFrom-Json).version
+          $bundleDir = Join-Path $appRoot 'src-tauri\target\release\bundle\msi'
+          New-Item -ItemType Directory -Force -Path $bundleDir | Out-Null
+          $msiPath = Join-Path $bundleDir "OpenLess_${version}_x64_en-US.msi"
+          Push-Location $appRoot
+          try {
+            & $light -nologo -ext WixUIExtension -ext WixUtilExtension -loc $locale -out $msiPath $mainObj $imeObj
+            if ($LASTEXITCODE -ne 0) { throw "light.exe relink failed with exit $LASTEXITCODE" }
+          } finally {
+            Pop-Location
+          }
+          Write-Host "[ok] MSI rebuilt at $msiPath"
 
       # ── Linux：产 deb / rpm / AppImage ──
       - name: Build (Linux)
