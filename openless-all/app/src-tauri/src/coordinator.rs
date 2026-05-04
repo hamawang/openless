@@ -331,12 +331,20 @@ impl Coordinator {
             .ok();
     }
 
+    pub fn stop_switch_style_hotkey_listener(&self) {
+        take_action_hotkey_on_main_thread(&self.inner, ActionHotkeyKind::SwitchStyle);
+    }
+
     pub fn start_open_app_hotkey_listener(&self) {
         let inner = Arc::clone(&self.inner);
         std::thread::Builder::new()
             .name("openless-open-app-hotkey-supervisor".into())
             .spawn(move || action_hotkey_supervisor_loop(inner, ActionHotkeyKind::OpenApp))
             .ok();
+    }
+
+    pub fn stop_open_app_hotkey_listener(&self) {
+        take_action_hotkey_on_main_thread(&self.inner, ActionHotkeyKind::OpenApp);
     }
 
     /// 用户在设置里改了自定义组合键时调用。

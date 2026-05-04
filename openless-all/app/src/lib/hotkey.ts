@@ -58,22 +58,31 @@ export function getHotkeyUsageHint(
 /** 把 ComboBinding 或 QaHotkeyBinding 格式化为可读标签，如 "⌘⇧D" / "Ctrl+Shift+D"。 */
 export function formatComboLabel(binding: ComboBinding | QaHotkeyBinding | ShortcutBinding): string {
   const parts: string[] = [];
-  const isMac = navigator.platform.includes('Mac') || navigator.userAgent.includes('Mac');
+  const platform = currentPlatform();
 
   // 固定输出顺序：Ctrl/Cmd → Alt/Option → Shift → Super
   const modifierOrder = ['cmd', 'ctrl', 'alt', 'shift', 'super'] as const;
   for (const tag of modifierOrder) {
     if (binding.modifiers.some(m => m.toLowerCase() === tag)) {
-      parts.push(modifierDisplayName(tag, isMac));
+      parts.push(modifierDisplayName(tag, platform));
     }
   }
 
   parts.push(formatPrimary(binding.primary));
-  return parts.join(isMac ? '' : '+');
+  return parts.join(platform.isMac ? '' : '+');
 }
 
-function modifierDisplayName(tag: string, isMac: boolean): string {
-  if (isMac) {
+function currentPlatform(): { isMac: boolean; isWindows: boolean } {
+  const platform = navigator.platform || '';
+  const userAgent = navigator.userAgent || '';
+  return {
+    isMac: platform.includes('Mac') || userAgent.includes('Mac'),
+    isWindows: platform.includes('Win') || userAgent.includes('Windows'),
+  };
+}
+
+function modifierDisplayName(tag: string, platform: { isMac: boolean; isWindows: boolean }): string {
+  if (platform.isMac) {
     switch (tag) {
       case 'cmd': return '\u2318';
       case 'ctrl': return '\u2303';
@@ -83,11 +92,11 @@ function modifierDisplayName(tag: string, isMac: boolean): string {
     }
   } else {
     switch (tag) {
-      case 'cmd': return 'Ctrl';
+      case 'cmd': return platform.isWindows ? 'Ctrl' : 'Super';
       case 'ctrl': return 'Ctrl';
       case 'alt': return 'Alt';
       case 'shift': return 'Shift';
-      case 'super': return 'Win';
+      case 'super': return platform.isWindows ? 'Win' : 'Super';
     }
   }
   return tag;
@@ -128,7 +137,7 @@ function formatPrimary(primary: string): string {
     case 'leftoption': return isMac ? 'Left ⌥' : 'Left Alt';
     case 'rightcontrol': return isMac ? 'Right ⌃' : 'Right Ctrl';
     case 'leftcontrol': return isMac ? 'Left ⌃' : 'Left Ctrl';
-    case 'rightcommand': return isMac ? 'Right ⌘' : 'Right Win';
+    case 'rightcommand': return isMac ? 'Right ⌘' : (currentPlatform().isWindows ? 'Right Win' : 'Right Super');
     case 'fn': return 'Fn';
     case 'shift': return isMac ? '⇧' : 'Shift';
   }

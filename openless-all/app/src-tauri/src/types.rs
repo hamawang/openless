@@ -381,7 +381,7 @@ impl Default for QaHotkeyBinding {
 }
 
 impl QaHotkeyBinding {
-    /// 渲染成给前端展示的可读标签（macOS 用 `Cmd`，其他平台用 `Ctrl`）。
+    /// 渲染成给前端展示的可读标签。
     /// 顺序与人类阅读习惯一致：`Cmd+Shift+;`、`Ctrl+Alt+Shift+.`。
     pub fn display_label(&self) -> String {
         let mut parts: Vec<String> = Vec::new();
@@ -424,7 +424,20 @@ impl ComboBinding {
 
 fn modifier_display(tag: &str) -> &'static str {
     match tag {
-        "cmd" => "Cmd",
+        "cmd" => {
+            #[cfg(target_os = "macos")]
+            {
+                "Cmd"
+            }
+            #[cfg(target_os = "windows")]
+            {
+                "Ctrl"
+            }
+            #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+            {
+                "Super"
+            }
+        }
         "ctrl" => "Ctrl",
         "alt" => {
             #[cfg(target_os = "macos")]

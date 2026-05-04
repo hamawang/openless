@@ -280,6 +280,8 @@ pub fn run() {
                 coordinator.stop_qa_hotkey_listener();
                 coordinator.stop_combo_hotkey_listener();
                 coordinator.stop_translation_hotkey_listener();
+                coordinator.stop_switch_style_hotkey_listener();
+                coordinator.stop_open_app_hotkey_listener();
             }
             _ => {}
         });
