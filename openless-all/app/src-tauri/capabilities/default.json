@@ -16,6 +16,7 @@
     "core:webview:default",
     "core:event:default",
     "shell:allow-open",
-    "updater:default"
+    "updater:default",
+    "autostart:default"
   ]
 }
