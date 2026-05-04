@@ -175,7 +175,11 @@ function Repair-TauriMsiBundle {
   Remove-Item -LiteralPath $msiPath -Force -ErrorAction SilentlyContinue
 
   $light = Find-WixTool "light.exe"
-  & $light -nologo -ext WixUIExtension -ext WixUtilExtension -loc $locale -out $msiPath $mainObject $imeObject
+  # -sice:ICE80：x86 IME DLL 与 x64 一起装进 INSTALLDIR\windows-ime\，
+  # 32-bit Component 落在 64-bit Directory 下是 ICE80 的告警，但本场景路径
+  # 绝对指向、不依赖 SysWOW64 重定向，是 Microsoft 文档允许的合法用法。
+  # 与 .github/workflows/release-tauri.yml 的 light 调用保持一致。
+  & $light -nologo -sice:ICE80 -ext WixUIExtension -ext WixUtilExtension -loc $locale -out $msiPath $mainObject $imeObject
   if ($LASTEXITCODE -ne 0) {
     throw "WiX light.exe failed with exit code $LASTEXITCODE."
   }

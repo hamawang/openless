@@ -271,7 +271,11 @@ jobs:
           $msiPath = Join-Path $bundleDir "OpenLess_${version}_x64_en-US.msi"
           Push-Location $appRoot
           try {
-            & $light -nologo -ext WixUIExtension -ext WixUtilExtension -loc $locale -out $msiPath $mainObj $imeObj
+            # -sice:ICE80：x86 IME DLL 与 x64 一同打进 INSTALLDIR\windows-ime\，
+            # 这是 32 位组件落在 64 位 Directory 下的合法场景（DLL 路径绝对指向，
+            # 不依赖 SysWOW64 重定向）。Tauri 自身没有暴露 light 透传参数，所以
+            # 必须在这里抑制，否则 LGHT0204 必失败。
+            & $light -nologo -sice:ICE80 -ext WixUIExtension -ext WixUtilExtension -loc $locale -out $msiPath $mainObj $imeObj
             if ($LASTEXITCODE -ne 0) { throw "light.exe relink failed with exit $LASTEXITCODE" }
           } finally {
             Pop-Location
