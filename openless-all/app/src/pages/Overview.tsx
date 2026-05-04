@@ -94,8 +94,11 @@ export function Overview({ onOpenHistory }: OverviewProps) {
         <Metric icon="bolt" label={t('overview.metricTotal')} value={String(history.length)} trend={t('overview.metricTotalTrend')} accent />
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.4fr', gap: 12 }}>
-        <Card padding={18}>
+      {/* 底部一行 = flex:1 撑满剩余高度（父 wrapper 是 display:flex/column）。
+          只有「最近识别」内部允许滚动；其他卡片按内容自然高度，不破裂底部圆角。
+          issue #243 follow-up：去掉外层 overflow 后底部圆角被裁的视觉问题。 */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.4fr', gap: 12, flex: 1, minHeight: 0 }}>
+        <Card padding={18} style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
             <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--ol-ink-2)' }}>{t('overview.weekTitle')}</span>
             <span style={{ fontSize: 11, color: 'var(--ol-ink-4)' }}>{t('overview.weekUnit')}</span>
@@ -106,12 +109,12 @@ export function Overview({ onOpenHistory }: OverviewProps) {
           </div>
         </Card>
 
-        <Card padding={0}>
-          <div style={{ padding: '14px 18px', borderBottom: '0.5px solid var(--ol-line)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <Card padding={0} style={{ display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden' }}>
+          <div style={{ padding: '14px 18px', borderBottom: '0.5px solid var(--ol-line)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
             <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--ol-ink-2)' }}>{t('overview.recentTitle')}</span>
             <Btn size="sm" variant="ghost" onClick={onOpenHistory}>{t('overview.recentAll')}</Btn>
           </div>
-          <div>
+          <div className="ol-thinscroll" style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
             {history.length === 0 && (
               <div style={{ padding: 24, textAlign: 'center', fontSize: 12, color: 'var(--ol-ink-4)' }}>
                 {t('overview.recentEmpty', { trigger: getHotkeyBindingLabel(hotkey) })}

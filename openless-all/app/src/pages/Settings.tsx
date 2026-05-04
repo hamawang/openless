@@ -117,6 +117,7 @@ export function Settings({ embedded = false, initialSection = 'recording' }: Set
           ))}
         </div>
         <div
+          className={embedded ? 'ol-thinscroll' : undefined}
           style={{
             display: 'flex',
             flexDirection: 'column',

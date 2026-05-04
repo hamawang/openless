@@ -126,7 +126,7 @@ export function History() {
               ))}
             </div>
           </div>
-          <div style={{ flex: 1, overflow: 'auto', padding: 6 }}>
+          <div className="ol-thinscroll" style={{ flex: 1, overflow: 'auto', padding: 6 }}>
             {loading && <div style={{ padding: 16, fontSize: 12, color: 'var(--ol-ink-4)' }}>{t('common.loading')}</div>}
             {!loading && filtered.length === 0 && (
               <div style={{ padding: 16, fontSize: 12, color: 'var(--ol-ink-4)' }}>
@@ -164,7 +164,7 @@ export function History() {
           </div>
         </Card>
 
-        <Card padding={20} style={{ overflow: 'auto' }}>
+        <Card padding={20} className="ol-thinscroll" style={{ overflow: 'auto' }}>
           {item ? (
             <>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
