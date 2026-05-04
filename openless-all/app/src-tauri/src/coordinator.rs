@@ -969,11 +969,11 @@ fn update_window_hotkey_pressed_codes(
     code: &str,
     pressed: bool,
 ) -> Option<(bool, bool)> {
-    if !window_key_matches_binding(binding, key, code) {
+    let normalized = normalize_window_hotkey_code(key, code);
+    if !window_code_belongs_to_binding(binding, &normalized) {
         return None;
     }
 
-    let normalized = normalize_window_hotkey_code(key, code);
     let was_active = binding_matches_pressed_codes(binding, pressed_codes);
     if pressed {
         pressed_codes.insert(normalized);
@@ -987,13 +987,12 @@ fn update_window_hotkey_pressed_codes(
 }
 
 #[cfg(any(target_os = "windows", test))]
-fn window_key_matches_binding(binding: &HotkeyBinding, key: &str, code: &str) -> bool {
-    let normalized = normalize_window_hotkey_code(key, code);
-    !normalized.is_empty()
+fn window_code_belongs_to_binding(binding: &HotkeyBinding, code: &str) -> bool {
+    !code.is_empty()
         && binding
             .effective_codes()
             .iter()
-            .any(|candidate| candidate == &normalized)
+            .any(|candidate| candidate == code)
 }
 
 #[cfg(any(target_os = "windows", test))]
@@ -2653,35 +2652,21 @@ mod tests {
     }
 
     #[test]
-    fn window_key_matcher_accepts_legacy_and_configured_codes() {
+    fn window_code_filter_accepts_legacy_and_configured_codes() {
         let legacy = HotkeyBinding {
             trigger: HotkeyTrigger::RightControl,
             ..Default::default()
         };
-        assert!(window_key_matches_binding(
-            &legacy,
-            "Control",
-            "ControlRight"
-        ));
-        assert!(!window_key_matches_binding(
-            &legacy,
-            "Control",
-            "ControlLeft"
-        ));
+        assert!(window_code_belongs_to_binding(&legacy, "ControlRight"));
+        assert!(!window_code_belongs_to_binding(&legacy, "ControlLeft"));
 
         let caps_lock = HotkeyBinding {
             trigger: HotkeyTrigger::RightControl,
             keys: Some(vec![HotkeyKey::new("CapsLock")]),
             ..Default::default()
         };
-        assert!(window_key_matches_binding(
-            &caps_lock, "CapsLock", "CapsLock"
-        ));
-        assert!(!window_key_matches_binding(
-            &caps_lock,
-            "Control",
-            "ControlRight"
-        ));
+        assert!(window_code_belongs_to_binding(&caps_lock, "CapsLock"));
+        assert!(!window_code_belongs_to_binding(&caps_lock, "ControlRight"));
     }
 
     #[test]
