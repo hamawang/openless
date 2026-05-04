@@ -13,8 +13,7 @@ use crate::persistence::{CredentialAccount, CredentialsSnapshot, CredentialsVaul
 use crate::polish::{LLMError, OpenAICompatibleConfig, OpenAICompatibleLLMProvider};
 use crate::types::{
     ComboBinding, CredentialsStatus, DictationSession, DictionaryEntry, HotkeyCapability,
-    HotkeyStatus, PolishMode, ShortcutBinding, UserPreferences, VocabPresetStore,
-    WindowsImeStatus,
+    HotkeyStatus, PolishMode, ShortcutBinding, UserPreferences, VocabPresetStore, WindowsImeStatus,
 };
 
 type CoordinatorState<'a> = State<'a, Arc<Coordinator>>;
@@ -707,10 +706,11 @@ fn reject_modifier_only_action_shortcut(binding: &ShortcutBinding) -> Result<(),
 
 #[tauri::command]
 pub fn validate_combo_hotkey(binding: ComboBinding) -> Result<(), String> {
-    validate_shortcut_binding(ShortcutBinding {
+    crate::combo_hotkey::validate_binding(&ShortcutBinding {
         primary: binding.primary,
         modifiers: binding.modifiers,
     })
+    .map_err(|e| e.to_string())
 }
 
 /// 设置自定义录音组合键并热更新 monitor。
@@ -721,7 +721,7 @@ pub fn set_combo_hotkey(coord: CoordinatorState<'_>, binding: ComboBinding) -> R
         primary: binding.primary.clone(),
         modifiers: binding.modifiers.clone(),
     };
-    crate::shortcut_binding::validate_binding(&shortcut).map_err(|e| e.to_string())?;
+    crate::combo_hotkey::validate_binding(&shortcut).map_err(|e| e.to_string())?;
     prefs.custom_combo_hotkey = Some(binding);
     prefs.dictation_hotkey = shortcut;
     prefs.hotkey.trigger = crate::types::HotkeyTrigger::Custom;
@@ -743,7 +743,7 @@ mod tests {
         SettingsWriter,
     };
     use crate::types::{
-        HotkeyBinding, HotkeyMode, HotkeyTrigger, ShortcutBinding, UserPreferences,
+        ComboBinding, HotkeyBinding, HotkeyMode, HotkeyTrigger, ShortcutBinding, UserPreferences,
     };
     use std::io::{Read, Write};
     use std::net::TcpListener;
@@ -833,6 +833,16 @@ mod tests {
         assert_eq!(*writer.dictation_refreshes.lock().unwrap(), 1);
         assert_eq!(*writer.qa_refreshes.lock().unwrap(), 1);
         assert_eq!(*writer.combo_refreshes.lock().unwrap(), 1);
+    }
+
+    #[test]
+    fn validate_combo_hotkey_rejects_bare_shift() {
+        let result = super::validate_combo_hotkey(ComboBinding {
+            primary: "Shift".into(),
+            modifiers: vec![],
+        });
+
+        assert!(result.is_err());
     }
 
     #[tokio::test]

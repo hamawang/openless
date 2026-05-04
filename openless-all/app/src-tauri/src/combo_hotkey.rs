@@ -97,7 +97,6 @@ impl ComboHotkeyMonitor {
                 return Ok(());
             }
         }
-        current.take();
         let runtime = GlobalHotkeyRuntime::shared()
             .map_err(|e| ComboHotkeyError::ManagerInitFailed(e.to_string()))?;
         let (registered, rx) = runtime
@@ -199,6 +198,30 @@ mod tests {
         };
         assert!(matches!(
             parse_binding(&binding),
+            Err(ComboHotkeyError::UnsupportedKey(_))
+        ));
+    }
+
+    #[test]
+    fn bare_shift_is_rejected_for_combo_hotkey() {
+        let binding = ShortcutBinding {
+            primary: "Shift".into(),
+            modifiers: vec![],
+        };
+        assert!(matches!(
+            validate_binding(&binding),
+            Err(ComboHotkeyError::UnsupportedKey(_))
+        ));
+    }
+
+    #[test]
+    fn legacy_modifier_only_is_rejected_for_combo_hotkey() {
+        let binding = ShortcutBinding {
+            primary: "RightOption".into(),
+            modifiers: vec![],
+        };
+        assert!(matches!(
+            validate_binding(&binding),
             Err(ComboHotkeyError::UnsupportedKey(_))
         ));
     }

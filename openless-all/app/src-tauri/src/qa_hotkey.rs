@@ -103,7 +103,6 @@ impl QaHotkeyMonitor {
                 return Ok(());
             }
         }
-        current.take();
         let runtime = GlobalHotkeyRuntime::shared()
             .map_err(|e| QaHotkeyError::ManagerInitFailed(e.to_string()))?;
         let (registered, rx) = runtime
