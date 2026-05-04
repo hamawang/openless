@@ -78,6 +78,16 @@ body {
 .ol-noscrollbar::-webkit-scrollbar { display: none; }
 .ol-noscrollbar { scrollbar-width: none; }
 
+/* Thin scrollbar — 细而可见，保留"可以滚"的可见性，但不抢眼。issue #243 */
+.ol-thinscroll::-webkit-scrollbar { width: 6px; height: 6px; }
+.ol-thinscroll::-webkit-scrollbar-track { background: transparent; }
+.ol-thinscroll::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.18);
+  border-radius: 3px;
+}
+.ol-thinscroll::-webkit-scrollbar-thumb:hover { background: rgba(0, 0, 0, 0.28); }
+.ol-thinscroll { scrollbar-width: thin; scrollbar-color: rgba(0, 0, 0, 0.18) transparent; }
+
 /* Glass surface */
 .ol-glass {
   background: var(--ol-glass-bg);

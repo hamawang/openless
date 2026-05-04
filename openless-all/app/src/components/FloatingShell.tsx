@@ -260,6 +260,14 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
                     两列内部各自的 overflow:auto 才能独立滚动 */}
             <div
               key={displayTab}
+              // issue #243：所有 tab 都允许 overflow:auto，让窗口被压缩 / 文案
+              //   变长时仍可触达底部内容（Codex P1：之前 overview 用 hidden
+              //   会让缩窗后 Recent 卡彻底不可见）。
+              //   - Overview 借 Overview.tsx 内部 flex 把底部行 grow 到撑满，
+              //     正常尺寸下内容刚好占满 → 浏览器自动不显示 scrollbar；
+              //     真挤不下了才 fallback 出细滚动条。
+              //   - 其他 tab 同样走细滚动条。
+              className="ol-thinscroll"
               style={{
                 flex: 1, minHeight: 0,
                 overflow: 'auto',
