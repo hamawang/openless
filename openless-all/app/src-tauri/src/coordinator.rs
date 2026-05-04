@@ -1675,10 +1675,29 @@ fn take_matching_prepared_windows_ime_session(
 }
 
 #[cfg(target_os = "windows")]
+fn take_current_prepared_windows_ime_session_for_restore(
+    slots: &mut Vec<PreparedWindowsImeSessionSlot>,
+    session_id: u64,
+    current_session_id: u64,
+) -> Option<PreparedWindowsImeSession> {
+    let prepared = take_matching_prepared_windows_ime_session(slots, session_id)?;
+    if current_session_id == session_id {
+        Some(prepared)
+    } else {
+        None
+    }
+}
+
+#[cfg(target_os = "windows")]
 fn restore_prepared_windows_ime_session(inner: &Arc<Inner>, session_id: u64) {
+    let state = inner.state.lock();
     let prepared = {
         let mut slot = inner.prepared_windows_ime_session.lock();
-        take_matching_prepared_windows_ime_session(&mut slot, session_id)
+        take_current_prepared_windows_ime_session_for_restore(
+            &mut slot,
+            session_id,
+            state.session_id,
+        )
     };
     if let Some(prepared) = prepared {
         inner.windows_ime.restore_session(prepared);
@@ -2684,6 +2703,20 @@ mod tests {
         );
 
         assert!(take_matching_prepared_windows_ime_session(&mut slots, 1).is_some());
+        assert_eq!(
+            slots.iter().map(|slot| slot.session_id).collect::<Vec<_>>(),
+            vec![2]
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn stale_prepared_windows_ime_restore_discards_old_snapshot_without_restoring() {
+        let mut slots = Vec::new();
+        store_prepared_windows_ime_session(&mut slots, 1, PreparedWindowsImeSession::unavailable());
+        store_prepared_windows_ime_session(&mut slots, 2, PreparedWindowsImeSession::unavailable());
+
+        assert!(take_current_prepared_windows_ime_session_for_restore(&mut slots, 1, 2).is_none());
         assert_eq!(
             slots.iter().map(|slot| slot.session_id).collect::<Vec<_>>(),
             vec![2]
