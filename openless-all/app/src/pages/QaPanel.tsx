@@ -15,7 +15,7 @@ import { useTranslation } from 'react-i18next';
 import { getSettings, isTauri, qaWindowDismiss, qaWindowPin } from '../lib/ipc';
 import type { QaChatMessage, QaStatePayload, UserPreferences } from '../lib/types';
 import { getHotkeyTriggerLabel } from '../lib/hotkey';
-import { renderQaMarkdown } from '../lib/qaMarkdown';
+import { renderQaMarkdown, renderQaPlainText } from '../lib/qaMarkdown';
 
 const SELECTION_PREVIEW_MAX = 60;
 
@@ -406,7 +406,7 @@ function MessageRow({ message }: { message: QaChatMessage }) {
       return renderQaMarkdown(message.content);
     } catch (error) {
       console.error('[qa] failed to render markdown', error);
-      return message.content;
+      return renderQaPlainText(String(message.content ?? ''));
     }
   }, [message.content, message.role]);
 
@@ -446,7 +446,7 @@ function StreamingAssistantBubble({ markdown }: { markdown: string }) {
       return renderQaMarkdown(markdown);
     } catch (error) {
       console.error('[qa] failed to render streaming markdown', error);
-      return markdown;
+      return renderQaPlainText(String(markdown ?? ''));
     }
   }, [markdown]);
   return (

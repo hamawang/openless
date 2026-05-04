@@ -11,6 +11,15 @@ function escapeHtml(raw: string): string {
     .replace(/'/g, '&#39;');
 }
 
+function decodeHtmlEntities(raw: string): string {
+  return raw
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>');
+}
+
 function normalizeHref(href: string | null | undefined): string | null {
   if (!href) return null;
   const trimmed = href.trim();
@@ -27,18 +36,22 @@ function normalizeHref(href: string | null | undefined): string | null {
 
 const QA_MARKDOWN_RENDERER = new marked.Renderer();
 QA_MARKDOWN_RENDERER.link = (href: string | null, title: string | null, text: string) => {
-  const safeHref = normalizeHref(href);
+  const safeHref = normalizeHref(decodeHtmlEntities(href ?? ''));
   if (!safeHref) return `<span>${text}</span>`;
   const titleAttr = title ? ` title="${escapeHtml(title)}"` : '';
   return `<a href="${escapeHtml(safeHref)}"${titleAttr} target="_blank" rel="noreferrer noopener">${text}</a>`;
 };
 QA_MARKDOWN_RENDERER.image = (href: string | null, title: string | null, text: string) => {
-  const safeHref = normalizeHref(href);
+  const safeHref = normalizeHref(decodeHtmlEntities(href ?? ''));
   if (!safeHref) return '';
   const titleAttr = title ? ` title="${escapeHtml(title)}"` : '';
   const alt = escapeHtml(text || '');
   return `<img src="${escapeHtml(safeHref)}" alt="${alt}"${titleAttr} loading="lazy" />`;
 };
+
+export function renderQaPlainText(raw: string): string {
+  return `<pre>${escapeHtml(raw)}</pre>`;
+}
 
 export function renderQaMarkdown(markdown: string): string {
   // 禁用 markdown 中 raw HTML：统一转义后再走 marked，仅保留安全 markdown 子集。

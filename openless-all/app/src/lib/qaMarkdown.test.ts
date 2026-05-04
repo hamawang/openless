@@ -15,7 +15,7 @@ function assertNotIncludes(text: string, expected: string, name: string) {
 const htmlEscaped = renderQaMarkdown('<img src=x onerror=alert(1)><script>alert(1)</script>');
 assertIncludes(htmlEscaped, '&lt;img src=x onerror=alert(1)&gt;', 'raw html should be escaped');
 assertNotIncludes(htmlEscaped, '<script>', 'script tag should not be rendered');
-assertNotIncludes(htmlEscaped, 'onerror=', 'event attribute should stay inert');
+assertNotIncludes(htmlEscaped, '<img src=x onerror=alert(1)>', 'raw html img should not become live dom tag');
 
 const badHref = renderQaMarkdown('[xss](javascript:alert(1))');
 assertNotIncludes(badHref, 'href="javascript:alert(1)"', 'javascript href should be dropped');
@@ -26,3 +26,5 @@ assertIncludes(goodMarkdown, '<li>a</li>', 'list markdown should render');
 assertIncludes(goodMarkdown, '<code>code</code>', 'code markdown should render');
 assertIncludes(goodMarkdown, 'href="https://example.com"', 'safe link should render');
 
+const safeQueryLink = renderQaMarkdown('[ok](https://example.com?a=1&b=2)');
+assertIncludes(safeQueryLink, 'href="https://example.com?a=1&amp;b=2"', 'safe query link should keep a single escaped ampersand');
