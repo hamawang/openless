@@ -379,6 +379,9 @@ impl Coordinator {
     pub fn update_hotkey_binding(&self) {
         self.inner.window_hotkey_pressed_codes.lock().clear();
         *self.inner.hotkey_last_click_at.lock() = None;
+        self.inner
+            .hotkey_trigger_held
+            .store(false, Ordering::SeqCst);
         if let Some(monitor) = self.inner.hotkey.lock().as_ref() {
             monitor.update_binding(self.inner.prefs.get().hotkey);
         }
@@ -2894,6 +2897,19 @@ mod tests {
         coordinator.update_hotkey_binding();
 
         assert!(coordinator.inner.hotkey_last_click_at.lock().is_none());
+    }
+
+    #[test]
+    fn hotkey_binding_update_resets_held_trigger_state() {
+        let coordinator = Coordinator::new();
+        coordinator
+            .inner
+            .hotkey_trigger_held
+            .store(true, Ordering::SeqCst);
+
+        coordinator.update_hotkey_binding();
+
+        assert!(!coordinator.inner.hotkey_trigger_held.load(Ordering::SeqCst));
     }
 
     #[test]
