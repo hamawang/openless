@@ -68,6 +68,22 @@ pub struct DictionaryEntry {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VocabPreset {
+    pub id: String,
+    pub name: String,
+    pub phrases: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct VocabPresetStore {
+    pub custom: Vec<VocabPreset>,
+    pub overrides: Vec<VocabPreset>,
+    pub disabled_builtin_preset_ids: Vec<String>,
+}
+
 fn default_true() -> bool {
     true
 }

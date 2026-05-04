@@ -166,6 +166,17 @@ export const en: typeof zhCN = {
     tipDisabled: 'Click to disable this entry',
     tipEnabled: 'Click to enable this entry',
     removeAria: 'Remove',
+    presets: {
+      title: 'Scenario presets',
+      tip: 'Multi-select to apply in batch; supports edit/create and keeps local preset structure ready for future import/export.',
+      create: 'New preset',
+      apply: 'Apply selected',
+      save: 'Save preset',
+      edit: 'Edit {{name}}',
+      newPreset: 'New preset',
+      namePlaceholder: 'Preset name',
+      wordsPlaceholder: 'Terms (comma or newline separated)',
+    },
   },
   style: {
     kicker: 'STYLE',

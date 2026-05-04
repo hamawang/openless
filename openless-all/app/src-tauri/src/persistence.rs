@@ -22,7 +22,7 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::types::{DictationSession, DictionaryEntry, UserPreferences};
+use crate::types::{DictationSession, DictionaryEntry, UserPreferences, VocabPresetStore};
 
 const HISTORY_CAP: usize = 200;
 const HISTORY_FILE: &str = "history.json";
@@ -30,6 +30,7 @@ const PREFERENCES_FILE: &str = "preferences.json";
 /// 与 Swift `Sources/OpenLessPersistence/DictionaryStore.swift` 同名，
 /// 让旧版词汇表在升级后无缝继承。**不要**改成 `vocab.json`，会丢用户数据。
 const VOCAB_FILE: &str = "dictionary.json";
+const VOCAB_PRESETS_FILE: &str = "vocab-presets.json";
 
 /// Swift 老 `CredentialsVault` 的 JSON 备用路径。
 /// 升级到 Tauri 版后，先尝试 Keychain；Keychain 没有时回落读这个文件，
@@ -593,6 +594,20 @@ fn count_occurrences(haystack: &str, needle: &str) -> u64 {
     count
 }
 
+pub fn list_vocab_presets() -> Result<VocabPresetStore> {
+    let dir = data_dir()?;
+    ensure_dir(&dir)?;
+    read_or_default::<VocabPresetStore>(&dir.join(VOCAB_PRESETS_FILE))
+}
+
+pub fn save_vocab_presets(store: &VocabPresetStore) -> Result<()> {
+    let dir = data_dir()?;
+    ensure_dir(&dir)?;
+    let path = dir.join(VOCAB_PRESETS_FILE);
+    let json = serde_json::to_vec_pretty(store).context("encode vocab presets failed")?;
+    atomic_write(&path, &json)
+}
+
 // ───────────────────────── CredentialsVault ─────────────────────────
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -717,5 +732,39 @@ impl CredentialsVault {
             ark_model_id: lookup_account(&root, CredentialAccount::ArkModelId),
             ark_endpoint: lookup_account(&root, CredentialAccount::ArkEndpoint),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{list_vocab_presets, save_vocab_presets};
+    use crate::types::{VocabPreset, VocabPresetStore};
+    use std::fs;
+    use std::path::PathBuf;
+
+    #[test]
+    fn vocab_presets_roundtrip_json_file() {
+        let tmp: PathBuf = std::env::temp_dir().join(format!("openless-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&tmp).expect("create temp dir");
+        // Linux path helper uses XDG_DATA_HOME first.
+        unsafe {
+            std::env::set_var("XDG_DATA_HOME", &tmp);
+        }
+        let store = VocabPresetStore {
+            custom: vec![VocabPreset {
+                id: "test".into(),
+                name: "测试".into(),
+                phrases: vec!["PR".into(), "CI".into()],
+            }],
+            overrides: vec![],
+            disabled_builtin_preset_ids: vec!["chef".into()],
+        };
+        save_vocab_presets(&store).expect("save presets");
+        let loaded = list_vocab_presets().expect("list presets");
+        assert_eq!(loaded.custom.len(), 1);
+        assert_eq!(loaded.custom[0].id, "test");
+        assert_eq!(loaded.custom[0].phrases, vec!["PR".to_string(), "CI".to_string()]);
+        assert_eq!(loaded.disabled_builtin_preset_ids, vec!["chef".to_string()]);
+        let _ = fs::remove_dir_all(&tmp);
     }
 }

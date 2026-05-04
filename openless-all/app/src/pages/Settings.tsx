@@ -4,7 +4,6 @@
 
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { disable as disableAutostart, enable as enableAutostart, isEnabled as isAutostartEnabled } from '@tauri-apps/plugin-autostart';
 import { Icon } from '../components/Icon';
 import { ShortcutRecorder } from '../components/ShortcutRecorder';
 import { isDialogStatus, UpdateDialog, useAutoUpdate } from '../components/AutoUpdate';
@@ -15,6 +14,7 @@ import {
   checkMicrophonePermission,
   getHotkeyStatus,
   getWindowsImeStatus,
+  isTauri,
   openExternal,
   openSystemSettings,
   listProviderModels,
@@ -56,6 +56,21 @@ interface SettingsProps {
 export type SettingsSectionId = 'recording' | 'providers' | 'shortcuts' | 'permissions' | 'language' | 'about';
 
 const SECTION_ORDER: SettingsSectionId[] = ['recording', 'providers', 'shortcuts', 'permissions', 'language', 'about'];
+
+async function autostartIsEnabled(): Promise<boolean> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  return invoke<boolean>('plugin:autostart|is_enabled');
+}
+
+async function autostartEnable(): Promise<void> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  await invoke('plugin:autostart|enable');
+}
+
+async function autostartDisable(): Promise<void> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  await invoke('plugin:autostart|disable');
+}
 
 export function Settings({ embedded = false, initialSection = 'recording' }: SettingsProps) {
   const { t } = useTranslation();
@@ -266,15 +281,19 @@ function AutostartRow() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!isTauri) {
+      setLoaded(true);
+      return;
+    }
     let cancelled = false;
-    isAutostartEnabled()
-      .then(v => {
+    autostartIsEnabled()
+      .then((v: boolean) => {
         if (!cancelled) {
           setEnabled(v);
           setLoaded(true);
         }
       })
-      .catch(err => {
+      .catch((err: unknown) => {
         console.error('[autostart] isEnabled failed', err);
         if (!cancelled) setLoaded(true);
       });
@@ -287,8 +306,9 @@ function AutostartRow() {
     setEnabled(next);
     setError(null);
     try {
-      if (next) await enableAutostart();
-      else await disableAutostart();
+      if (!isTauri) return;
+      if (next) await autostartEnable();
+      else await autostartDisable();
     } catch (err) {
       console.error('[autostart] toggle failed', err);
       setEnabled(!next);

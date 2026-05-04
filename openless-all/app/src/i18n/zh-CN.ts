@@ -164,6 +164,17 @@ export const zhCN = {
     tipDisabled: '点击禁用此词条',
     tipEnabled: '点击启用此词条',
     removeAria: '删除',
+    presets: {
+      title: '场景预设',
+      tip: '可多选后批量启用；支持编辑和新建，已为后续导入导出预留本地结构。',
+      create: '新建预设',
+      apply: '启用所选',
+      save: '保存预设',
+      edit: '编辑 {{name}}',
+      newPreset: '新预设',
+      namePlaceholder: '预设名称',
+      wordsPlaceholder: '词条（用逗号或换行分隔）',
+    },
   },
   style: {
     kicker: 'STYLE',

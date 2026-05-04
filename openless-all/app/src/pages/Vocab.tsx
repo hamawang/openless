@@ -4,8 +4,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { addVocab, isTauri, listVocab, removeVocab, setVocabEnabled } from '../lib/ipc';
-import type { DictionaryEntry } from '../lib/types';
+import type { DictionaryEntry, VocabPreset } from '../lib/types';
+import { DEFAULT_VOCAB_PRESETS, loadVocabPresets, persistVocabPresets } from '../lib/vocabPresets';
 import { Btn, Card, PageHeader } from './_atoms';
+
+const NEW_PRESET_DRAFT_ID = '__new__';
 
 export function Vocab() {
   const { t } = useTranslation();
@@ -14,6 +17,11 @@ export function Vocab() {
   const inputRef = useRef<HTMLInputElement>(null);
 
   const [error, setError] = useState<string | null>(null);
+  const [presets, setPresets] = useState<VocabPreset[]>(DEFAULT_VOCAB_PRESETS);
+  const [selectedPresetIds, setSelectedPresetIds] = useState<string[]>([]);
+  const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
+  const [presetNameDraft, setPresetNameDraft] = useState('');
+  const [presetPhrasesDraft, setPresetPhrasesDraft] = useState('');
 
   const refresh = async () => {
     try {
@@ -30,6 +38,9 @@ export function Vocab() {
 
   useEffect(() => {
     refresh();
+    void loadVocabPresets()
+      .then(setPresets)
+      .catch(err => setError(err instanceof Error ? err.message : String(err)));
     // 订阅后端 vocab:updated：每段口述结束、record_hits 触发后由 coordinator 推送。
     // Vocab 页面打开期间能即时看到命中数累加，无需切到其他 tab 再切回。
     if (!isTauri) return;
@@ -82,6 +93,89 @@ export function Vocab() {
     }
   };
 
+  const togglePreset = (id: string) => {
+    setSelectedPresetIds(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]));
+  };
+
+  const startEditPreset = (preset: VocabPreset) => {
+    setEditingPresetId(preset.id);
+    setPresetNameDraft(preset.name);
+    setPresetPhrasesDraft(preset.phrases.join(', '));
+  };
+
+  const savePreset = async () => {
+    if (!editingPresetId) return;
+    const name = presetNameDraft.trim();
+    if (!name) return;
+    const phrases = Array.from(
+      new Set(
+        presetPhrasesDraft
+          .split(/[,\n]/)
+          .map(s => s.trim())
+          .filter(Boolean),
+      ),
+    );
+    const next =
+      editingPresetId === NEW_PRESET_DRAFT_ID
+        ? [...presets, { id: `user-${Date.now()}`, name, phrases }]
+        : presets.map(p => (p.id === editingPresetId ? { ...p, name, phrases } : p));
+    try {
+      await persistVocabPresets(next);
+      setPresets(next);
+      setEditingPresetId(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const createPreset = () => {
+    setEditingPresetId(NEW_PRESET_DRAFT_ID);
+    setPresetNameDraft(t('vocab.presets.newPreset'));
+    setPresetPhrasesDraft('');
+  };
+
+  const applySelectedPresets = async () => {
+    const selected = presets.filter(p => selectedPresetIds.includes(p.id));
+    if (selected.length === 0) return;
+    const byPhrase = new Map<string, DictionaryEntry[]>();
+    const addedPhrases = new Set<string>();
+    for (const entry of entries) {
+      const key = entry.phrase.trim().toLowerCase();
+      if (!byPhrase.has(key)) byPhrase.set(key, []);
+      byPhrase.get(key)?.push(entry);
+    }
+    let failures = 0;
+    for (const p of selected) {
+      for (const phrase of p.phrases) {
+        const key = phrase.trim().toLowerCase();
+        if (addedPhrases.has(key)) continue;
+        const existing = byPhrase.get(key) || [];
+        if (existing.length === 0) {
+          try {
+            await addVocab(phrase);
+            addedPhrases.add(key);
+          } catch {
+            failures += 1;
+          }
+          continue;
+        }
+        for (const item of existing) {
+          if (!item.enabled) {
+            try {
+              await setVocabEnabled(item.id, true);
+            } catch {
+              failures += 1;
+            }
+          }
+        }
+      }
+    }
+    await refresh();
+    if (failures > 0) {
+      setError(`部分词条添加失败（${failures}）`);
+    }
+  };
+
   return (
     <>
       <PageHeader
@@ -95,6 +189,48 @@ export function Vocab() {
         }
       />
       <Card padding={0}>
+        <div style={{ padding: 18, borderBottom: '0.5px solid var(--ol-line)' }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <strong style={{ fontSize: 12 }}>{t('vocab.presets.title')}</strong>
+            {presets.map(p => (
+              <button
+                key={p.id}
+                onClick={() => togglePreset(p.id)}
+                style={{
+                  border: '0.5px solid var(--ol-line-strong)',
+                  borderRadius: 999,
+                  padding: '4px 10px',
+                  fontSize: 12,
+                  background: selectedPresetIds.includes(p.id) ? 'var(--ol-blue-soft)' : 'var(--ol-surface-2)',
+                }}
+              >
+                {p.name}
+              </button>
+            ))}
+            <Btn size="sm" variant="ghost" onClick={createPreset}>{t('vocab.presets.create')}</Btn>
+            <Btn size="sm" variant="primary" onClick={applySelectedPresets}>{t('vocab.presets.apply')}</Btn>
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--ol-ink-4)', marginTop: 10 }}>{t('vocab.presets.tip')}</div>
+          {editingPresetId && (
+            <div style={{ marginTop: 10, display: 'grid', gap: 8 }}>
+              <input value={presetNameDraft} onChange={e => setPresetNameDraft(e.target.value)} placeholder={t('vocab.presets.namePlaceholder')} />
+              <textarea value={presetPhrasesDraft} onChange={e => setPresetPhrasesDraft(e.target.value)} placeholder={t('vocab.presets.wordsPlaceholder')} rows={3} />
+              <div style={{ display: 'flex', gap: 8 }}>
+                <Btn size="sm" variant="primary" onClick={() => void savePreset()}>{t('vocab.presets.save')}</Btn>
+                <Btn size="sm" variant="ghost" onClick={() => setEditingPresetId(null)}>{t('common.cancel')}</Btn>
+              </div>
+            </div>
+          )}
+          {!editingPresetId && presets.length > 0 && (
+            <div style={{ marginTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {presets.map(p => (
+                <Btn key={`${p.id}-edit`} size="sm" variant="ghost" onClick={() => startEditPreset(p)}>
+                  {t('vocab.presets.edit', { name: p.name })}
+                </Btn>
+              ))}
+            </div>
+          )}
+        </div>
         <div style={{ padding: 18, borderBottom: '0.5px solid var(--ol-line)' }}>
           <div style={{ display: 'flex', gap: 8 }}>
             <input
