@@ -17,7 +17,10 @@ const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.me
 const bundleDir = fileURLToPath(new URL('../src-tauri/target/release/bundle/', import.meta.url));
 
 const candidatesByTarget = {
-  darwin: ['macos/OpenLess.app.tar.gz'],
+  darwin: [
+    `macos/OpenLess_${arch}.app.tar.gz`,
+    'macos/OpenLess.app.tar.gz',
+  ],
   windows: ['nsis/OpenLess_*_x64-setup.exe', 'nsis/OpenLess*_x64-setup.exe'],
   linux: ['appimage/OpenLess_*.AppImage', 'appimage/OpenLess*.AppImage'],
 };

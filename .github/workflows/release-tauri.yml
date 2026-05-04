@@ -4,7 +4,7 @@ name: Release Tauri (cross-platform)
 #   - 手动 dispatch（用于测试构建,不发版）
 #
 # 输出：
-#   macOS arm64 .dmg + Windows x64 .msi/.exe + Linux x64 .deb/.rpm/.AppImage，自动作为 GitHub Release 资产上传。
+#   macOS arm64/x64 .dmg + Windows x64 .msi/.exe + Linux x64 .deb/.rpm/.AppImage，自动作为 GitHub Release 资产上传。
 #
 # macOS 分发：
 #   - 配好 APPLE_CERTIFICATE / APPLE_CERTIFICATE_PASSWORD / APPLE_ID /
@@ -32,6 +32,10 @@ jobs:
             rust-target: aarch64-apple-darwin
             updater-target: darwin
             updater-arch: aarch64
+          - platform: macos-13
+            rust-target: x86_64-apple-darwin
+            updater-target: darwin
+            updater-arch: x86_64
           - platform: windows-latest
             rust-target: x86_64-pc-windows-msvc
             updater-target: windows
@@ -97,7 +101,7 @@ jobs:
           fi
 
       - name: Check Apple signing availability
-        if: matrix.platform == 'macos-latest' && startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref, '-tauri')
+        if: startsWith(matrix.platform, 'macos') && startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref, '-tauri')
         shell: bash
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -117,7 +121,7 @@ jobs:
           fi
 
       - name: Import Apple Developer ID certificate
-        if: matrix.platform == 'macos-latest'
+        if: startsWith(matrix.platform, 'macos')
         shell: bash
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -158,7 +162,7 @@ jobs:
           echo "Imported Apple signing identity: $CERT_ID"
 
       - name: Configure Apple notarization
-        if: matrix.platform == 'macos-latest'
+        if: startsWith(matrix.platform, 'macos')
         shell: bash
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -175,7 +179,7 @@ jobs:
 
       # ── macOS：用我们自己的 build-mac.sh，统一处理签名、公证和 artifact 清理 ──
       - name: Build (macOS)
-        if: matrix.platform == 'macos-latest'
+        if: startsWith(matrix.platform, 'macos')
         working-directory: 'openless-all/app'
         env:
           INSTALL: '0'        # CI 不要装到 /Applications,也不要 reset TCC
@@ -213,6 +217,18 @@ jobs:
             npm run tauri -- build --bundles deb,rpm,appimage
           fi
 
+      - name: Disambiguate macOS updater bundle filename
+        if: startsWith(matrix.platform, 'macos') && env.TAURI_SIGNING_PRIVATE_KEY != ''
+        shell: bash
+        working-directory: 'openless-all/app/src-tauri/target/release/bundle/macos'
+        run: |
+          if [ -f OpenLess.app.tar.gz ]; then
+            mv OpenLess.app.tar.gz "OpenLess_${{ matrix.updater-arch }}.app.tar.gz"
+          fi
+          if [ -f OpenLess.app.tar.gz.sig ]; then
+            mv OpenLess.app.tar.gz.sig "OpenLess_${{ matrix.updater-arch }}.app.tar.gz.sig"
+          fi
+
       - name: Write updater manifest
         if: env.TAURI_SIGNING_PRIVATE_KEY != ''
         shell: bash
@@ -237,7 +253,7 @@ jobs:
       # 让"云端 artifact 一定干净"成为可验证的承诺。用户下载后再被本地浏览器
       # 加 quarantine 时，按 release notes 的 `xattr -cr` 一行即可消除。
       - name: Strip xattr / quarantine on macOS bundles
-        if: matrix.platform == 'macos-latest'
+        if: startsWith(matrix.platform, 'macos')
         shell: bash
         working-directory: 'openless-all/app/src-tauri/target/release/bundle'
         run: |
@@ -250,24 +266,24 @@ jobs:
           done
 
       - name: Upload macOS artifacts
-        if: matrix.platform == 'macos-latest'
+        if: startsWith(matrix.platform, 'macos')
         uses: actions/upload-artifact@v4
         with:
-          name: openless-macos-arm64
+          name: openless-macos-${{ matrix.updater-arch }}
           path: |
             openless-all/app/src-tauri/target/release/bundle/dmg/*.dmg
           if-no-files-found: error
 
       - name: Upload macOS updater artifacts
-        if: matrix.platform == 'macos-latest' && env.TAURI_SIGNING_PRIVATE_KEY != ''
+        if: startsWith(matrix.platform, 'macos') && env.TAURI_SIGNING_PRIVATE_KEY != ''
         uses: actions/upload-artifact@v4
         with:
-          name: openless-macos-arm64-updater
+          name: openless-macos-${{ matrix.updater-arch }}-updater
           path: |
             openless-all/app/src-tauri/target/release/bundle/macos/*.app.tar.gz
             openless-all/app/src-tauri/target/release/bundle/macos/*.app.tar.gz.sig
-            openless-all/app/src-tauri/target/release/bundle/latest-darwin-aarch64.json
-            openless-all/app/src-tauri/target/release/bundle/latest-darwin-aarch64-mirror.json
+            openless-all/app/src-tauri/target/release/bundle/latest-darwin-${{ matrix.updater-arch }}.json
+            openless-all/app/src-tauri/target/release/bundle/latest-darwin-${{ matrix.updater-arch }}-mirror.json
           if-no-files-found: error
 
       - name: Upload Windows artifacts
@@ -325,7 +341,7 @@ jobs:
           prerelease: false
           # Matrix jobs all upload assets to the same release. Generate notes once
           # so macOS, Windows, and Linux jobs do not duplicate the release body.
-          generate_release_notes: ${{ matrix.platform == 'macos-latest' }}
+          generate_release_notes: ${{ matrix.updater-target == 'darwin' && matrix.updater-arch == 'aarch64' }}
           files: |
             openless-all/app/src-tauri/target/release/bundle/dmg/*.dmg
             openless-all/app/src-tauri/target/release/bundle/macos/*.app.tar.gz

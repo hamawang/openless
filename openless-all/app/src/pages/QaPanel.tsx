@@ -13,8 +13,9 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import { marked } from 'marked';
-import { isTauri, qaWindowDismiss, qaWindowPin } from '../lib/ipc';
-import type { QaChatMessage, QaStatePayload } from '../lib/types';
+import { getSettings, isTauri, qaWindowDismiss, qaWindowPin } from '../lib/ipc';
+import type { QaChatMessage, QaStatePayload, UserPreferences } from '../lib/types';
+import { getHotkeyTriggerLabel } from '../lib/hotkey';
 
 const SELECTION_PREVIEW_MAX = 60;
 
@@ -23,7 +24,7 @@ marked.setOptions({ gfm: true, breaks: true });
 type Status = 'idle' | 'recording' | 'thinking' | 'error';
 
 export function QaPanel() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [messages, setMessages] = useState<QaChatMessage[]>([]);
   const [status, setStatus] = useState<Status>('idle');
   const [errorMsg, setErrorMsg] = useState<string>('');
@@ -33,6 +34,12 @@ export function QaPanel() {
   const [streamingAnswer, setStreamingAnswer] = useState<string>('');
   /** 录音电平：0..1。后端每帧 33ms 通过 qa:level emit。详见 issue #162。 */
   const [level, setLevel] = useState<number>(0);
+  /** 用户当前的录音热键 label（如 "右 Option" / "Right Alt"）。issue #205：
+   *  原版硬编码 "Option"，Windows 用户没这个键，文案失真。读 prefs 后由 i18n
+   *  插值动态显示，平台与用户配置都能跟上。 */
+  const [recordHotkeyLabel, setRecordHotkeyLabel] = useState<string>(() =>
+    i18n.t('hotkey.fallback'),
+  );
   const tRef = useRef(t);
   tRef.current = t;
 
@@ -42,6 +49,7 @@ export function QaPanel() {
     let unlistenState: (() => void) | undefined;
     let unlistenDismiss: (() => void) | undefined;
     let unlistenLevel: (() => void) | undefined;
+    let unlistenPrefs: (() => void) | undefined;
     let cancelled = false;
     (async () => {
       try {
@@ -111,14 +119,22 @@ export function QaPanel() {
         const levelHandle = await listen<{ level: number }>('qa:level', event => {
           setLevel(event.payload.level ?? 0);
         });
+        // prefs:changed — 后端在 set_settings 后广播。issue #205：QA 浮窗在独立
+        // webview，没有 HotkeySettingsContext；如果用户在主窗口改了录音键，
+        // 浮窗里的 "{recordHotkey}" 文案必须立刻跟上，否则会一直停在旧值。
+        const prefsHandle = await listen<UserPreferences>('prefs:changed', event => {
+          setRecordHotkeyLabel(getHotkeyTriggerLabel(event.payload?.hotkey?.trigger));
+        });
         if (cancelled) {
           stateHandle();
           dismissHandle();
           levelHandle();
+          prefsHandle();
         } else {
           unlistenState = stateHandle;
           unlistenDismiss = dismissHandle;
           unlistenLevel = levelHandle;
+          unlistenPrefs = prefsHandle;
         }
       } catch (error) {
         console.error('[QaPanel] listener setup failed', error);
@@ -129,6 +145,7 @@ export function QaPanel() {
       unlistenState?.();
       unlistenDismiss?.();
       unlistenLevel?.();
+      unlistenPrefs?.();
     };
   }, []);
 
@@ -143,6 +160,29 @@ export function QaPanel() {
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
   }, []);
+
+  // ── 读取用户当前的录音热键 label，给 i18n 插值用（issue #205）。
+  // QaPanel 跑在独立 webview（label="qa"），没有 HotkeySettingsContext
+  // 注入，所以直接走 IPC 拿一次 prefs。语言切换时 i18n.t('hotkey.fallback')
+  // 也要跟着重算，所以 i18n.language 入依赖。
+  useEffect(() => {
+    if (!isTauri) {
+      setRecordHotkeyLabel(i18n.t('hotkey.fallback'));
+      return;
+    }
+    let cancelled = false;
+    void getSettings()
+      .then(prefs => {
+        if (cancelled) return;
+        setRecordHotkeyLabel(getHotkeyTriggerLabel(prefs.hotkey?.trigger));
+      })
+      .catch(err => {
+        console.warn('[QaPanel] load hotkey label failed', err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [i18n.language]);
 
   const onTogglePin = () => {
     const next = !pinned;
@@ -166,13 +206,26 @@ export function QaPanel() {
     <div style={shellStyle}>
       <Toolbar pinned={pinned} onTogglePin={onTogglePin} onClose={onClose} />
       <div ref={scrollRef} style={contentStyle}>
-        {messages.length === 0 && status === 'idle' && <EmptyHint t={t} />}
+        {messages.length === 0 && status === 'idle' && (
+          <EmptyHint t={t} recordHotkey={recordHotkeyLabel} />
+        )}
         {messages.length === 0 && status === 'recording' && (
-          <RecordingHeader preview={selectionPreview} t={t} level={level} />
+          <RecordingHeader
+            preview={selectionPreview}
+            t={t}
+            level={level}
+            recordHotkey={recordHotkeyLabel}
+          />
         )}
         <MessageList messages={messages} />
         {status === 'recording' && messages.length > 0 && (
-          <TurnIndicator kind="recording" t={t} preview={selectionPreview} level={level} />
+          <TurnIndicator
+            kind="recording"
+            t={t}
+            preview={selectionPreview}
+            level={level}
+            recordHotkey={recordHotkeyLabel}
+          />
         )}
         {streamingAnswer && (
           <StreamingAssistantBubble markdown={streamingAnswer} />
@@ -180,9 +233,11 @@ export function QaPanel() {
         {status === 'thinking' && !streamingAnswer && (
           <TurnIndicator kind="thinking" t={t} />
         )}
-        {status === 'error' && <ErrorRow message={errorMsg} t={t} />}
+        {status === 'error' && (
+          <ErrorRow message={errorMsg} t={t} recordHotkey={recordHotkeyLabel} />
+        )}
       </div>
-      <StatusBar status={status} t={t} />
+      <StatusBar status={status} t={t} recordHotkey={recordHotkeyLabel} />
     </div>
   );
 }
@@ -197,11 +252,16 @@ interface ToolbarProps {
 
 function Toolbar({ pinned, onTogglePin, onClose }: ToolbarProps) {
   const { t } = useTranslation();
-  // 拖动靠 NSWindow.movableByWindowBackground=YES（lib.rs::make_qa_window_draggable_macos）
-  // 在 AppKit 层处理。前端不需要 onMouseDown / data-tauri-drag-region。
+  // 拖动 (issue #205)：
+  // - macOS: lib.rs::make_qa_window_draggable_macos 在 NSWindow 层把整窗口设
+  //   movableByWindowBackground=YES，所以 macOS 上整片背景都可拖。
+  // - Windows: NSWindow 走不了；用 Tauri 标准 data-tauri-drag-region —— mousedown
+  //   走 startDragging() → WM_NCLBUTTONDOWN(HTCAPTION)，在 focus:false 浮窗上也能用。
+  // 两条路径并存不冲突；data-tauri-drag-region 放在 toolbar 的空白 spacer 上，IconBtn
+  // 作为 button 子元素仍然正常 click。
   return (
     <div style={toolbarStyle}>
-      <div style={{ flex: 1, height: '100%' }} />
+      <div data-tauri-drag-region style={{ flex: 1, height: '100%' }} />
       <IconBtn
         label={pinned ? t('qa.unpinTooltip') : t('qa.pinTooltip')}
         active={pinned}
@@ -255,14 +315,20 @@ function IconBtn({ label, active, onClick, children }: IconBtnProps) {
   );
 }
 
-function EmptyHint({ t }: { t: ReturnType<typeof useTranslation>['t'] }) {
+function EmptyHint({
+  t,
+  recordHotkey,
+}: {
+  t: ReturnType<typeof useTranslation>['t'];
+  recordHotkey: string;
+}) {
   return (
     <div style={emptyHintStyle}>
       <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6, color: 'var(--ol-ink)' }}>
-        {t('qa.emptyTitle')}
+        {t('qa.emptyTitle', { recordHotkey })}
       </div>
       <div style={{ fontSize: 12, color: 'var(--ol-ink-3)', lineHeight: 1.6 }}>
-        {t('qa.emptyDesc')}
+        {t('qa.emptyDesc', { recordHotkey })}
       </div>
     </div>
   );
@@ -272,10 +338,12 @@ function RecordingHeader({
   preview,
   t,
   level,
+  recordHotkey,
 }: {
   preview: string;
   t: ReturnType<typeof useTranslation>['t'];
   level: number;
+  recordHotkey: string;
 }) {
   const truncated = useMemo(() => truncate(preview, SELECTION_PREVIEW_MAX), [preview]);
   return (
@@ -290,7 +358,7 @@ function RecordingHeader({
       )}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--ol-ink-2)' }}>
         <span style={recordingDotStyle} />
-        {t('qa.recordingHint')}
+        {t('qa.recordingHint', { recordHotkey })}
       </div>
       <LevelBar level={level} />
     </div>
@@ -418,11 +486,13 @@ function TurnIndicator({
   preview,
   t,
   level,
+  recordHotkey,
 }: {
   kind: 'recording' | 'thinking';
   preview?: string;
   t: ReturnType<typeof useTranslation>['t'];
   level?: number;
+  recordHotkey?: string;
 }) {
   if (kind === 'recording') {
     const truncated = preview ? truncate(preview, SELECTION_PREVIEW_MAX) : '';
@@ -438,7 +508,7 @@ function TurnIndicator({
         )}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--ol-ink-2)' }}>
           <span style={recordingDotStyle} />
-          {t('qa.recordingHint')}
+          {t('qa.recordingHint', { recordHotkey: recordHotkey ?? '' })}
         </div>
         <LevelBar level={level ?? 0} />
       </div>
@@ -459,14 +529,18 @@ function TurnIndicator({
 function ErrorRow({
   message,
   t,
+  recordHotkey,
 }: {
   message: string;
   t: ReturnType<typeof useTranslation>['t'];
+  recordHotkey: string;
 }) {
   return (
     <div style={errorRowStyle}>
       <div style={{ fontSize: 12.5, color: 'var(--ol-err)', lineHeight: 1.55 }}>{message}</div>
-      <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)' }}>{t('qa.errorRetryHint')}</div>
+      <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)' }}>
+        {t('qa.errorRetryHint', { recordHotkey })}
+      </div>
     </div>
   );
 }
@@ -474,15 +548,17 @@ function ErrorRow({
 function StatusBar({
   status,
   t,
+  recordHotkey,
 }: {
   status: Status;
   t: ReturnType<typeof useTranslation>['t'];
+  recordHotkey: string;
 }) {
   let label = '';
   let dotColor = 'transparent';
   switch (status) {
     case 'idle':
-      label = t('qa.statusIdle');
+      label = t('qa.statusIdle', { recordHotkey });
       dotColor = 'rgba(0,0,0,0.18)';
       break;
     case 'recording':
