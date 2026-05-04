@@ -86,14 +86,14 @@ export function Style() {
               style={{
                 position: 'relative', width: 36, height: 20, borderRadius: 999, border: 0,
                 background: masterEnabled ? 'var(--ol-blue)' : 'rgba(0,0,0,0.15)',
-                cursor: 'default', transition: 'background 0.15s ease-out',
+                cursor: 'default', transition: 'background 0.16s var(--ol-motion-quick)',
               }}
             >
               <span
                 style={{
                   position: 'absolute', top: 2, left: masterEnabled ? 18 : 2,
                   width: 16, height: 16, borderRadius: 999, background: '#fff',
-                  boxShadow: '0 1px 2px rgba(0,0,0,.2)', transition: 'left .15s',
+                  boxShadow: '0 1px 2px rgba(0,0,0,.2)', transition: 'left .16s var(--ol-motion-spring)',
                 }}
               />
             </button>
@@ -115,7 +115,7 @@ export function Style() {
                 boxShadow: isDefault ? '0 0 0 3px var(--ol-blue-ring), var(--ol-shadow-sm)' : 'var(--ol-shadow-sm)',
                 opacity: isEnabled ? 1 : 0.55,
                 position: 'relative',
-                transition: 'border-color 0.15s ease-out, box-shadow 0.15s ease-out, opacity 0.15s ease-out',
+                transition: 'border-color 0.16s var(--ol-motion-quick), box-shadow 0.18s var(--ol-motion-soft), opacity 0.18s var(--ol-motion-soft)',
               }}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
@@ -153,13 +153,13 @@ export function Style() {
                       position: 'relative', width: 30, height: 18, borderRadius: 999, border: 0,
                       background: isEnabled ? 'var(--ol-blue)' : 'rgba(0,0,0,0.15)',
                       cursor: 'default',
-                      transition: 'background 0.15s ease-out',
+                      transition: 'background 0.16s var(--ol-motion-quick)',
                     }}
                   >
                     <span style={{
                       position: 'absolute', top: 2, left: isEnabled ? 14 : 2,
                       width: 14, height: 14, borderRadius: 999, background: '#fff',
-                      boxShadow: '0 1px 2px rgba(0,0,0,.2)', transition: 'left .15s',
+                      boxShadow: '0 1px 2px rgba(0,0,0,.2)', transition: 'left .16s var(--ol-motion-spring)',
                     }} />
                   </button>
                 )}

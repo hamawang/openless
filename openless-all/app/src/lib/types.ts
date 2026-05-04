@@ -85,6 +85,19 @@ export type QaHotkeyBinding = ShortcutBinding;
 /** 自定义录音组合键绑定。当 hotkey.trigger == 'custom' 时使用。 */
 export type ComboBinding = ShortcutBinding;
 
+export type WindowsImeInstallState =
+  | 'installed'
+  | 'notInstalled'
+  | 'registrationBroken'
+  | 'notWindows';
+
+export interface WindowsImeStatus {
+  state: WindowsImeInstallState;
+  usingTsfBackend: boolean;
+  message: string;
+  dllPath: string | null;
+}
+
 export interface UserPreferences {
   hotkey: HotkeyBinding;
   dictationHotkey: ShortcutBinding;
@@ -96,6 +109,8 @@ export interface UserPreferences {
   activeLlmProvider: string;
   /** 仅 Windows/Linux：粘贴成功后是否恢复用户原剪贴板。默认 true。详见 issue #111。 */
   restoreClipboardAfterPaste: boolean;
+  /** Windows：TSF 失败后是否允许 SendInput / 粘贴类非 TSF 兜底。关闭后可验证是否真实 TSF 上屏。 */
+  allowNonTsfInsertionFallback: boolean;
   /** 用户的工作语言（多选，原生名）；作为前提注入 LLM polish/translate prompt 头部。 */
   workingLanguages: string[];
   /** 翻译模式目标语言（单选，原生名）；空串 = 不启用 Shift 翻译。详见 issue #4。 */

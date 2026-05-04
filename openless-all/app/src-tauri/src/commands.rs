@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 use serde_json::Value;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 
 use crate::coordinator::Coordinator;
 use crate::permissions::{self, PermissionStatus};
@@ -13,7 +13,7 @@ use crate::persistence::{CredentialAccount, CredentialsSnapshot, CredentialsVaul
 use crate::polish::{LLMError, OpenAICompatibleConfig, OpenAICompatibleLLMProvider};
 use crate::types::{
     ComboBinding, CredentialsStatus, DictationSession, DictionaryEntry, HotkeyCapability,
-    HotkeyStatus, PolishMode, ShortcutBinding, UserPreferences,
+    HotkeyStatus, PolishMode, ShortcutBinding, UserPreferences, WindowsImeStatus,
 };
 
 type CoordinatorState<'a> = State<'a, Arc<Coordinator>>;
@@ -107,8 +107,17 @@ fn persist_settings<T: SettingsWriter>(coord: &T, prefs: UserPreferences) -> Res
 }
 
 #[tauri::command]
-pub fn set_settings(coord: CoordinatorState<'_>, prefs: UserPreferences) -> Result<(), String> {
-    persist_settings(&*coord, prefs)
+pub fn set_settings(
+    coord: CoordinatorState<'_>,
+    app: AppHandle,
+    prefs: UserPreferences,
+) -> Result<(), String> {
+    // 广播给所有 webview。issue #205：QaPanel 跑在独立 webview，
+    // 没有 HotkeySettingsContext，必须靠事件感知录音键变化，否则面板可见时
+    // 用户改键会让浮窗里的 "{recordHotkey}" 文案一直停留在旧值。
+    persist_settings(&*coord, prefs.clone())?;
+    let _ = app.emit("prefs:changed", &prefs);
+    Ok(())
 }
 
 #[tauri::command]
@@ -124,6 +133,11 @@ pub fn get_hotkey_capability(coord: CoordinatorState<'_>) -> HotkeyCapability {
 #[tauri::command]
 pub fn set_shortcut_recording_active(coord: CoordinatorState<'_>, active: bool) {
     coord.set_shortcut_recording_active(active);
+}
+
+#[tauri::command]
+pub fn get_windows_ime_status() -> WindowsImeStatus {
+    crate::windows_ime_profile::get_windows_ime_status()
 }
 
 #[tauri::command]
@@ -210,9 +224,17 @@ struct ProviderConfig {
 }
 
 fn read_openai_provider_config(kind: &str) -> Result<ProviderConfig, String> {
-    let (api_key_account, endpoint_account) = match kind {
-        "llm" => (CredentialAccount::ArkApiKey, CredentialAccount::ArkEndpoint),
-        "asr" => (CredentialAccount::AsrApiKey, CredentialAccount::AsrEndpoint),
+    let (api_key_account, endpoint_account, api_key_required) = match kind {
+        "llm" => (
+            CredentialAccount::ArkApiKey,
+            CredentialAccount::ArkEndpoint,
+            false,
+        ),
+        "asr" => (
+            CredentialAccount::AsrApiKey,
+            CredentialAccount::AsrEndpoint,
+            true,
+        ),
         _ => return Err(format!("unknown provider kind: {kind}")),
     };
     let api_key = CredentialsVault::get(api_key_account)
@@ -221,7 +243,7 @@ fn read_openai_provider_config(kind: &str) -> Result<ProviderConfig, String> {
     let base_url = CredentialsVault::get(endpoint_account)
         .map_err(|e| e.to_string())?
         .unwrap_or_default();
-    if api_key.trim().is_empty() {
+    if api_key_required && api_key.trim().is_empty() {
         return Err("API Key 为空".to_string());
     }
     if base_url.trim().is_empty() {
@@ -262,18 +284,17 @@ async fn fetch_provider_models(config: &ProviderConfig) -> Result<Vec<String>, S
         .timeout(Duration::from_secs(15))
         .build()
         .map_err(|e| format!("HTTP client 初始化失败: {e}"))?;
-    let response = client
-        .get(&url)
-        .header("Authorization", format!("Bearer {}", config.api_key))
-        .send()
-        .await
-        .map_err(|e| {
-            if e.is_timeout() {
-                "请求超时".to_string()
-            } else {
-                format!("网络错误: {e}")
-            }
-        })?;
+    let mut request = client.get(&url);
+    if !config.api_key.trim().is_empty() {
+        request = request.header("Authorization", format!("Bearer {}", config.api_key));
+    }
+    let response = request.send().await.map_err(|e| {
+        if e.is_timeout() {
+            "请求超时".to_string()
+        } else {
+            format!("网络错误: {e}")
+        }
+    })?;
     let status = response.status();
     let body = response
         .text()
@@ -706,11 +727,17 @@ fn _ensure_snapshot_used(_: CredentialsSnapshot) {}
 
 #[cfg(test)]
 mod tests {
-    use super::{models_url, parse_model_ids, persist_settings, SettingsWriter};
+    use super::{
+        fetch_provider_models, models_url, parse_model_ids, persist_settings, ProviderConfig,
+        SettingsWriter,
+    };
     use crate::types::{
         HotkeyBinding, HotkeyMode, HotkeyTrigger, ShortcutBinding, UserPreferences,
     };
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
     use std::sync::Mutex;
+    use std::thread;
 
     #[derive(Default)]
     struct FakeSettingsWriter {
@@ -795,5 +822,47 @@ mod tests {
         assert_eq!(*writer.dictation_refreshes.lock().unwrap(), 1);
         assert_eq!(*writer.qa_refreshes.lock().unwrap(), 1);
         assert_eq!(*writer.combo_refreshes.lock().unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn fetch_provider_models_omits_authorization_when_api_key_is_empty() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 8192];
+            let mut request = Vec::new();
+            loop {
+                let n = stream.read(&mut buf).unwrap();
+                if n == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buf[..n]);
+                if request.windows(4).any(|w| w == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let request_text = String::from_utf8_lossy(&request);
+            assert!(!request_text.contains("Authorization: Bearer"));
+
+            let body = r#"{"data":[{"id":"m1"},{"id":"m2"}]}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+        });
+
+        let models = fetch_provider_models(&ProviderConfig {
+            base_url: format!("http://{}", addr),
+            api_key: String::new(),
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(models, vec!["m1".to_string(), "m2".to_string()]);
+        server.join().unwrap();
     }
 }

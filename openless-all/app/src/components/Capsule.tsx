@@ -39,7 +39,7 @@ function AudioBars({ level }: AudioBarsProps) {
             borderRadius: 999,
             background: 'var(--ol-blue)',
             opacity: 0.82,
-            transition: 'height 0.06s linear',
+            transition: 'height 0.08s var(--ol-motion-quick)',
           }}
         />
       ))}
@@ -59,7 +59,7 @@ function ProcessingDots() {
             borderRadius: 999,
             background: 'var(--ol-blue)',
             opacity: 0.85,
-            animation: `cap-dot 0.9s linear ${i * 0.3}s infinite`,
+            animation: `cap-dot 0.9s var(--ol-motion-soft) ${i * 0.3}s infinite`,
           }}
         />
       ))}
@@ -130,7 +130,7 @@ function CircleButton({ variant, enabled, onClick }: CircleButtonProps) {
         flexShrink: 0,
         padding: 0,
         boxShadow: '0 1px 2px rgba(0, 0, 0, 0.06)',
-        transition: 'opacity 0.15s ease-out, background 0.12s ease-out, transform 0.08s ease-out',
+        transition: 'opacity 0.18s var(--ol-motion-soft), background 0.16s var(--ol-motion-quick), transform 0.12s var(--ol-motion-quick)',
       }}
     >
       {isCancel ? (
@@ -243,7 +243,7 @@ function Pill({ os, state, level, insertedChars, message, onCancel, onConfirm }:
         fontFamily: 'var(--ol-font-sans)',
         transform: `scale(${scale.toFixed(4)})`,
         transformOrigin: 'center',
-        transition: 'transform 0.06s linear, box-shadow 0.06s linear',
+        transition: 'transform 0.08s var(--ol-motion-quick), box-shadow 0.08s var(--ol-motion-quick)',
         willChange: 'transform, box-shadow',
         filter: dropShadow,
       }}
@@ -261,12 +261,13 @@ export function Capsule() {
   const { t } = useTranslation();
   const os = detectOS();
   const metrics = getCapsulePillMetrics(os);
-  const [translation, setTranslation] = useState<boolean>(false);
-  const hostMetrics = getCapsuleHostMetrics(os, translation);
   const [state, setState] = useState<CapsuleState>(isTauri ? 'idle' : 'recording');
   const [level, setLevel] = useState<number>(isTauri ? 0 : 0.6);
   const [insertedChars, setInsertedChars] = useState<number>(0);
   const [message, setMessage] = useState<string | undefined>();
+  const [translation, setTranslation] = useState<boolean>(false);
+  // Windows 端 host 在翻译模式从 84 长到 118；macOS / Linux 上 capsuleLayout 已固定 42 忽略此参数。
+  const hostMetrics = getCapsuleHostMetrics(os, translation);
 
   useEffect(() => {
     if (!isTauri) return;
@@ -329,9 +330,11 @@ export function Capsule() {
         style={{
           position: 'absolute',
           left: '50%',
-          // bottom = 50%（pill 中线）+ pill 半高 21px（capsuleLayout mac=42）+ 8px 间隔。
-          // 只有翻译徽章可见时才需要额外高度；普通录音/转写状态由后端缩到 pill 本体，避免透明死区。
-          bottom: `${hostMetrics.bottomInset + metrics.height + hostMetrics.badgeGap}px`,
+          // macOS / Linux：胶囊窗口 220×110、pill 居中，badge 锚到 pill 中线上方 21+8。
+          // Windows：pill 不居中（带 12pt 阴影 inset），用 hostMetrics 量到底部 inset + pill 高 + gap。
+          bottom: os === 'win'
+            ? `${hostMetrics.bottomInset + metrics.height + hostMetrics.badgeGap}px`
+            : 'calc(50% + 21px + 8px)',
           transform: 'translateX(-50%)',
           pointerEvents: 'none',
         }}

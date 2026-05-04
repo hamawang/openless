@@ -10,6 +10,10 @@
 </p>
 
 <p align="center">
+  <a href="https://openless.top"><strong>🌐 Official site — openless.top</strong></a>
+</p>
+
+<p align="center">
   <a href="README.md">English</a> · <a href="README.zh.md">中文</a>
 </p>
 
@@ -27,9 +31,45 @@
   <strong>Join our QQ Group: 1078960553</strong>
 </p>
 
+<p align="center">
+  <strong>Sponsors</strong>
+</p>
+
+<p align="center">
+  <a href="https://www.knin.net" target="_blank" rel="noopener">
+    <img alt="悠雾云数据 (Youwu Cloud Data)" src="https://www.knin.net/upload/logo.png" height="48" />
+  </a>
+  &nbsp;&nbsp;
+  <a href="https://jiangmuran.com/" target="_blank" rel="noopener">
+    <img alt="jiangmuran" src="assets/people/jiangmuran.png" width="48" height="48" />
+  </a>
+  <br/>
+  <a href="https://www.knin.net" target="_blank" rel="noopener">悠雾云数据 — www.knin.net</a>
+  &nbsp;·&nbsp;
+  <a href="https://jiangmuran.com/" target="_blank" rel="noopener">jiangmuran — jiangmuran.com</a>
+</p>
+
+<p align="center">
+  <strong>Developers</strong>
+</p>
+
+<p align="center">
+  <a href="https://tripmc.top/" target="_blank" rel="noopener">
+    <img alt="TRIP" src="assets/people/tripmc.png" width="80" height="80" />
+  </a>
+  &nbsp;&nbsp;
+  <a href="https://chris233.qzz.io" target="_blank" rel="noopener">
+    <img alt="Chris233" src="assets/people/Chris233.png" width="80" height="80" />
+  </a>
+  <br/>
+  <a href="https://tripmc.top/" target="_blank" rel="noopener">TRIP — tripmc.top</a>
+  &nbsp;·&nbsp;
+  <a href="https://chris233.qzz.io" target="_blank" rel="noopener">Chris233 — chris233.qzz.io</a>
+</p>
+
 ---
 
-OpenLess is a cross-platform (macOS & Windows) voice-input app — a **fully open-source** alternative to commercial tools like [Typeless](https://www.typeless.com/), [Wispr Flow](https://wisprflow.ai), [Lazy](https://heylazy.com), and Superwhisper.
+OpenLess is a cross-platform (macOS & Windows) voice-input app — a **fully open-source** alternative to commercial tools like [Typeless](https://www.typeless.com/), [Wispr Flow](https://wisprflow.ai), [Lazy](https://heylazy.com), and Superwhisper. Official site: [openless.top](https://openless.top).
 
 Put your cursor in any text field — ChatGPT, Claude, Cursor, Notion, an email draft, a chat box — press one global hotkey and talk. OpenLess records, transcribes, polishes the text in the mode you picked, and inserts the result at the cursor. If insertion is blocked it copies to the clipboard, so the words you spoke don't get lost.
 

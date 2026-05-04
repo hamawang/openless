@@ -146,10 +146,6 @@ impl OpenAICompatibleLLMProvider {
         system_prompt: &str,
         user_prompt: &str,
     ) -> Result<String, LLMError> {
-        if self.config.api_key.trim().is_empty() {
-            return Err(LLMError::MissingCredentials);
-        }
-
         let url = chat_completions_url(&self.config.base_url);
         let body = json!({
             "model": self.config.model,
@@ -171,8 +167,10 @@ impl OpenAICompatibleLLMProvider {
         let mut request = self
             .client
             .post(&url)
-            .header("Content-Type", "application/json")
-            .header("Authorization", format!("Bearer {}", self.config.api_key));
+            .header("Content-Type", "application/json");
+        if !self.config.api_key.trim().is_empty() {
+            request = request.header("Authorization", format!("Bearer {}", self.config.api_key));
+        }
         for (k, v) in &self.config.extra_headers {
             request = request.header(k.as_str(), v.as_str());
         }
@@ -222,10 +220,6 @@ impl OpenAICompatibleLLMProvider {
         F: Fn(&str) + Send + Sync,
         C: Fn() -> bool + Send + Sync,
     {
-        if self.config.api_key.trim().is_empty() {
-            return Err(LLMError::MissingCredentials);
-        }
-
         let mut msgs: Vec<Value> = Vec::with_capacity(history.len() + 1);
         msgs.push(json!({ "role": "system", "content": system_prompt }));
         for m in history {
@@ -252,8 +246,10 @@ impl OpenAICompatibleLLMProvider {
             .client
             .post(&url)
             .header("Content-Type", "application/json")
-            .header("Accept", "text/event-stream")
-            .header("Authorization", format!("Bearer {}", self.config.api_key));
+            .header("Accept", "text/event-stream");
+        if !self.config.api_key.trim().is_empty() {
+            request = request.header("Authorization", format!("Bearer {}", self.config.api_key));
+        }
         for (k, v) in &self.config.extra_headers {
             request = request.header(k.as_str(), v.as_str());
         }
@@ -649,8 +645,12 @@ pub mod prompts {
     const COMMON_RULES: &str = "# 通用规则\n\
         1) \u{4E0D}确定 / 转写明显不完整 / 断句在半截 \u{2192} 保留原话，\u{4E0D}要替用户补全或猜测。\n\
         2) 中英混输、专有名词、产品名、代码 / 命令 / 路径 / URL、数字与单位、emoji \u{2192} 原样保留。\n\
-        3) \u{4E0D}引入用户没说过的事实；中途改口以最终版本为准。\n\
-        4) 如果原始转写本身是在\u{201C}询问 / 要求别人做某事\u{201D}，只整理为清楚的问题或请求，\u{4E0D}代替对方回答。";
+        3) \u{4E0D}引入用户没说过的事实；中途改口以最终版本为准。在保留原意和语气的前提下，按用户的整体意图把零碎口语组织成协调、自然的书面表达。\n\
+        4) 如果原始转写本身是在\u{201C}询问 / 要求别人做某事\u{201D}，只整理为清楚的问题或请求，\u{4E0D}代替对方回答。\n\
+        5) 自动纠错：明显的 ASR 同音 / 形近错字按上下文纠回正确字面，常见模式包括\
+        \u{201C}跟目录 / 根木鹿\u{201D}\u{2192}\u{201C}根目录\u{201D}、\u{201C}代码厂\u{201D}\u{2192}\u{201C}代码仓\u{201D}、\
+        \u{201C}编一编\u{201D}\u{2192}\u{201C}编译\u{201D}、\u{201C}的 / 得 / 地\u{201D}用法、\u{201C}做 / 作\u{201D} 等常见错别字。\
+        专有名词（见 # 热词）、人名、品牌名、不在常见中文词典里的词原样保留，\u{4E0D}强行改字；改了之后含义会发生变化的不改。";
 
     const OUTPUT_BLOCK: &str = "# 输出\n\
         直接输出最终文本正文。需要结构化时直接从标题 / 段落 / 编号开始。\n\
@@ -836,6 +836,9 @@ pub mod prompts {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread;
 
     #[test]
     fn clean_polish_output_strips_think_tag_block() {
@@ -911,5 +914,79 @@ mod tests {
         assert!(prompt.contains("同音 / 近形误识别时，优先按上述写法输出"));
         assert!(prompt.contains("- GitHub"));
         assert!(prompt.contains("- OpenLess"));
+    }
+
+    #[test]
+    fn common_rules_include_auto_correction_and_natural_organization() {
+        // 所有 mode 都要带上"自动纠错"（规则 5）和"按整体意图组织成自然书面表达"
+        // 的扩展（规则 3）。任一缺失说明 COMMON_RULES 被回退掉了。
+        for mode in [
+            PolishMode::Raw,
+            PolishMode::Light,
+            PolishMode::Structured,
+            PolishMode::Formal,
+        ] {
+            let prompt = prompts::system_prompt(mode);
+            assert!(
+                prompt.contains("5) 自动纠错"),
+                "{mode:?} prompt 缺少自动纠错规则"
+            );
+            assert!(
+                prompt.contains("根目录"),
+                "{mode:?} prompt 缺少根目录纠错示例"
+            );
+            assert!(
+                prompt.contains("按用户的整体意图把零碎口语组织成协调、自然的书面表达"),
+                "{mode:?} prompt 缺少自然组织扩展"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn chat_completion_omits_authorization_when_api_key_is_empty() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 8192];
+            let mut request = Vec::new();
+            loop {
+                let n = stream.read(&mut buf).unwrap();
+                if n == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buf[..n]);
+                if request.windows(4).any(|w| w == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let request_text = String::from_utf8_lossy(&request);
+            assert!(!request_text.contains("Authorization: Bearer"));
+
+            let body = r#"{"choices":[{"message":{"content":"最终文本。"}}]}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+        });
+
+        let provider = OpenAICompatibleLLMProvider::new(OpenAICompatibleConfig::new(
+            "ark",
+            "Doubao Ark",
+            format!("http://{}", addr),
+            "",
+            "deepseek-v3-2",
+        ));
+
+        let output = provider
+            .polish("原文", PolishMode::Raw, &[], &[], None)
+            .await
+            .unwrap();
+        assert_eq!(output, "最终文本。");
+
+        server.join().unwrap();
     }
 }

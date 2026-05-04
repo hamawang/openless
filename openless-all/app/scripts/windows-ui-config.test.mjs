@@ -22,6 +22,7 @@ const capsuleTsx = await readFile(new URL('../src/components/Capsule.tsx', impor
 const capsuleLayoutTs = await readFile(new URL('../src/lib/capsuleLayout.ts', import.meta.url), 'utf-8');
 const windowChromeTsx = await readFile(new URL('../src/components/WindowChrome.tsx', import.meta.url), 'utf-8');
 const floatingShellTsx = await readFile(new URL('../src/components/FloatingShell.tsx', import.meta.url), 'utf-8');
+const tokensCss = await readFile(new URL('../src/styles/tokens.css', import.meta.url), 'utf-8');
 
 if (!capsuleWindow) {
   throw new Error('capsule window config missing');
@@ -33,12 +34,46 @@ assertEqual(capsuleWindow.width, 220, 'windows capsule config keeps translation-
 assertEqual(capsuleWindow.height, 110, 'windows capsule config keeps translation-capable height baseline');
 assertEqual(capsuleWindow.transparent, true, 'capsule window should keep transparent visuals');
 assertEqual(capsuleWindow.alwaysOnTop, true, 'capsule window should stay above the focused app while recording');
-assertEqual(mainWindow.decorations, false, 'windows main window should use only custom titlebar');
+assertEqual(mainWindow.decorations, true, 'shared main window config should keep native macOS traffic lights');
 assertEqual(mainWindow.visible, false, 'windows main window should stay hidden until the intended first show point');
+
+assertMatch(
+  libRs,
+  /#\[cfg\(target_os = "windows"\)\][\s\S]*?main\.set_decorations\(false\)/,
+  'windows runtime should disable native chrome before the first show',
+);
+
+assertMatch(
+  coordinatorRs,
+  /#\[cfg\(target_os = "macos"\)\][\s\S]*?orderFrontRegardless/,
+  'macOS capsule should show without taking the key window',
+);
 
 if (!/function WindowsResizeHandles\(\)/.test(windowChromeTsx)) {
   throw new Error('windows frameless shell should expose explicit resize handles');
 }
+
+assertMatch(
+  windowChromeTsx,
+  /const MAC_TITLEBAR_HEIGHT = 30;/,
+  'macOS titlebar spacer should stay visually compact around the native traffic lights',
+);
+assertMatch(
+  libRs,
+  /show_main_window[\s\S]*?set_focus\(\)/,
+  'macOS main window should rely on native traffic lights instead of manually moving standardWindowButton frames',
+);
+if (/standardWindowButton|setFrameOrigin: origin|tune_macos_main_window_controls/.test(libRs)) {
+  throw new Error('macOS traffic lights should not be manually repositioned; keep native AppKit button frames visible');
+}
+if (!/action=\"close\"/.test(windowChromeTsx) || !/tone=\"danger\"/.test(windowChromeTsx)) {
+  throw new Error('windows titlebar should keep the close button and danger hover treatment');
+}
+assertMatch(
+  tokensCss,
+  /--ol-motion-spring:[\s\S]*?--ol-motion-soft:[\s\S]*?--ol-motion-quick:/,
+  'shared motion tokens should drive shell animations and transitions',
+);
 
 if (!/startResizeDragging\(direction\)/.test(windowChromeTsx)) {
   throw new Error('windows resize handles should delegate edge dragging to Tauri');

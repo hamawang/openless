@@ -67,12 +67,12 @@ export function SettingsModal({ os: _os, onClose, initialSettingsSection }: Sett
       style={{
         position: 'absolute', inset: 0,
         background: 'rgba(15,17,22,0.32)',
-        backdropFilter: 'blur(2px)',
-        WebkitBackdropFilter: 'blur(2px)',
+        backdropFilter: 'blur(8px) saturate(140%)',
+        WebkitBackdropFilter: 'blur(8px) saturate(140%)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         padding: 28,
         zIndex: 50,
-        animation: 'ol-modal-fade .18s ease-out',
+        animation: 'ol-modal-fade .2s var(--ol-motion-soft)',
       }}>
 
       <div
@@ -84,7 +84,7 @@ export function SettingsModal({ os: _os, onClose, initialSettingsSection }: Sett
           border: '0.5px solid rgba(0,0,0,.08)',
           boxShadow: '0 30px 80px -20px rgba(15,17,22,.35), 0 0 0 0.5px rgba(0,0,0,.06)',
           display: 'flex', overflow: 'hidden',
-          animation: 'ol-modal-pop .22s cubic-bezier(.2,.9,.3,1.1)',
+          animation: 'ol-modal-pop .28s var(--ol-motion-spring)',
           position: 'relative',
         }}>
 
@@ -121,7 +121,7 @@ export function SettingsModal({ os: _os, onClose, initialSettingsSection }: Sett
                       fontFamily: 'inherit', fontSize: 13, fontWeight: active ? 600 : 500,
                       boxShadow: active ? '0 1px 2px rgba(0,0,0,.05), 0 0 0 0.5px rgba(0,0,0,.06)' : 'none',
                       cursor: 'default', textAlign: 'left',
-                      transition: 'background 0.12s ease-out, color 0.12s ease-out',
+                      transition: 'background 0.16s var(--ol-motion-quick), color 0.16s var(--ol-motion-quick)',
                     }}>
 
                     <Icon name={it.icon} size={14} />
@@ -146,7 +146,7 @@ export function SettingsModal({ os: _os, onClose, initialSettingsSection }: Sett
               background: 'transparent', color: 'var(--ol-ink-3)',
               display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
               cursor: 'default',
-              transition: 'background 0.12s ease-out',
+              transition: 'background 0.16s var(--ol-motion-quick)',
             }}
             onMouseEnter={e => (e.currentTarget.style.background = 'rgba(0,0,0,0.05)')}
             onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
@@ -173,10 +173,13 @@ export function SettingsModal({ os: _os, onClose, initialSettingsSection }: Sett
       </div>
 
       <style>{`
-        @keyframes ol-modal-fade { from { opacity: 0 } to { opacity: 1 } }
+        @keyframes ol-modal-fade {
+          from { opacity: 0; backdrop-filter: blur(0); -webkit-backdrop-filter: blur(0); }
+          to   { opacity: 1; backdrop-filter: blur(8px) saturate(140%); -webkit-backdrop-filter: blur(8px) saturate(140%); }
+        }
         @keyframes ol-modal-pop {
-          from { opacity: 0; transform: translateY(6px) scale(.98); }
-          to   { opacity: 1; transform: translateY(0) scale(1); }
+          from { opacity: 0; transform: translateY(8px) scale(.98); filter: blur(8px); }
+          to   { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
         }
       `}</style>
     </div>
@@ -234,7 +237,7 @@ function PersonalizeSection() {
                   fontWeight: selected ? 600 : 500,
                   cursor: 'default',
                   boxShadow: selected ? '0 1px 2px rgba(0,0,0,.06), 0 0 0 0.5px rgba(0,0,0,.06)' : 'none',
-                  transition: 'background 0.12s ease-out, color 0.12s ease-out, box-shadow 0.12s ease-out',
+                  transition: 'background 0.16s var(--ol-motion-quick), color 0.16s var(--ol-motion-quick), box-shadow 0.18s var(--ol-motion-soft)',
                   padding: '0 12px',
                 }}
               >
@@ -302,7 +305,7 @@ const btnGhost: CSSProperties = {
   border: '0.5px solid var(--ol-line-strong)',
   background: '#fff', color: 'var(--ol-ink-2)',
   cursor: 'default', fontFamily: 'inherit',
-  transition: 'background 0.12s ease-out, border-color 0.12s ease-out',
+  transition: 'background 0.16s var(--ol-motion-quick), border-color 0.16s var(--ol-motion-quick)',
 };
 
 // 真正可用的语言切换器 —— 用原生 <select>，与 Settings → Language 分区共享同一份 localStorage 偏好。

@@ -107,7 +107,7 @@ export function Vocab() {
                 borderRadius: 8, fontSize: 13,
                 fontFamily: 'inherit', outline: 'none',
                 background: 'var(--ol-surface-2)',
-                transition: 'border-color 0.12s ease-out, box-shadow 0.12s ease-out, background 0.12s ease-out',
+                transition: 'border-color 0.16s var(--ol-motion-quick), box-shadow 0.18s var(--ol-motion-soft), background 0.16s var(--ol-motion-quick)',
               }}
             />
             <Btn variant="primary" icon="plus" onClick={onAdd}>{t('common.add')}</Btn>
@@ -135,8 +135,8 @@ export function Vocab() {
       </Card>
       <style>{`
         @keyframes ol-chip-in {
-          from { opacity: 0; transform: scale(.92); }
-          to   { opacity: 1; transform: scale(1); }
+          from { opacity: 0; transform: scale(.92); filter: blur(5px); }
+          to   { opacity: 1; transform: scale(1); filter: blur(0); }
         }
       `}</style>
     </>
@@ -163,8 +163,8 @@ function VocabChip({ entry, onRemove, onToggle }: VocabChipProps) {
         opacity: enabled ? 1 : 0.55,
         fontSize: 12, color: 'var(--ol-ink)',
         fontFamily: 'var(--ol-font-mono)',
-        transition: 'background 0.15s ease-out, opacity 0.15s ease-out, border-color 0.15s ease-out',
-        animation: 'ol-chip-in 0.18s ease-out',
+        transition: 'background 0.16s var(--ol-motion-quick), opacity 0.18s var(--ol-motion-soft), border-color 0.16s var(--ol-motion-quick)',
+        animation: 'ol-chip-in 0.22s var(--ol-motion-spring)',
       }}
     >
       <button

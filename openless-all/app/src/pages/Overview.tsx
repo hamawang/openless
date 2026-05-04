@@ -230,7 +230,7 @@ function WeekChart({ data }: { data: number[] }) {
                 borderRadius: 4,
                 background: isToday ? 'var(--ol-blue)' : 'var(--ol-ink)',
                 opacity: v === 0 ? 0.15 : isToday ? 1 : 0.85,
-                transition: 'height 0.18s ease-out, opacity 0.18s ease-out',
+                transition: 'height 0.18s var(--ol-motion-soft), opacity 0.18s var(--ol-motion-soft)',
               }}
             />
           </div>

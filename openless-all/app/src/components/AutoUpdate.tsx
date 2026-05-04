@@ -173,7 +173,7 @@ export function UpdateDialog({
         {(downloading || installing || status === 'downloaded') && (
           <div style={{ marginBottom: 14 }}>
             <div style={{ height: 8, borderRadius: 999, background: 'var(--ol-surface-2)', overflow: 'hidden', border: '0.5px solid var(--ol-line)' }}>
-              <div style={{ height: '100%', width: `${status === 'downloaded' || installing ? 100 : progress ?? 8}%`, background: 'var(--ol-blue)', transition: 'width 0.18s ease-out' }} />
+              <div style={{ height: '100%', width: `${status === 'downloaded' || installing ? 100 : progress ?? 8}%`, background: 'var(--ol-blue)', transition: 'width 0.18s var(--ol-motion-soft)' }} />
             </div>
             <div style={{ marginTop: 6, fontSize: 11, color: 'var(--ol-ink-4)' }}>
               {installing

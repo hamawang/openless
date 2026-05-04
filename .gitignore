@@ -23,6 +23,14 @@ apps/
 promo/
 promo-openless/
 docs/old-promo/
+.worktrees/
+
+# Windows TSF IME local build outputs
+openless-all/app/windows-ime/OpenLessIme/
+openless-all/app/windows-ime/x64/
+openless-all/app/windows-ime/Win32/
+openless-all/app/windows-ime/Release/
+openless-all/app/windows-ime/obj/
 
 # Planning docs are kept local only, not published to the public repo.
 docs/plans/

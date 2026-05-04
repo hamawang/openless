@@ -34,3 +34,16 @@ input, textarea {
 }
 
 a { color: inherit; text-decoration: none; }
+
+@keyframes ol-window-enter {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 8px, 0) scale(0.992);
+    filter: blur(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+    filter: blur(0);
+  }
+}

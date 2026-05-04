@@ -113,7 +113,7 @@ export function SelectionAsk() {
               border: 0,
               background: prefs.qaSaveHistory ? 'var(--ol-blue)' : 'rgba(0,0,0,0.18)',
               cursor: 'default',
-              transition: 'background 0.15s ease-out',
+              transition: 'background 0.16s var(--ol-motion-quick)',
               padding: 0,
             }}
           >
@@ -127,7 +127,7 @@ export function SelectionAsk() {
                 borderRadius: 999,
                 background: '#fff',
                 boxShadow: '0 1px 2px rgba(0,0,0,.18)',
-                transition: 'left .15s',
+                transition: 'left .16s var(--ol-motion-spring)',
               }}
             />
           </button>

@@ -10,6 +10,10 @@
 </p>
 
 <p align="center">
+  <a href="https://openless.top"><strong>🌐 官方网站 — openless.top</strong></a>
+</p>
+
+<p align="center">
   <a href="README.md">English</a> · <a href="README.zh.md">中文</a>
 </p>
 
@@ -27,9 +31,45 @@
   <strong>加入 QQ 群：1078960553</strong>
 </p>
 
+<p align="center">
+  <strong>赞助商</strong>
+</p>
+
+<p align="center">
+  <a href="https://www.knin.net" target="_blank" rel="noopener">
+    <img alt="悠雾云数据" src="https://www.knin.net/upload/logo.png" height="48" />
+  </a>
+  &nbsp;&nbsp;
+  <a href="https://jiangmuran.com/" target="_blank" rel="noopener">
+    <img alt="jiangmuran" src="assets/people/jiangmuran.png" width="48" height="48" />
+  </a>
+  <br/>
+  <a href="https://www.knin.net" target="_blank" rel="noopener">悠雾云数据 — www.knin.net</a>
+  &nbsp;·&nbsp;
+  <a href="https://jiangmuran.com/" target="_blank" rel="noopener">jiangmuran — jiangmuran.com</a>
+</p>
+
+<p align="center">
+  <strong>开发者</strong>
+</p>
+
+<p align="center">
+  <a href="https://tripmc.top/" target="_blank" rel="noopener">
+    <img alt="TRIP" src="assets/people/tripmc.png" width="80" height="80" />
+  </a>
+  &nbsp;&nbsp;
+  <a href="https://chris233.qzz.io" target="_blank" rel="noopener">
+    <img alt="Chris233" src="assets/people/Chris233.png" width="80" height="80" />
+  </a>
+  <br/>
+  <a href="https://tripmc.top/" target="_blank" rel="noopener">TRIP — tripmc.top</a>
+  &nbsp;·&nbsp;
+  <a href="https://chris233.qzz.io" target="_blank" rel="noopener">Chris233 — chris233.qzz.io</a>
+</p>
+
 ---
 
-OpenLess 是一个跨平台（macOS & Windows）语音输入应用，对标 [Typeless](https://www.typeless.com/)、[Wispr Flow](https://wisprflow.ai)、[Lazy](https://heylazy.com)、Superwhisper 等商业语音输入工具的 **完全开源** 替代品。
+OpenLess 是一个跨平台（macOS & Windows）语音输入应用，对标 [Typeless](https://www.typeless.com/)、[Wispr Flow](https://wisprflow.ai)、[Lazy](https://heylazy.com)、Superwhisper 等商业语音输入工具的 **完全开源** 替代品。官方网站：[openless.top](https://openless.top)。
 
 把光标放在 ChatGPT、Claude、Cursor、Notion、邮件、聊天框任意输入框里，按一次全局快捷键说话——OpenLess 会录音、转写、按你选的模式润色，把结果直接插入光标位置。插入失败时会自动复制到剪贴板，尽量保证「你说过的话不丢」。
 
