@@ -35,6 +35,12 @@ export interface VocabPreset {
   phrases: string[];
 }
 
+export interface VocabPresetStore {
+  custom: VocabPreset[];
+  overrides: VocabPreset[];
+  disabledBuiltinPresetIds: string[];
+}
+
 export type HotkeyTrigger =
   | 'rightOption'
   | 'leftOption'

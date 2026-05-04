@@ -22,7 +22,7 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::types::{DictationSession, DictionaryEntry, UserPreferences, VocabPreset};
+use crate::types::{DictationSession, DictionaryEntry, UserPreferences, VocabPresetStore};
 
 const HISTORY_CAP: usize = 200;
 const HISTORY_FILE: &str = "history.json";
@@ -594,17 +594,17 @@ fn count_occurrences(haystack: &str, needle: &str) -> u64 {
     count
 }
 
-pub fn list_vocab_presets() -> Result<Vec<VocabPreset>> {
+pub fn list_vocab_presets() -> Result<VocabPresetStore> {
     let dir = data_dir()?;
     ensure_dir(&dir)?;
-    read_or_default::<Vec<VocabPreset>>(&dir.join(VOCAB_PRESETS_FILE))
+    read_or_default::<VocabPresetStore>(&dir.join(VOCAB_PRESETS_FILE))
 }
 
-pub fn save_vocab_presets(presets: &[VocabPreset]) -> Result<()> {
+pub fn save_vocab_presets(store: &VocabPresetStore) -> Result<()> {
     let dir = data_dir()?;
     ensure_dir(&dir)?;
     let path = dir.join(VOCAB_PRESETS_FILE);
-    let json = serde_json::to_vec_pretty(presets).context("encode vocab presets failed")?;
+    let json = serde_json::to_vec_pretty(store).context("encode vocab presets failed")?;
     atomic_write(&path, &json)
 }
 
@@ -738,7 +738,7 @@ impl CredentialsVault {
 #[cfg(test)]
 mod tests {
     use super::{list_vocab_presets, save_vocab_presets};
-    use crate::types::VocabPreset;
+    use crate::types::{VocabPreset, VocabPresetStore};
     use std::fs;
     use std::path::PathBuf;
 
@@ -750,16 +750,21 @@ mod tests {
         unsafe {
             std::env::set_var("XDG_DATA_HOME", &tmp);
         }
-        let presets = vec![VocabPreset {
-            id: "test".into(),
-            name: "测试".into(),
-            phrases: vec!["PR".into(), "CI".into()],
-        }];
-        save_vocab_presets(&presets).expect("save presets");
+        let store = VocabPresetStore {
+            custom: vec![VocabPreset {
+                id: "test".into(),
+                name: "测试".into(),
+                phrases: vec!["PR".into(), "CI".into()],
+            }],
+            overrides: vec![],
+            disabled_builtin_preset_ids: vec!["chef".into()],
+        };
+        save_vocab_presets(&store).expect("save presets");
         let loaded = list_vocab_presets().expect("list presets");
-        assert_eq!(loaded.len(), 1);
-        assert_eq!(loaded[0].id, "test");
-        assert_eq!(loaded[0].phrases, vec!["PR".to_string(), "CI".to_string()]);
+        assert_eq!(loaded.custom.len(), 1);
+        assert_eq!(loaded.custom[0].id, "test");
+        assert_eq!(loaded.custom[0].phrases, vec!["PR".to_string(), "CI".to_string()]);
+        assert_eq!(loaded.disabled_builtin_preset_ids, vec!["chef".to_string()]);
         let _ = fs::remove_dir_all(&tmp);
     }
 }

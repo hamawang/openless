@@ -13,7 +13,7 @@ use crate::persistence::{CredentialAccount, CredentialsSnapshot, CredentialsVaul
 use crate::polish::{LLMError, OpenAICompatibleConfig, OpenAICompatibleLLMProvider};
 use crate::types::{
     CredentialsStatus, DictationSession, DictionaryEntry, HotkeyCapability, HotkeyStatus,
-    PolishMode, QaHotkeyBinding, UserPreferences, VocabPreset, WindowsImeStatus,
+    PolishMode, QaHotkeyBinding, UserPreferences, VocabPresetStore, WindowsImeStatus,
 };
 
 type CoordinatorState<'a> = State<'a, Arc<Coordinator>>;
@@ -357,13 +357,13 @@ pub fn set_vocab_enabled(
 }
 
 #[tauri::command]
-pub fn list_vocab_presets() -> Result<Vec<VocabPreset>, String> {
+pub fn list_vocab_presets() -> Result<VocabPresetStore, String> {
     crate::persistence::list_vocab_presets().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn save_vocab_presets(presets: Vec<VocabPreset>) -> Result<(), String> {
-    crate::persistence::save_vocab_presets(&presets).map_err(|e| e.to_string())
+pub fn save_vocab_presets(store: VocabPresetStore) -> Result<(), String> {
+    crate::persistence::save_vocab_presets(&store).map_err(|e| e.to_string())
 }
 
 // ─────────────────────────── dictation lifecycle ───────────────────────────
