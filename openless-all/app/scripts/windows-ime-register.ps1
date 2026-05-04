@@ -34,8 +34,16 @@ function Test-IsAdministrator {
 }
 
 $appRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$registrationRoot = Join-Path $appRoot "src-tauri\target\windows-ime-register"
 $stagingStamp = "{0:yyyyMMddHHmmss}-{1}" -f (Get-Date), $PID
-$stagingRoot = Join-Path $appRoot "src-tauri\target\windows-ime-register\$stagingStamp"
+$stagingRoot = Join-Path $registrationRoot $stagingStamp
+$registrationManifest = Join-Path $registrationRoot "active-registration.json"
+$registeredDlls = [ordered]@{}
+
+function Save-RegistrationManifest {
+  New-Item -ItemType Directory -Path $registrationRoot -Force | Out-Null
+  $registeredDlls | ConvertTo-Json | Set-Content -Path $registrationManifest -Encoding UTF8
+}
 
 function Get-DllPath {
   param(
@@ -74,5 +82,7 @@ foreach ($platform in @("x64", "Win32")) {
   if ($process.ExitCode -ne 0) {
     throw "$platform regsvr32 failed with exit code $($process.ExitCode)"
   }
+  $registeredDlls[$platform] = $dll
+  Save-RegistrationManifest
   Write-Host "[ok] OpenLess TSF IME registered ($platform)"
 }

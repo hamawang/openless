@@ -9,6 +9,7 @@ const scriptPath = join(scriptsDir, "windows-package-msvc.ps1");
 const launcherPath = join(scriptsDir, "windows-package-msvc.cmd");
 const imeBuildPath = join(scriptsDir, "windows-ime-build.ps1");
 const imeRegisterPath = join(scriptsDir, "windows-ime-register.ps1");
+const imeUnregisterPath = join(scriptsDir, "windows-ime-unregister.ps1");
 const imeSolutionPath = join(appRoot, "windows-ime", "OpenLessIme.sln");
 const imeProjectPath = join(appRoot, "windows-ime", "OpenLessIme.vcxproj");
 const imeEditSessionPath = join(appRoot, "windows-ime", "src", "edit_session.cpp");
@@ -20,6 +21,7 @@ const script = readFileSync(scriptPath, "utf8");
 const launcher = readFileSync(launcherPath, "utf8");
 const imeBuild = readFileSync(imeBuildPath, "utf8");
 const imeRegister = readFileSync(imeRegisterPath, "utf8");
+const imeUnregister = readFileSync(imeUnregisterPath, "utf8");
 const imeSolution = readFileSync(imeSolutionPath, "utf8");
 const imeProject = readFileSync(imeProjectPath, "utf8");
 const imeEditSession = readFileSync(imeEditSessionPath, "utf8");
@@ -71,6 +73,11 @@ assert.match(imeRegister, /Get-Date/, "IME register should create a fresh stagin
 assert.match(imeRegister, /\$PID/, "IME register should include the process id in the staging output to avoid path reuse");
 assert.match(imeRegister, /-OutputDirectory/, "IME register should pass a staging output directory to the build script");
 assert.match(imeRegister, /-IntermediateDirectory/, "IME register should pass a staging intermediate directory to the build script");
+assert.match(imeRegister, /active-registration\.json/, "IME register should persist the staged DLL paths it registered");
+assert.match(imeUnregister, /active-registration\.json/, "IME unregister should read the registered staged DLL manifest");
+assert.match(imeUnregister, /windows-ime-register/, "IME unregister should target the same staging root used by register");
+assert.match(imeUnregister, /ConvertFrom-Json/, "IME unregister should parse persisted registered DLL paths");
+assert.doesNotMatch(imeUnregister, /windows-ime\\\$folder\\\$Configuration\\OpenLessIme\.dll/, "IME unregister must not only derive legacy build-output DLL paths");
 
 assert.deepEqual(tauriConfig.bundle.windows.wix.fragmentPaths, ["wix/openless-ime.wxs"]);
 assert.deepEqual(tauriConfig.bundle.windows.wix.componentRefs, [

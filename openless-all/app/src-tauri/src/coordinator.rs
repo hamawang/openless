@@ -120,7 +120,7 @@ struct Inner {
     #[cfg(target_os = "windows")]
     windows_ime: WindowsImeSessionController,
     #[cfg(target_os = "windows")]
-    prepared_windows_ime_session: Arc<Mutex<Option<PreparedWindowsImeSessionSlot>>>,
+    prepared_windows_ime_session: Arc<Mutex<Vec<PreparedWindowsImeSessionSlot>>>,
     state: Mutex<SessionState>,
     asr: Mutex<Option<SessionResource<ActiveAsr>>>,
     recorder: Mutex<Option<SessionResource<Recorder>>>,
@@ -215,7 +215,7 @@ impl Coordinator {
                 #[cfg(target_os = "windows")]
                 windows_ime: WindowsImeSessionController::new(),
                 #[cfg(target_os = "windows")]
-                prepared_windows_ime_session: Arc::new(Mutex::new(None)),
+                prepared_windows_ime_session: Arc::new(Mutex::new(Vec::new())),
                 state: Mutex::new(SessionState::default()),
                 asr: Mutex::new(None),
                 recorder: Mutex::new(None),
@@ -957,10 +957,8 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         let prepared = inner.windows_ime.prepare_session();
-        *inner.prepared_windows_ime_session.lock() = Some(PreparedWindowsImeSessionSlot {
-            session_id: current_session_id,
-            prepared,
-        });
+        let mut slots = inner.prepared_windows_ime_session.lock();
+        store_prepared_windows_ime_session(&mut slots, current_session_id, prepared);
     }
     // 翻译模式标志重置；hotkey 监听器在 Shift down 时再 set true。
     inner
@@ -1653,18 +1651,27 @@ fn cancel_session(inner: &Arc<Inner>) {
 }
 
 #[cfg(target_os = "windows")]
+fn store_prepared_windows_ime_session(
+    slots: &mut Vec<PreparedWindowsImeSessionSlot>,
+    session_id: u64,
+    prepared: PreparedWindowsImeSession,
+) {
+    slots.retain(|slot| slot.session_id != session_id);
+    slots.push(PreparedWindowsImeSessionSlot {
+        session_id,
+        prepared,
+    });
+}
+
+#[cfg(target_os = "windows")]
 fn take_matching_prepared_windows_ime_session(
-    slot: &mut Option<PreparedWindowsImeSessionSlot>,
+    slots: &mut Vec<PreparedWindowsImeSessionSlot>,
     session_id: u64,
 ) -> Option<PreparedWindowsImeSession> {
-    if slot
-        .as_ref()
-        .map(|slot| slot.session_id == session_id)
-        .unwrap_or(false)
-    {
-        return slot.take().map(|slot| slot.prepared);
-    }
-    None
+    let index = slots
+        .iter()
+        .position(|slot| slot.session_id == session_id)?;
+    Some(slots.remove(index).prepared)
 }
 
 #[cfg(target_os = "windows")]
@@ -2622,16 +2629,38 @@ mod tests {
     #[test]
     #[cfg(target_os = "windows")]
     fn prepared_windows_ime_slot_is_taken_only_for_matching_session() {
-        let mut slot = Some(PreparedWindowsImeSessionSlot {
+        let mut slots = vec![PreparedWindowsImeSessionSlot {
             session_id: 2,
             prepared: PreparedWindowsImeSession::unavailable(),
-        });
+        }];
 
-        assert!(take_matching_prepared_windows_ime_session(&mut slot, 1).is_none());
-        assert_eq!(slot.as_ref().map(|slot| slot.session_id), Some(2));
+        assert!(take_matching_prepared_windows_ime_session(&mut slots, 1).is_none());
+        assert_eq!(
+            slots.iter().map(|slot| slot.session_id).collect::<Vec<_>>(),
+            vec![2]
+        );
 
-        assert!(take_matching_prepared_windows_ime_session(&mut slot, 2).is_some());
-        assert!(slot.is_none());
+        assert!(take_matching_prepared_windows_ime_session(&mut slots, 2).is_some());
+        assert!(slots.is_empty());
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn prepared_windows_ime_sessions_keep_overlapping_snapshots() {
+        let mut slots = Vec::new();
+        store_prepared_windows_ime_session(&mut slots, 1, PreparedWindowsImeSession::unavailable());
+        store_prepared_windows_ime_session(&mut slots, 2, PreparedWindowsImeSession::unavailable());
+
+        assert_eq!(
+            slots.iter().map(|slot| slot.session_id).collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+
+        assert!(take_matching_prepared_windows_ime_session(&mut slots, 1).is_some());
+        assert_eq!(
+            slots.iter().map(|slot| slot.session_id).collect::<Vec<_>>(),
+            vec![2]
+        );
     }
 
     #[test]

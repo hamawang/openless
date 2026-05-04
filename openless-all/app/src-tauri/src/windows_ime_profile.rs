@@ -184,7 +184,8 @@ mod windows_impl {
     use std::ffi::c_void;
     use std::path::Path;
     use std::ptr;
-    use windows::core::GUID;
+    use windows::core::{GUID, HRESULT};
+    use windows::Win32::Foundation::RPC_E_CHANGED_MODE;
     use windows::Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
         COINIT_APARTMENTTHREADED,
@@ -209,21 +210,47 @@ mod windows_impl {
         TF_IPPMF_FORSESSION | TF_IPPMF_DONTCARECURRENTINPUTLANGUAGE | TF_IPPMF_ENABLEPROFILE;
     const PROFILE_RESTORE_FLAGS: u32 = TF_IPPMF_FORSESSION | TF_IPPMF_DONTCARECURRENTINPUTLANGUAGE;
 
-    struct ComApartment;
+    pub(super) struct ComInitializeOwnership {
+        pub(super) should_uninitialize: bool,
+    }
+
+    pub(super) fn coinitialize_result_ownership(
+        result: HRESULT,
+    ) -> WindowsImeProfileResult<ComInitializeOwnership> {
+        if result == RPC_E_CHANGED_MODE {
+            return Ok(ComInitializeOwnership {
+                should_uninitialize: false,
+            });
+        }
+
+        result
+            .ok()
+            .map(|_| ComInitializeOwnership {
+                should_uninitialize: true,
+            })
+            .map_err(|err| WindowsImeProfileError::WindowsApi(format!("CoInitializeEx: {err}")))
+    }
+
+    struct ComApartment {
+        should_uninitialize: bool,
+    }
 
     impl ComApartment {
         fn initialize() -> WindowsImeProfileResult<Self> {
-            unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) }
-                .ok()
-                .map_err(|err| {
-                    WindowsImeProfileError::WindowsApi(format!("CoInitializeEx: {err}"))
-                })?;
-            Ok(Self)
+            let ownership = coinitialize_result_ownership(unsafe {
+                CoInitializeEx(None, COINIT_APARTMENTTHREADED)
+            })?;
+            Ok(Self {
+                should_uninitialize: ownership.should_uninitialize,
+            })
         }
     }
 
     impl Drop for ComApartment {
         fn drop(&mut self) {
+            if !self.should_uninitialize {
+                return;
+            }
             unsafe {
                 CoUninitialize();
             }
@@ -628,6 +655,7 @@ mod windows_tests {
     use super::*;
     use std::ffi::c_void;
     use std::ptr;
+    use windows::Win32::Foundation::RPC_E_CHANGED_MODE;
     use windows::Win32::UI::Input::KeyboardAndMouse::HKL;
     use windows::Win32::UI::TextServices::GUID_TFCAT_TIP_KEYBOARD;
 
@@ -682,5 +710,12 @@ mod windows_tests {
 
         assert_eq!(formatted, "{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D}");
         assert!(parse_guid(&formatted).is_ok());
+    }
+
+    #[test]
+    fn com_changed_mode_is_accepted_without_uninitializing() {
+        let ownership = windows_impl::coinitialize_result_ownership(RPC_E_CHANGED_MODE).unwrap();
+
+        assert!(!ownership.should_uninitialize);
     }
 }
