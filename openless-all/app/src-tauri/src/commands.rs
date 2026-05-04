@@ -235,16 +235,80 @@ async fn validate_asr_provider() -> Result<(), String> {
         .map_err(|e| e.to_string())?
         .filter(|s| !s.trim().is_empty())
         .ok_or_else(|| "asrModelMissing".to_string())?;
-    let models = fetch_provider_models(&config).await?;
-    if models.is_empty() {
-        return Err("modelsEmpty".to_string());
+    validate_asr_transcription(&config, model.trim()).await
+}
+
+async fn validate_asr_transcription(config: &ProviderConfig, model: &str) -> Result<(), String> {
+    let url = format!("{}/audio/transcriptions", config.base_url.trim_end_matches('/'));
+    let wav = encode_wav_16k_mono_silence(250);
+    let wav_part = reqwest::multipart::Part::bytes(wav)
+        .file_name("openless-asr-check.wav")
+        .mime_str("audio/wav")
+        .map_err(|e| format!("请求体构建失败: {e}"))?;
+    let form = reqwest::multipart::Form::new()
+        .part("file", wav_part)
+        .text("model", model.to_string());
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .build()
+        .map_err(|e| format!("HTTP client 初始化失败: {e}"))?;
+    let response = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", config.api_key))
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| {
+            if e.is_timeout() {
+                "请求超时".to_string()
+            } else {
+                format!("网络错误: {e}")
+            }
+        })?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|e| format!("读取响应失败: {e}"))?;
+    if !status.is_success() {
+        return Err(format!("providerHttpStatus:{}", status.as_u16()));
     }
-    let model = model.trim();
-    if models.iter().any(|m| m == model) {
-        Ok(())
-    } else {
-        Err("asrModelUnavailable".to_string())
+    let json: Value =
+        serde_json::from_str(&body).map_err(|e| format!("转写响应不是有效 JSON: {e}"))?;
+    if !json.is_object() || json.get("text").is_none() {
+        return Err("ASR 转写响应缺少 text 字段".to_string());
     }
+    Ok(())
+}
+
+fn encode_wav_16k_mono_silence(duration_ms: u32) -> Vec<u8> {
+    let sample_rate: u32 = 16_000;
+    let num_channels: u16 = 1;
+    let bits_per_sample: u16 = 16;
+    let bytes_per_sample = (bits_per_sample / 8) as usize;
+    let samples = (sample_rate as usize * duration_ms as usize) / 1000;
+    let pcm_len = samples * bytes_per_sample;
+    let data_size = pcm_len as u32;
+    let byte_rate = sample_rate * num_channels as u32 * bits_per_sample as u32 / 8;
+    let block_align = num_channels * bits_per_sample / 8;
+    let chunk_size = 36 + data_size;
+
+    let mut wav = Vec::with_capacity(44 + pcm_len);
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&chunk_size.to_le_bytes());
+    wav.extend_from_slice(b"WAVE");
+    wav.extend_from_slice(b"fmt ");
+    wav.extend_from_slice(&16u32.to_le_bytes());
+    wav.extend_from_slice(&1u16.to_le_bytes());
+    wav.extend_from_slice(&num_channels.to_le_bytes());
+    wav.extend_from_slice(&sample_rate.to_le_bytes());
+    wav.extend_from_slice(&byte_rate.to_le_bytes());
+    wav.extend_from_slice(&block_align.to_le_bytes());
+    wav.extend_from_slice(&bits_per_sample.to_le_bytes());
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&data_size.to_le_bytes());
+    wav.resize(44 + pcm_len, 0);
+    wav
 }
 
 async fn fetch_provider_models(config: &ProviderConfig) -> Result<Vec<String>, String> {
