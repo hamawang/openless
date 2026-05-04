@@ -205,9 +205,17 @@ fn is_shift_hotkey_code(code: &str) -> bool {
 }
 
 #[cfg(any(target_os = "macos", test))]
-fn dispatch_mac_caps_lock_edge(shared: &Shared, tx: &Sender<HotkeyEvent>) {
-    dispatch_hotkey_code(shared, tx, "CapsLock", true);
-    dispatch_hotkey_code(shared, tx, "CapsLock", false);
+fn dispatch_mac_caps_lock_flags_changed(
+    shared: &Shared,
+    tx: &Sender<HotkeyEvent>,
+    alpha_shift_active: bool,
+) {
+    if shared.binding.read().mode == crate::types::HotkeyMode::Hold {
+        dispatch_hotkey_code(shared, tx, "CapsLock", alpha_shift_active);
+    } else {
+        dispatch_hotkey_code(shared, tx, "CapsLock", true);
+        dispatch_hotkey_code(shared, tx, "CapsLock", false);
+    }
 }
 
 #[cfg(any(target_os = "macos", test))]
@@ -235,10 +243,10 @@ mod platform {
     use std::sync::Arc;
 
     use super::{
-        dispatch_hotkey_code, dispatch_mac_caps_lock_edge, dispatch_translation_modifier_code,
-        install_error, is_shift_hotkey_code, mac_keycode_uses_modifier_flags, send_or_log,
-        start_listener_thread, update_shared_binding, HotkeyAdapter, HotkeyEvent, Shared,
-        StartupTx,
+        dispatch_hotkey_code, dispatch_mac_caps_lock_flags_changed,
+        dispatch_translation_modifier_code, install_error, is_shift_hotkey_code,
+        mac_keycode_uses_modifier_flags, send_or_log, start_listener_thread, update_shared_binding,
+        HotkeyAdapter, HotkeyEvent, Shared, StartupTx,
     };
     use crate::types::{HotkeyAdapterKind, HotkeyBinding, HotkeyInstallError};
 
@@ -317,6 +325,7 @@ mod platform {
     const MOUSE_EVENT_BUTTON_NUMBER: CgEventField = 3;
     const KEYBOARD_EVENT_KEYCODE: CgEventField = 9;
 
+    const FLAG_MASK_ALPHA_SHIFT: CgEventFlags = 0x0001_0000;
     const FLAG_MASK_SHIFT: CgEventFlags = 0x0002_0000;
     const FLAG_MASK_CONTROL: CgEventFlags = 0x0004_0000;
     const FLAG_MASK_ALTERNATE: CgEventFlags = 0x0008_0000;
@@ -446,7 +455,11 @@ mod platform {
         let flags = unsafe { CGEventGetFlags(event) };
         let keycode = unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) };
         if keycode == 57 {
-            dispatch_mac_caps_lock_edge(&ctx.shared, &ctx.tx);
+            dispatch_mac_caps_lock_flags_changed(
+                &ctx.shared,
+                &ctx.tx,
+                (flags & FLAG_MASK_ALPHA_SHIFT) != 0,
+            );
             return;
         }
         if let Some(code) = mac_keycode_to_hotkey_code(keycode) {
@@ -687,7 +700,7 @@ mod tests {
     }
 
     #[test]
-    fn mac_caps_lock_flags_changed_dispatches_single_key_edge() {
+    fn mac_caps_lock_toggle_mode_dispatches_click_edge_per_toggle() {
         let shared = shared_with_binding(HotkeyBinding {
             trigger: HotkeyTrigger::RightControl,
             mode: HotkeyMode::Toggle,
@@ -695,9 +708,45 @@ mod tests {
         });
         let (tx, rx) = mpsc::channel();
 
-        dispatch_mac_caps_lock_edge(&shared, &tx);
+        dispatch_mac_caps_lock_flags_changed(&shared, &tx, true);
 
         assert!(matches!(rx.try_recv(), Ok(HotkeyEvent::Pressed)));
+        assert!(matches!(rx.try_recv(), Ok(HotkeyEvent::Released)));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn mac_caps_lock_double_click_mode_dispatches_click_edge_per_toggle() {
+        let shared = shared_with_binding(HotkeyBinding {
+            trigger: HotkeyTrigger::RightControl,
+            mode: HotkeyMode::DoubleClick,
+            keys: Some(vec![HotkeyKey::new("CapsLock")]),
+        });
+        let (tx, rx) = mpsc::channel();
+
+        dispatch_mac_caps_lock_flags_changed(&shared, &tx, true);
+
+        assert!(matches!(rx.try_recv(), Ok(HotkeyEvent::Pressed)));
+        assert!(matches!(rx.try_recv(), Ok(HotkeyEvent::Released)));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn mac_caps_lock_hold_mode_tracks_toggle_state() {
+        let shared = shared_with_binding(HotkeyBinding {
+            trigger: HotkeyTrigger::RightControl,
+            mode: HotkeyMode::Hold,
+            keys: Some(vec![HotkeyKey::new("CapsLock")]),
+        });
+        let (tx, rx) = mpsc::channel();
+
+        dispatch_mac_caps_lock_flags_changed(&shared, &tx, true);
+
+        assert!(matches!(rx.try_recv(), Ok(HotkeyEvent::Pressed)));
+        assert!(rx.try_recv().is_err());
+
+        dispatch_mac_caps_lock_flags_changed(&shared, &tx, false);
+
         assert!(matches!(rx.try_recv(), Ok(HotkeyEvent::Released)));
         assert!(rx.try_recv().is_err());
     }
