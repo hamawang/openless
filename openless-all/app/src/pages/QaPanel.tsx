@@ -12,14 +12,12 @@
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
-import { marked } from 'marked';
 import { getSettings, isTauri, qaWindowDismiss, qaWindowPin } from '../lib/ipc';
 import type { QaChatMessage, QaStatePayload, UserPreferences } from '../lib/types';
 import { getHotkeyTriggerLabel } from '../lib/hotkey';
+import { renderQaMarkdown } from '../lib/qaMarkdown';
 
 const SELECTION_PREVIEW_MAX = 60;
-
-marked.setOptions({ gfm: true, breaks: true });
 
 type Status = 'idle' | 'recording' | 'thinking' | 'error';
 
@@ -405,7 +403,7 @@ function MessageRow({ message }: { message: QaChatMessage }) {
   const html = useMemo(() => {
     if (message.role !== 'assistant') return '';
     try {
-      return marked.parse(message.content, { async: false }) as string;
+      return renderQaMarkdown(message.content);
     } catch (error) {
       console.error('[qa] failed to render markdown', error);
       return message.content;
@@ -445,7 +443,7 @@ function MessageRow({ message }: { message: QaChatMessage }) {
 function StreamingAssistantBubble({ markdown }: { markdown: string }) {
   const html = useMemo(() => {
     try {
-      return marked.parse(markdown, { async: false }) as string;
+      return renderQaMarkdown(markdown);
     } catch (error) {
       console.error('[qa] failed to render streaming markdown', error);
       return markdown;
