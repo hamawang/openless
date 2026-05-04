@@ -137,16 +137,35 @@ export function Vocab() {
   const applySelectedPresets = async () => {
     const selected = presets.filter(p => selectedPresetIds.includes(p.id));
     if (selected.length === 0) return;
-    const phraseSet = new Set(entries.map(e => e.phrase.trim().toLowerCase()));
+    const byPhrase = new Map<string, DictionaryEntry[]>();
+    const addedPhrases = new Set<string>();
+    for (const entry of entries) {
+      const key = entry.phrase.trim().toLowerCase();
+      if (!byPhrase.has(key)) byPhrase.set(key, []);
+      byPhrase.get(key)?.push(entry);
+    }
     let failures = 0;
     for (const p of selected) {
       for (const phrase of p.phrases) {
-        if (!phraseSet.has(phrase.trim().toLowerCase())) {
+        const key = phrase.trim().toLowerCase();
+        if (addedPhrases.has(key)) continue;
+        const existing = byPhrase.get(key) || [];
+        if (existing.length === 0) {
           try {
             await addVocab(phrase);
-            phraseSet.add(phrase.trim().toLowerCase());
+            addedPhrases.add(key);
           } catch {
             failures += 1;
+          }
+          continue;
+        }
+        for (const item of existing) {
+          if (!item.enabled) {
+            try {
+              await setVocabEnabled(item.id, true);
+            } catch {
+              failures += 1;
+            }
           }
         }
       }

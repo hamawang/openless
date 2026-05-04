@@ -52,15 +52,19 @@ export type SettingsSectionId = 'recording' | 'providers' | 'shortcuts' | 'permi
 
 const SECTION_ORDER: SettingsSectionId[] = ['recording', 'providers', 'shortcuts', 'permissions', 'language', 'about'];
 
-type AutostartPlugin = {
-  enable: () => Promise<void>;
-  disable: () => Promise<void>;
-  isEnabled: () => Promise<boolean>;
-};
+async function autostartIsEnabled(): Promise<boolean> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  return invoke<boolean>('plugin:autostart|is_enabled');
+}
 
-async function loadAutostartPlugin(): Promise<AutostartPlugin> {
-  const pluginName = '@tauri-apps/plugin-autostart';
-  return import(/* @vite-ignore */ pluginName) as Promise<AutostartPlugin>;
+async function autostartEnable(): Promise<void> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  await invoke('plugin:autostart|enable');
+}
+
+async function autostartDisable(): Promise<void> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  await invoke('plugin:autostart|disable');
 }
 
 export function Settings({ embedded = false, initialSection = 'recording' }: SettingsProps) {
@@ -285,8 +289,7 @@ function AutostartRow() {
       return;
     }
     let cancelled = false;
-    loadAutostartPlugin()
-      .then(plugin => plugin.isEnabled())
+    autostartIsEnabled()
       .then((v: boolean) => {
         if (!cancelled) {
           setEnabled(v);
@@ -307,9 +310,8 @@ function AutostartRow() {
     setError(null);
     try {
       if (!isTauri) return;
-      const plugin = await loadAutostartPlugin();
-      if (next) await plugin.enable();
-      else await plugin.disable();
+      if (next) await autostartEnable();
+      else await autostartDisable();
     } catch (err) {
       console.error('[autostart] toggle failed', err);
       setEnabled(!next);
