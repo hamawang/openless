@@ -5,6 +5,7 @@
 //! insertion, persists history, emits `capsule:state` events to the capsule
 //! window.
 
+use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -19,7 +20,7 @@ use crate::asr::{
     DictionaryHotword, RawTranscript, VolcengineCredentials, VolcengineStreamingASR,
     WhisperBatchASR,
 };
-use crate::hotkey::{HotkeyEvent, HotkeyMonitor};
+use crate::hotkey::{binding_matches_pressed_codes, HotkeyEvent, HotkeyMonitor};
 use crate::insertion::TextInserter;
 use crate::persistence::{
     CredentialAccount, CredentialsVault, DictionaryStore, HistoryStore, PreferencesStore,
@@ -130,6 +131,7 @@ struct Inner {
     hotkey_status: Mutex<HotkeyStatus>,
     hotkey_trigger_held: AtomicBool,
     hotkey_last_click_at: Mutex<Option<Instant>>,
+    window_hotkey_pressed_codes: Mutex<BTreeSet<String>>,
     /// 翻译模式触发标志。每次 begin_session 重置为 false；hotkey 监听器在
     /// Listening / Starting 阶段看到 Shift down 边沿时 set true。
     /// end_session 在调 polish/translate 前读这个 flag + translation_target_language
@@ -226,6 +228,7 @@ impl Coordinator {
                 hotkey_status: Mutex::new(HotkeyStatus::default()),
                 hotkey_trigger_held: AtomicBool::new(false),
                 hotkey_last_click_at: Mutex::new(None),
+                window_hotkey_pressed_codes: Mutex::new(BTreeSet::new()),
                 translation_modifier_seen: AtomicBool::new(false),
                 qa_hotkey: Mutex::new(None),
                 qa_state: Mutex::new(QaSessionState::default()),
@@ -374,6 +377,7 @@ impl Coordinator {
     }
 
     pub fn update_hotkey_binding(&self) {
+        self.inner.window_hotkey_pressed_codes.lock().clear();
         if let Some(monitor) = self.inner.hotkey.lock().as_ref() {
             monitor.update_binding(self.inner.prefs.get().hotkey);
         }
@@ -700,9 +704,12 @@ fn hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEvent>) {
 }
 
 async fn handle_pressed_edge(inner: &Arc<Inner>) {
-    let was_held = inner.hotkey_trigger_held.swap(true, Ordering::SeqCst);
+    let was_held = inner.hotkey_trigger_held.load(Ordering::SeqCst);
     if !was_held {
         if !should_accept_pressed_edge(inner) {
+            return;
+        }
+        if inner.hotkey_trigger_held.swap(true, Ordering::SeqCst) {
             return;
         }
         // 路由：QA 浮窗可见时，rightOption 边沿走 QA；否则走主听写。详见 issue #118 v2。
@@ -908,22 +915,41 @@ async fn handle_window_hotkey_event(
             return Ok(());
         }
 
-        let binding = inner.prefs.get().hotkey;
-        if !window_key_matches_binding(&binding, &key, &code) {
-            return Ok(());
-        }
-
         match event_type.as_str() {
             "keydown" => {
                 if repeat {
                     return Ok(());
                 }
-                log::info!("[window-hotkey] pressed code={code} repeat={repeat}");
-                handle_pressed_edge(inner).await;
+                let binding = inner.prefs.get().hotkey;
+                let Some((was_active, is_active)) = update_window_hotkey_pressed_codes(
+                    &mut inner.window_hotkey_pressed_codes.lock(),
+                    &binding,
+                    &key,
+                    &code,
+                    true,
+                ) else {
+                    return Ok(());
+                };
+                if is_active && !was_active {
+                    log::info!("[window-hotkey] pressed code={code} repeat={repeat}");
+                    handle_pressed_edge(inner).await;
+                }
             }
             "keyup" => {
-                log::info!("[window-hotkey] released code={code}");
-                handle_released_edge(inner).await;
+                let binding = inner.prefs.get().hotkey;
+                let Some((was_active, is_active)) = update_window_hotkey_pressed_codes(
+                    &mut inner.window_hotkey_pressed_codes.lock(),
+                    &binding,
+                    &key,
+                    &code,
+                    false,
+                ) else {
+                    return Ok(());
+                };
+                if was_active && !is_active {
+                    log::info!("[window-hotkey] released code={code}");
+                    handle_released_edge(inner).await;
+                }
             }
             _ => {}
         }
@@ -933,6 +959,31 @@ async fn handle_window_hotkey_event(
 
 fn window_hotkey_fallback_enabled() -> bool {
     crate::types::HotkeyCapability::current().explicit_fallback_available
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn update_window_hotkey_pressed_codes(
+    pressed_codes: &mut BTreeSet<String>,
+    binding: &HotkeyBinding,
+    key: &str,
+    code: &str,
+    pressed: bool,
+) -> Option<(bool, bool)> {
+    if !window_key_matches_binding(binding, key, code) {
+        return None;
+    }
+
+    let normalized = normalize_window_hotkey_code(key, code);
+    let was_active = binding_matches_pressed_codes(binding, pressed_codes);
+    if pressed {
+        pressed_codes.insert(normalized);
+    } else {
+        pressed_codes.remove(&normalized);
+    }
+    Some((
+        was_active,
+        binding_matches_pressed_codes(binding, pressed_codes),
+    ))
 }
 
 #[cfg(any(target_os = "windows", test))]
@@ -2607,16 +2658,85 @@ mod tests {
             trigger: HotkeyTrigger::RightControl,
             ..Default::default()
         };
-        assert!(window_key_matches_binding(&legacy, "Control", "ControlRight"));
-        assert!(!window_key_matches_binding(&legacy, "Control", "ControlLeft"));
+        assert!(window_key_matches_binding(
+            &legacy,
+            "Control",
+            "ControlRight"
+        ));
+        assert!(!window_key_matches_binding(
+            &legacy,
+            "Control",
+            "ControlLeft"
+        ));
 
         let caps_lock = HotkeyBinding {
             trigger: HotkeyTrigger::RightControl,
             keys: Some(vec![HotkeyKey::new("CapsLock")]),
             ..Default::default()
         };
-        assert!(window_key_matches_binding(&caps_lock, "CapsLock", "CapsLock"));
-        assert!(!window_key_matches_binding(&caps_lock, "Control", "ControlRight"));
+        assert!(window_key_matches_binding(
+            &caps_lock, "CapsLock", "CapsLock"
+        ));
+        assert!(!window_key_matches_binding(
+            &caps_lock,
+            "Control",
+            "ControlRight"
+        ));
+    }
+
+    #[test]
+    fn window_hotkey_fallback_requires_full_combo_before_activating() {
+        let binding = HotkeyBinding {
+            trigger: HotkeyTrigger::RightControl,
+            keys: Some(vec![
+                HotkeyKey::new("ControlLeft"),
+                HotkeyKey::new("AltLeft"),
+                HotkeyKey::new("Mouse4"),
+            ]),
+            ..Default::default()
+        };
+        let mut pressed_codes = std::collections::BTreeSet::new();
+
+        assert_eq!(
+            update_window_hotkey_pressed_codes(
+                &mut pressed_codes,
+                &binding,
+                "Control",
+                "ControlLeft",
+                true,
+            ),
+            Some((false, false))
+        );
+        assert_eq!(
+            update_window_hotkey_pressed_codes(
+                &mut pressed_codes,
+                &binding,
+                "Alt",
+                "AltLeft",
+                true
+            ),
+            Some((false, false))
+        );
+        assert_eq!(
+            update_window_hotkey_pressed_codes(
+                &mut pressed_codes,
+                &binding,
+                "Mouse4",
+                "Mouse4",
+                true,
+            ),
+            Some((false, true))
+        );
+        assert_eq!(
+            update_window_hotkey_pressed_codes(
+                &mut pressed_codes,
+                &binding,
+                "Alt",
+                "AltLeft",
+                false
+            ),
+            Some((true, false))
+        );
     }
 
     #[test]
@@ -2730,6 +2850,29 @@ mod tests {
         let state = coordinator.inner.state.lock();
         assert_eq!(state.phase, SessionPhase::Inserting);
         assert_eq!(state.session_id, 41);
+    }
+
+    #[tokio::test]
+    async fn rejected_double_click_press_does_not_mark_trigger_held() {
+        let coordinator = Coordinator::new();
+        coordinator
+            .inner
+            .prefs
+            .set(crate::types::UserPreferences {
+                hotkey: crate::types::HotkeyBinding {
+                    trigger: HotkeyTrigger::RightControl,
+                    mode: HotkeyMode::DoubleClick,
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .unwrap();
+
+        handle_pressed_edge(&coordinator.inner).await;
+
+        assert!(!coordinator.inner.hotkey_trigger_held.load(Ordering::SeqCst));
+        handle_released_edge(&coordinator.inner).await;
+        assert!(!coordinator.inner.hotkey_trigger_held.load(Ordering::SeqCst));
     }
 
     #[test]

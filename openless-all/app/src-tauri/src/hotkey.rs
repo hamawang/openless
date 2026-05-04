@@ -11,7 +11,7 @@
 //! 仅产出"边沿"事件，toggle vs hold 由 Coordinator 解释。
 
 use std::collections::BTreeSet;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::Arc;
 use std::time::Duration;
@@ -166,7 +166,48 @@ fn dispatch_hotkey_code(shared: &Shared, tx: &Sender<HotkeyEvent>, code: &str, p
     }
 }
 
-fn binding_matches_pressed_codes(binding: &HotkeyBinding, pressed_codes: &BTreeSet<String>) -> bool {
+fn dispatch_translation_modifier_code(
+    shared: &Shared,
+    tx: &Sender<HotkeyEvent>,
+    code: &str,
+    pressed: bool,
+) {
+    if !is_shift_hotkey_code(code) {
+        return;
+    }
+
+    let shift_is_hotkey = shared
+        .binding
+        .read()
+        .effective_codes()
+        .iter()
+        .any(|candidate| candidate == code);
+    if shift_is_hotkey {
+        return;
+    }
+
+    if pressed {
+        let was_held = shared
+            .translation_modifier_held
+            .swap(true, Ordering::SeqCst);
+        if !was_held {
+            send_or_log(tx, HotkeyEvent::TranslationModifierPressed);
+        }
+    } else {
+        shared
+            .translation_modifier_held
+            .store(false, Ordering::SeqCst);
+    }
+}
+
+fn is_shift_hotkey_code(code: &str) -> bool {
+    matches!(code, "ShiftLeft" | "ShiftRight")
+}
+
+pub(crate) fn binding_matches_pressed_codes(
+    binding: &HotkeyBinding,
+    pressed_codes: &BTreeSet<String>,
+) -> bool {
     let codes = binding.effective_codes();
     !codes.is_empty()
         && codes
@@ -179,13 +220,13 @@ fn binding_matches_pressed_codes(binding: &HotkeyBinding, pressed_codes: &BTreeS
 #[cfg(target_os = "macos")]
 mod platform {
     use std::ffi::c_void;
-    use std::sync::atomic::Ordering;
     use std::sync::mpsc::Sender;
     use std::sync::Arc;
 
     use super::{
-        dispatch_hotkey_code, install_error, send_or_log, start_listener_thread,
-        update_shared_binding, HotkeyAdapter, HotkeyEvent, Shared, StartupTx,
+        dispatch_hotkey_code, dispatch_translation_modifier_code, install_error,
+        is_shift_hotkey_code, send_or_log, start_listener_thread, update_shared_binding,
+        HotkeyAdapter, HotkeyEvent, Shared, StartupTx,
     };
     use crate::types::{HotkeyAdapterKind, HotkeyBinding, HotkeyInstallError};
 
@@ -392,23 +433,17 @@ mod platform {
 
     fn handle_flags_changed(ctx: &CallbackContext, event: CgEventRef) {
         let flags = unsafe { CGEventGetFlags(event) };
-
-        // Shift 是翻译模式修饰键 — 与触发键的 keycode 检查独立，任何时刻按 Shift 都生效。
-        let shift_active = (flags & FLAG_MASK_SHIFT) != 0;
-        let shift_was_held = ctx.shared.translation_modifier_held.load(Ordering::SeqCst);
-        if shift_active && !shift_was_held {
-            ctx.shared
-                .translation_modifier_held
-                .store(true, Ordering::SeqCst);
-            send_or_log(&ctx.tx, HotkeyEvent::TranslationModifierPressed);
-        } else if !shift_active && shift_was_held {
-            ctx.shared
-                .translation_modifier_held
-                .store(false, Ordering::SeqCst);
-        }
-
         let keycode = unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) };
         if let Some(code) = mac_keycode_to_hotkey_code(keycode) {
+            if is_shift_hotkey_code(code) {
+                // Shift 作为录音热键成员时只参与热键匹配，不再额外切到翻译模式。
+                dispatch_translation_modifier_code(
+                    &ctx.shared,
+                    &ctx.tx,
+                    code,
+                    (flags & FLAG_MASK_SHIFT) != 0,
+                );
+            }
             if let Some(mask) = mac_keycode_flag_mask(keycode) {
                 let family_active = (flags & mask) != 0;
                 let code_was_pressed = ctx.shared.pressed_codes.read().contains(code);
@@ -578,11 +613,67 @@ mod platform {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{HotkeyKey, HotkeyMode, HotkeyTrigger};
+
+    fn shared_with_binding(binding: HotkeyBinding) -> Shared {
+        Shared {
+            binding: RwLock::new(binding),
+            pressed_codes: RwLock::new(BTreeSet::new()),
+            trigger_held: AtomicBool::new(false),
+            translation_modifier_held: AtomicBool::new(false),
+        }
+    }
+
+    #[test]
+    fn shift_hotkey_press_does_not_emit_translation_modifier() {
+        let shared = shared_with_binding(HotkeyBinding {
+            trigger: HotkeyTrigger::RightControl,
+            mode: HotkeyMode::Toggle,
+            keys: Some(vec![HotkeyKey::new("ShiftLeft")]),
+        });
+        let (tx, rx) = mpsc::channel();
+
+        dispatch_translation_modifier_code(&shared, &tx, "ShiftLeft", true);
+        assert!(rx.try_recv().is_err());
+
+        dispatch_hotkey_code(&shared, &tx, "ShiftLeft", true);
+        assert!(matches!(rx.try_recv(), Ok(HotkeyEvent::Pressed)));
+    }
+
+    #[test]
+    fn unbound_shift_press_still_emits_translation_modifier_once_per_hold() {
+        let shared = shared_with_binding(HotkeyBinding {
+            trigger: HotkeyTrigger::RightControl,
+            mode: HotkeyMode::Toggle,
+            keys: Some(vec![HotkeyKey::new("ControlRight")]),
+        });
+        let (tx, rx) = mpsc::channel();
+
+        dispatch_translation_modifier_code(&shared, &tx, "ShiftLeft", true);
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(HotkeyEvent::TranslationModifierPressed)
+        ));
+
+        dispatch_translation_modifier_code(&shared, &tx, "ShiftLeft", true);
+        assert!(rx.try_recv().is_err());
+
+        dispatch_translation_modifier_code(&shared, &tx, "ShiftLeft", false);
+        dispatch_translation_modifier_code(&shared, &tx, "ShiftLeft", true);
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(HotkeyEvent::TranslationModifierPressed)
+        ));
+    }
+}
+
 // ─────────────────────────── Windows implementation ───────────────────────────
 
 #[cfg(target_os = "windows")]
 mod platform {
-    use std::sync::atomic::Ordering;
     use std::sync::atomic::{AtomicPtr, Ordering as AtomicOrdering};
     use std::sync::mpsc::Sender;
     use std::sync::Arc;
@@ -591,13 +682,14 @@ mod platform {
     use windows::Win32::System::Threading::GetCurrentThreadId;
     use windows::Win32::UI::WindowsAndMessaging::{
         CallNextHookEx, DispatchMessageW, GetMessageW, PostThreadMessageW, SetWindowsHookExW,
-        TranslateMessage, UnhookWindowsHookEx, HC_ACTION, HHOOK, KBDLLHOOKSTRUCT,
-        MSLLHOOKSTRUCT, MSG, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_QUIT,
+        TranslateMessage, UnhookWindowsHookEx, HC_ACTION, HHOOK, KBDLLHOOKSTRUCT, MSG,
+        MSLLHOOKSTRUCT, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_QUIT,
     };
 
     use super::{
-        dispatch_hotkey_code, install_error, send_or_log, start_listener_thread,
-        update_shared_binding, HotkeyAdapter, HotkeyEvent, Shared, StartupTx,
+        dispatch_hotkey_code, dispatch_translation_modifier_code, install_error, send_or_log,
+        start_listener_thread, update_shared_binding, HotkeyAdapter, HotkeyEvent, Shared,
+        StartupTx,
     };
     use crate::types::{HotkeyAdapterKind, HotkeyBinding, HotkeyInstallError};
 
@@ -830,28 +922,11 @@ mod platform {
             return;
         }
 
-        // Shift（任一侧）= 翻译模式修饰键。在录音过程中任意时刻按下都生效。详见 issue #4。
-        if matches!(vk_code, VK_SHIFT | VK_LSHIFT | VK_RSHIFT) {
-            match message {
-                WM_KEYDOWN | WM_SYSKEYDOWN => {
-                    let was_held = ctx
-                        .shared
-                        .translation_modifier_held
-                        .swap(true, Ordering::SeqCst);
-                    if !was_held {
-                        send_or_log(&ctx.tx, HotkeyEvent::TranslationModifierPressed);
-                    }
-                }
-                WM_KEYUP | WM_SYSKEYUP => {
-                    ctx.shared
-                        .translation_modifier_held
-                        .store(false, Ordering::SeqCst);
-                }
-                _ => {}
-            }
-        }
-
         if let Some(code) = vk_to_hotkey_code(vk_code) {
+            if matches!(vk_code, VK_SHIFT | VK_LSHIFT | VK_RSHIFT) {
+                // Shift 作为录音热键成员时只参与热键匹配，不再额外切到翻译模式。
+                dispatch_translation_modifier_code(&ctx.shared, &ctx.tx, code, is_down);
+            }
             if is_down {
                 dispatch_hotkey_code(&ctx.shared, &ctx.tx, code, true);
             } else if is_up {
@@ -1008,8 +1083,9 @@ mod platform {
     use rdev::{listen, Button, Event, EventType, Key};
 
     use super::{
-        dispatch_hotkey_code, install_error, send_or_log, start_listener_thread,
-        update_shared_binding, HotkeyAdapter, HotkeyEvent, Shared, StartupTx,
+        dispatch_hotkey_code, dispatch_translation_modifier_code, install_error, send_or_log,
+        start_listener_thread, update_shared_binding, HotkeyAdapter, HotkeyEvent, Shared,
+        StartupTx,
     };
     use crate::types::{HotkeyAdapterKind, HotkeyBinding, HotkeyInstallError};
 
@@ -1082,26 +1158,19 @@ mod platform {
                     send_or_log(tx, HotkeyEvent::Cancelled);
                     return;
                 }
-                // Shift（任一侧）= 翻译模式修饰键。详见 issue #4。
-                if matches!(key, Key::ShiftLeft | Key::ShiftRight) {
-                    let was_held = shared
-                        .translation_modifier_held
-                        .swap(true, Ordering::SeqCst);
-                    if !was_held {
-                        send_or_log(tx, HotkeyEvent::TranslationModifierPressed);
-                    }
-                }
                 if let Some(code) = rdev_key_to_hotkey_code(key) {
+                    if matches!(key, Key::ShiftLeft | Key::ShiftRight) {
+                        // Shift 作为录音热键成员时只参与热键匹配，不再额外切到翻译模式。
+                        dispatch_translation_modifier_code(shared, tx, code, true);
+                    }
                     dispatch_hotkey_code(shared, tx, code, true);
                 }
             }
             EventType::KeyRelease(key) => {
-                if matches!(key, Key::ShiftLeft | Key::ShiftRight) {
-                    shared
-                        .translation_modifier_held
-                        .store(false, Ordering::SeqCst);
-                }
                 if let Some(code) = rdev_key_to_hotkey_code(key) {
+                    if matches!(key, Key::ShiftLeft | Key::ShiftRight) {
+                        dispatch_translation_modifier_code(shared, tx, code, false);
+                    }
                     dispatch_hotkey_code(shared, tx, code, false);
                 }
             }
