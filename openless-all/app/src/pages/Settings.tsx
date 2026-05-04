@@ -9,6 +9,7 @@ import { isDialogStatus, UpdateDialog, useAutoUpdate } from '../components/AutoU
 import { APP_VERSION_LABEL } from '../lib/appVersion';
 import { isHotkeyModeMigrationNoticeActive } from '../lib/hotkeyMigration';
 import { getHotkeyBindingCodes, getHotkeyBindingLabel, getHotkeyCodeLabel, getHotkeyStartStopLabel } from '../lib/hotkey';
+import { createHotkeyRecorderState, orderHotkeyCodes, updateHotkeyRecorderState } from '../lib/hotkeyRecorder';
 import {
   checkAccessibilityPermission,
   checkMicrophonePermission,
@@ -303,12 +304,12 @@ function HotkeyRecorder({
   const { t } = useTranslation();
   const [recording, setRecording] = useState(false);
   const [draftCodes, setDraftCodes] = useState<string[]>([]);
-  const pressedRef = useRef<Set<string>>(new Set());
+  const recorderStateRef = useRef(createHotkeyRecorderState());
   const recordingRef = useRef(false);
 
   const resetRecording = () => {
     recordingRef.current = false;
-    pressedRef.current.clear();
+    recorderStateRef.current = createHotkeyRecorderState();
     setDraftCodes([]);
     setRecording(false);
   };
@@ -321,7 +322,7 @@ function HotkeyRecorder({
 
   const startRecording = () => {
     recordingRef.current = true;
-    pressedRef.current.clear();
+    recorderStateRef.current = createHotkeyRecorderState();
     setDraftCodes([]);
     setRecording(true);
   };
@@ -334,6 +335,14 @@ function HotkeyRecorder({
       event.stopPropagation();
     };
 
+    const applyHotkeyCode = (code: string, pressed: boolean) => {
+      if (!recordingRef.current) return;
+      const next = updateHotkeyRecorderState(recorderStateRef.current, code, pressed);
+      recorderStateRef.current = next.state;
+      setDraftCodes(next.state.draftCodes);
+      if (next.commitCodes) commitCodes(next.commitCodes);
+    };
+
     const onKeyDown = (event: KeyboardEvent) => {
       stopEvent(event);
       if (event.key === 'Escape' || event.code === 'Escape') {
@@ -342,8 +351,7 @@ function HotkeyRecorder({
       }
       const code = normalizeKeyboardHotkeyCode(event);
       if (!code) return;
-      pressedRef.current.add(code);
-      setDraftCodes(orderHotkeyCodes([...pressedRef.current]));
+      applyHotkeyCode(code, true);
     };
 
     const onKeyUp = (event: KeyboardEvent) => {
@@ -353,25 +361,34 @@ function HotkeyRecorder({
         resetRecording();
         return;
       }
-      const codes = orderHotkeyCodes([...pressedRef.current]);
-      if (codes.length > 0) commitCodes(codes);
+      const code = normalizeKeyboardHotkeyCode(event);
+      if (!code) return;
+      applyHotkeyCode(code, false);
     };
 
     const onMouseDown = (event: MouseEvent) => {
       const code = mouseButtonToHotkeyCode(event.button);
       if (!code) return;
       stopEvent(event);
-      pressedRef.current.add(code);
-      commitCodes([...pressedRef.current]);
+      applyHotkeyCode(code, true);
+    };
+
+    const onMouseUp = (event: MouseEvent) => {
+      const code = mouseButtonToHotkeyCode(event.button);
+      if (!code) return;
+      stopEvent(event);
+      applyHotkeyCode(code, false);
     };
 
     window.addEventListener('keydown', onKeyDown, true);
     window.addEventListener('keyup', onKeyUp, true);
     window.addEventListener('mousedown', onMouseDown, true);
+    window.addEventListener('mouseup', onMouseUp, true);
     return () => {
       window.removeEventListener('keydown', onKeyDown, true);
       window.removeEventListener('keyup', onKeyUp, true);
       window.removeEventListener('mousedown', onMouseDown, true);
+      window.removeEventListener('mouseup', onMouseUp, true);
     };
   }, [recording]);
 
@@ -448,27 +465,6 @@ function mouseButtonToHotkeyCode(button: number): string | null {
   return null;
 }
 
-function orderHotkeyCodes(codes: string[]): string[] {
-  const seen = new Set<string>();
-  return codes
-    .filter(code => {
-      if (!code || seen.has(code)) return false;
-      seen.add(code);
-      return true;
-    })
-    .sort((a, b) => hotkeyCodeRank(a) - hotkeyCodeRank(b));
-}
-
-function hotkeyCodeRank(code: string): number {
-  const index = HOTKEY_CODE_ORDER.indexOf(code);
-  if (index >= 0) return index;
-  if (/^Key[A-Z]$/.test(code)) return 100 + code.charCodeAt(3);
-  if (/^Digit[0-9]$/.test(code)) return 200 + Number(code.slice(5));
-  if (/^F([1-9]|1[0-9]|2[0-4])$/.test(code)) return 300 + Number(code.slice(1));
-  if (/^Numpad[0-9]$/.test(code)) return 400 + Number(code.slice(6));
-  return 1000;
-}
-
 const SUPPORTED_HOTKEY_CODES = new Set([
   'ControlLeft', 'ControlRight', 'AltLeft', 'AltRight', 'ShiftLeft', 'ShiftRight',
   'MetaLeft', 'MetaRight', 'CapsLock', 'ScrollLock', 'Pause', 'PrintScreen',
@@ -479,17 +475,6 @@ const SUPPORTED_HOTKEY_CODES = new Set([
   'BracketRight', 'Backslash', 'Semicolon', 'Quote', 'Comma', 'Period', 'Slash',
   'Fn', 'FnLock',
 ]);
-
-const HOTKEY_CODE_ORDER = [
-  'ControlLeft', 'ControlRight', 'AltLeft', 'AltRight', 'ShiftLeft', 'ShiftRight',
-  'MetaLeft', 'MetaRight', 'Fn', 'FnLock', 'CapsLock', 'ScrollLock', 'Pause',
-  'PrintScreen', 'Backspace', 'Tab', 'Enter', 'Space', 'Insert', 'Delete', 'Home',
-  'End', 'PageUp', 'PageDown', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
-  'ContextMenu', 'Backquote', 'Minus', 'Equal', 'BracketLeft', 'BracketRight',
-  'Backslash', 'Semicolon', 'Quote', 'Comma', 'Period', 'Slash', 'NumpadAdd',
-  'NumpadSubtract', 'NumpadMultiply', 'NumpadDivide', 'NumpadDecimal', 'NumpadEnter',
-  'Mouse4', 'Mouse5',
-];
 
 function AutostartRow() {
   const { t } = useTranslation();
