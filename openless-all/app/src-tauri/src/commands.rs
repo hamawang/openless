@@ -642,9 +642,7 @@ pub fn set_dictation_hotkey(
     binding: ShortcutBinding,
 ) -> Result<(), String> {
     crate::shortcut_binding::validate_binding(&binding).map_err(|e| e.to_string())?;
-    if binding.modifiers.is_empty() && binding.primary.eq_ignore_ascii_case("shift") {
-        return Err("Shift 单键目前只能用于翻译快捷键".into());
-    }
+    reject_bare_shift_dictation_shortcut(&binding)?;
     let mut prefs = coord.prefs().get();
     prefs.dictation_hotkey = binding;
     coord.prefs().set(prefs).map_err(|e| e.to_string())?;
@@ -706,11 +704,12 @@ fn reject_modifier_only_action_shortcut(binding: &ShortcutBinding) -> Result<(),
 
 #[tauri::command]
 pub fn validate_combo_hotkey(binding: ComboBinding) -> Result<(), String> {
-    crate::combo_hotkey::validate_binding(&ShortcutBinding {
+    let shortcut = ShortcutBinding {
         primary: binding.primary,
         modifiers: binding.modifiers,
-    })
-    .map_err(|e| e.to_string())
+    };
+    reject_bare_shift_dictation_shortcut(&shortcut)?;
+    crate::combo_hotkey::validate_binding(&shortcut).map_err(|e| e.to_string())
 }
 
 /// 设置自定义录音组合键并热更新 monitor。
@@ -721,6 +720,7 @@ pub fn set_combo_hotkey(coord: CoordinatorState<'_>, binding: ComboBinding) -> R
         primary: binding.primary.clone(),
         modifiers: binding.modifiers.clone(),
     };
+    reject_bare_shift_dictation_shortcut(&shortcut)?;
     crate::combo_hotkey::validate_binding(&shortcut).map_err(|e| e.to_string())?;
     prefs.custom_combo_hotkey = Some(binding);
     prefs.dictation_hotkey = shortcut;
@@ -728,6 +728,13 @@ pub fn set_combo_hotkey(coord: CoordinatorState<'_>, binding: ComboBinding) -> R
     coord.prefs().set(prefs).map_err(|e| e.to_string())?;
     coord.update_hotkey_binding();
     coord.update_combo_hotkey_binding();
+    Ok(())
+}
+
+fn reject_bare_shift_dictation_shortcut(binding: &ShortcutBinding) -> Result<(), String> {
+    if binding.modifiers.is_empty() && binding.primary.eq_ignore_ascii_case("shift") {
+        return Err("Shift 单键目前只能用于翻译快捷键".into());
+    }
     Ok(())
 }
 
@@ -843,6 +850,19 @@ mod tests {
         });
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn combo_hotkey_bare_shift_rejection_matches_dictation_setter() {
+        let binding = ShortcutBinding {
+            primary: "Shift".into(),
+            modifiers: vec![],
+        };
+
+        assert_eq!(
+            super::reject_bare_shift_dictation_shortcut(&binding),
+            Err("Shift 单键目前只能用于翻译快捷键".into())
+        );
     }
 
     #[tokio::test]

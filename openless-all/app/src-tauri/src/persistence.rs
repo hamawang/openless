@@ -441,7 +441,7 @@ impl PreferencesStore {
         ensure_dir(&dir)?;
         let path = dir.join(PREFERENCES_FILE);
         let prefs = if path.exists() {
-            read_or_default::<UserPreferences>(&path).unwrap_or_default()
+            read_or_default::<UserPreferences>(&path)?
         } else {
             UserPreferences::default()
         };

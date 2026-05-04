@@ -192,9 +192,11 @@ impl<'de> Deserialize<'de> for UserPreferences {
         D: serde::Deserializer<'de>,
     {
         let wire = UserPreferencesWire::deserialize(deserializer)?;
-        let dictation_hotkey = wire.dictation_hotkey.unwrap_or_else(|| {
-            default_dictation_hotkey_from_legacy(&wire.hotkey, &wire.custom_combo_hotkey)
-        });
+        let dictation_hotkey = match wire.dictation_hotkey {
+            Some(binding) => binding,
+            None => default_dictation_hotkey_from_legacy(&wire.hotkey, &wire.custom_combo_hotkey)
+                .map_err(serde::de::Error::custom)?,
+        };
         Ok(Self {
             hotkey: wire.hotkey,
             dictation_hotkey,
@@ -261,16 +263,21 @@ fn default_app_shortcut_modifiers() -> Vec<String> {
 fn default_dictation_hotkey_from_legacy(
     hotkey: &HotkeyBinding,
     custom_combo_hotkey: &Option<ComboBinding>,
-) -> ShortcutBinding {
+) -> Result<ShortcutBinding, String> {
     if hotkey.trigger == HotkeyTrigger::Custom {
         if let Some(combo) = custom_combo_hotkey {
-            return ShortcutBinding {
+            return Ok(ShortcutBinding {
                 primary: combo.primary.clone(),
                 modifiers: combo.modifiers.clone(),
-            };
+            });
         }
+        return Err(
+            "hotkey.trigger is custom but dictationHotkey/customComboHotkey is missing".into(),
+        );
     }
-    crate::shortcut_binding::binding_from_legacy_trigger(hotkey.trigger)
+    Ok(crate::shortcut_binding::binding_from_legacy_trigger(
+        hotkey.trigger,
+    ))
 }
 
 fn default_working_languages() -> Vec<String> {
@@ -284,7 +291,8 @@ impl Default for UserPreferences {
             dictation_hotkey: default_dictation_hotkey_from_legacy(
                 &HotkeyBinding::default(),
                 &None,
-            ),
+            )
+            .expect("default legacy hotkey is not custom"),
             default_mode: PolishMode::Light,
             enabled_modes: vec![
                 PolishMode::Raw,
@@ -758,5 +766,44 @@ mod tests {
         let prefs: UserPreferences = serde_json::from_str("{}").unwrap();
 
         assert!(prefs.allow_non_tsf_insertion_fallback);
+    }
+
+    #[test]
+    fn legacy_custom_hotkey_without_custom_binding_is_rejected() {
+        let result = serde_json::from_str::<UserPreferences>(
+            r#"{
+                "hotkey": { "trigger": "custom", "mode": "toggle" }
+            }"#,
+        );
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn legacy_custom_hotkey_uses_custom_combo_binding() {
+        let prefs: UserPreferences = serde_json::from_str(
+            r#"{
+                "hotkey": { "trigger": "custom", "mode": "toggle" },
+                "customComboHotkey": { "primary": "D", "modifiers": ["cmd", "shift"] }
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(prefs.dictation_hotkey.primary, "D");
+        assert_eq!(prefs.dictation_hotkey.modifiers, vec!["cmd", "shift"]);
+    }
+
+    #[test]
+    fn custom_hotkey_with_dictation_hotkey_preserves_dictation_binding() {
+        let prefs: UserPreferences = serde_json::from_str(
+            r#"{
+                "hotkey": { "trigger": "custom", "mode": "toggle" },
+                "dictationHotkey": { "primary": "Space", "modifiers": ["ctrl"] }
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(prefs.dictation_hotkey.primary, "Space");
+        assert_eq!(prefs.dictation_hotkey.modifiers, vec!["ctrl"]);
     }
 }
