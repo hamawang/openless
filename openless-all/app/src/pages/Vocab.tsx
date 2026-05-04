@@ -103,7 +103,7 @@ export function Vocab() {
     setPresetPhrasesDraft(preset.phrases.join(', '));
   };
 
-  const savePreset = () => {
+  const savePreset = async () => {
     if (!editingPresetId) return;
     const name = presetNameDraft.trim();
     if (!name) return;
@@ -119,9 +119,13 @@ export function Vocab() {
       editingPresetId === NEW_PRESET_DRAFT_ID
         ? [...presets, { id: `user-${Date.now()}`, name, phrases }]
         : presets.map(p => (p.id === editingPresetId ? { ...p, name, phrases } : p));
-    setPresets(next);
-    void persistVocabPresets(next).catch(err => setError(err instanceof Error ? err.message : String(err)));
-    setEditingPresetId(null);
+    try {
+      await persistVocabPresets(next);
+      setPresets(next);
+      setEditingPresetId(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
   };
 
   const createPreset = () => {
@@ -134,15 +138,23 @@ export function Vocab() {
     const selected = presets.filter(p => selectedPresetIds.includes(p.id));
     if (selected.length === 0) return;
     const phraseSet = new Set(entries.map(e => e.phrase.trim().toLowerCase()));
+    let failures = 0;
     for (const p of selected) {
       for (const phrase of p.phrases) {
         if (!phraseSet.has(phrase.trim().toLowerCase())) {
-          await addVocab(phrase);
-          phraseSet.add(phrase.trim().toLowerCase());
+          try {
+            await addVocab(phrase);
+            phraseSet.add(phrase.trim().toLowerCase());
+          } catch {
+            failures += 1;
+          }
         }
       }
     }
     await refresh();
+    if (failures > 0) {
+      setError(`部分词条添加失败（${failures}）`);
+    }
   };
 
   return (
@@ -185,7 +197,7 @@ export function Vocab() {
               <input value={presetNameDraft} onChange={e => setPresetNameDraft(e.target.value)} placeholder={t('vocab.presets.namePlaceholder')} />
               <textarea value={presetPhrasesDraft} onChange={e => setPresetPhrasesDraft(e.target.value)} placeholder={t('vocab.presets.wordsPlaceholder')} rows={3} />
               <div style={{ display: 'flex', gap: 8 }}>
-                <Btn size="sm" variant="primary" onClick={savePreset}>{t('vocab.presets.save')}</Btn>
+                <Btn size="sm" variant="primary" onClick={() => void savePreset()}>{t('vocab.presets.save')}</Btn>
                 <Btn size="sm" variant="ghost" onClick={() => setEditingPresetId(null)}>{t('common.cancel')}</Btn>
               </div>
             </div>
