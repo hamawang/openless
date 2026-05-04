@@ -8,7 +8,7 @@ import { useTranslation } from 'react-i18next';
 import { Card, PageHeader } from './_atoms';
 import { SUPPORTED_LANGUAGES } from '../lib/types';
 import { useHotkeySettings } from '../state/HotkeySettingsContext';
-import { getHotkeyTriggerLabel } from '../lib/hotkey';
+import { getHotkeyBindingLabel } from '../lib/hotkey';
 
 export function Translation() {
   const { t } = useTranslation();
@@ -40,7 +40,7 @@ export function Translation() {
   const onTargetChange = (translationTargetLanguage: string) =>
     savePrefs({ ...prefs, translationTargetLanguage });
 
-  const triggerLabel = getHotkeyTriggerLabel(hotkey?.trigger);
+  const triggerLabel = getHotkeyBindingLabel(hotkey);
   const enabled = prefs.translationTargetLanguage.trim() !== '';
 
   return (

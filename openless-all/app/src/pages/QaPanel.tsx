@@ -15,7 +15,7 @@ import { useTranslation } from 'react-i18next';
 import { marked } from 'marked';
 import { getSettings, isTauri, qaWindowDismiss, qaWindowPin } from '../lib/ipc';
 import type { QaChatMessage, QaStatePayload, UserPreferences } from '../lib/types';
-import { getHotkeyTriggerLabel } from '../lib/hotkey';
+import { getHotkeyBindingLabel } from '../lib/hotkey';
 
 const SELECTION_PREVIEW_MAX = 60;
 
@@ -123,7 +123,7 @@ export function QaPanel() {
         // webview，没有 HotkeySettingsContext；如果用户在主窗口改了录音键，
         // 浮窗里的 "{recordHotkey}" 文案必须立刻跟上，否则会一直停在旧值。
         const prefsHandle = await listen<UserPreferences>('prefs:changed', event => {
-          setRecordHotkeyLabel(getHotkeyTriggerLabel(event.payload?.hotkey?.trigger));
+          setRecordHotkeyLabel(getHotkeyBindingLabel(event.payload?.hotkey));
         });
         if (cancelled) {
           stateHandle();
@@ -174,7 +174,7 @@ export function QaPanel() {
     void getSettings()
       .then(prefs => {
         if (cancelled) return;
-        setRecordHotkeyLabel(getHotkeyTriggerLabel(prefs.hotkey?.trigger));
+        setRecordHotkeyLabel(getHotkeyBindingLabel(prefs.hotkey));
       })
       .catch(err => {
         console.warn('[QaPanel] load hotkey label failed', err);

@@ -642,6 +642,7 @@ mod tests {
             hotkey: HotkeyBinding {
                 trigger: HotkeyTrigger::RightControl,
                 mode: HotkeyMode::Toggle,
+                ..Default::default()
             },
             qa_hotkey: Some(QaHotkeyBinding {
                 primary: ";".to_string(),

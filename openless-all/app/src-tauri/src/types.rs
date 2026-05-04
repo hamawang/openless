@@ -274,6 +274,7 @@ impl HotkeyTrigger {
 pub enum HotkeyMode {
     Toggle,
     Hold,
+    DoubleClick,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -294,11 +295,131 @@ impl HotkeyAdapterKind {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct HotkeyKey {
+    pub code: String,
+}
+
+impl HotkeyKey {
+    pub fn new(code: impl Into<String>) -> Self {
+        Self { code: code.into() }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct HotkeyBinding {
     pub trigger: HotkeyTrigger,
     pub mode: HotkeyMode,
+    pub keys: Option<Vec<HotkeyKey>>,
+}
+
+impl HotkeyBinding {
+    pub fn effective_codes(&self) -> Vec<String> {
+        let Some(keys) = &self.keys else {
+            return vec![legacy_trigger_code(self.trigger).to_string()];
+        };
+        keys.iter()
+            .map(|key| key.code.trim().to_string())
+            .filter(|code| !code.is_empty())
+            .collect()
+    }
+
+    pub fn display_label(&self) -> String {
+        let codes = self.effective_codes();
+        if codes.is_empty() {
+            return "未设置".to_string();
+        }
+        codes
+            .iter()
+            .map(|code| display_hotkey_code(code))
+            .collect::<Vec<_>>()
+            .join("+")
+    }
+}
+
+fn legacy_trigger_code(trigger: HotkeyTrigger) -> &'static str {
+    match trigger {
+        HotkeyTrigger::RightOption | HotkeyTrigger::RightAlt => "AltRight",
+        HotkeyTrigger::LeftOption => "AltLeft",
+        HotkeyTrigger::RightControl => "ControlRight",
+        HotkeyTrigger::LeftControl => "ControlLeft",
+        HotkeyTrigger::RightCommand => "MetaRight",
+        HotkeyTrigger::Fn => "Fn",
+    }
+}
+
+fn display_hotkey_code(code: &str) -> String {
+    let label = match code {
+        "ControlLeft" => "左Ctrl",
+        "ControlRight" => "右 Control",
+        "AltLeft" => "左Alt",
+        "AltRight" => "右Alt",
+        "ShiftLeft" => "左Shift",
+        "ShiftRight" => "右Shift",
+        "MetaLeft" | "OSLeft" => "左Win",
+        "MetaRight" | "OSRight" => "右Win",
+        "Fn" => "Fn",
+        "FnLock" => "FnLock",
+        "CapsLock" => "CapsLock",
+        "ScrollLock" => "ScrLock",
+        "Pause" => "Pause",
+        "PrintScreen" => "PrtSc",
+        "Backspace" => "Backspace",
+        "Tab" => "Tab",
+        "Enter" => "Enter",
+        "Space" => "Space",
+        "Insert" => "Insert",
+        "Delete" => "Delete",
+        "Home" => "Home",
+        "End" => "End",
+        "PageUp" => "PageUp",
+        "PageDown" => "PageDown",
+        "ArrowUp" => "Up",
+        "ArrowDown" => "Down",
+        "ArrowLeft" => "Left",
+        "ArrowRight" => "Right",
+        "NumpadAdd" => "Num+",
+        "NumpadSubtract" => "Num-",
+        "NumpadMultiply" => "Num*",
+        "NumpadDivide" => "Num/",
+        "NumpadDecimal" => "Num.",
+        "NumpadEnter" => "NumEnter",
+        "Mouse4" => "Mouse4",
+        "Mouse5" => "Mouse5",
+        "Backquote" => "`",
+        "Minus" => "-",
+        "Equal" => "=",
+        "BracketLeft" => "[",
+        "BracketRight" => "]",
+        "Backslash" => "\\",
+        "Semicolon" => ";",
+        "Quote" => "'",
+        "Comma" => ",",
+        "Period" => ".",
+        "Slash" => "/",
+        _ => "",
+    };
+    if !label.is_empty() {
+        return label.to_string();
+    }
+    if let Some(letter) = code.strip_prefix("Key") {
+        if letter.len() == 1 {
+            return letter.to_string();
+        }
+    }
+    if let Some(digit) = code.strip_prefix("Digit") {
+        if digit.len() == 1 {
+            return digit.to_string();
+        }
+    }
+    if let Some(num) = code.strip_prefix("Numpad") {
+        if num.len() == 1 && num.as_bytes()[0].is_ascii_digit() {
+            return format!("Num{num}");
+        }
+    }
+    code.to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -350,7 +471,7 @@ impl HotkeyCapability {
                 supports_side_specific_modifiers: true,
                 explicit_fallback_available: false,
                 status_hint: Some(
-                    "默认建议使用“右 Control + 切换式说话”；若更习惯按住说话，可在录音设置里切回。若无响应，可在权限页查看 hook 安装状态。"
+                    "默认建议使用“右Ctrl + 单击”；若更习惯按住说话，可在录音设置里切回“按住”。若无响应，可在权限页查看 hook 安装状态。"
                         .into(),
                 ),
             };
@@ -443,6 +564,7 @@ impl Default for HotkeyBinding {
             Self {
                 trigger: HotkeyTrigger::RightControl,
                 mode: HotkeyMode::Toggle,
+                keys: Some(vec![HotkeyKey::new("ControlRight")]),
             }
         }
 
@@ -451,6 +573,7 @@ impl Default for HotkeyBinding {
             Self {
                 trigger: HotkeyTrigger::RightOption,
                 mode: HotkeyMode::Toggle,
+                keys: Some(vec![HotkeyKey::new("AltRight")]),
             }
         }
     }
@@ -526,5 +649,49 @@ mod tests {
         let prefs: UserPreferences = serde_json::from_str("{}").unwrap();
 
         assert!(prefs.allow_non_tsf_insertion_fallback);
+    }
+
+    #[test]
+    fn legacy_hotkey_trigger_still_produces_effective_key_codes() {
+        let binding: HotkeyBinding =
+            serde_json::from_str(r#"{"trigger":"rightControl","mode":"toggle"}"#).unwrap();
+
+        assert_eq!(binding.effective_codes(), vec!["ControlRight".to_string()]);
+        assert_eq!(binding.display_label(), "右 Control");
+    }
+
+    #[test]
+    fn hotkey_binding_supports_combo_side_keys_mouse_and_double_click_mode() {
+        let binding = HotkeyBinding {
+            trigger: HotkeyTrigger::RightControl,
+            mode: HotkeyMode::DoubleClick,
+            keys: Some(vec![
+                HotkeyKey::new("ControlLeft"),
+                HotkeyKey::new("AltLeft"),
+                HotkeyKey::new("Mouse4"),
+            ]),
+        };
+
+        assert_eq!(
+            binding.effective_codes(),
+            vec![
+                "ControlLeft".to_string(),
+                "AltLeft".to_string(),
+                "Mouse4".to_string()
+            ]
+        );
+        assert_eq!(binding.display_label(), "左Ctrl+左Alt+Mouse4");
+
+        let json = serde_json::to_value(&binding).unwrap();
+        assert_eq!(json["mode"], "doubleClick");
+    }
+
+    #[test]
+    fn explicit_empty_hotkey_keys_clear_the_binding() {
+        let binding: HotkeyBinding =
+            serde_json::from_str(r#"{"trigger":"rightControl","mode":"toggle","keys":[]}"#)
+                .unwrap();
+
+        assert!(binding.effective_codes().is_empty());
     }
 }

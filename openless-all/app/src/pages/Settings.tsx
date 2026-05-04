@@ -8,7 +8,7 @@ import { Icon } from '../components/Icon';
 import { isDialogStatus, UpdateDialog, useAutoUpdate } from '../components/AutoUpdate';
 import { APP_VERSION_LABEL } from '../lib/appVersion';
 import { isHotkeyModeMigrationNoticeActive } from '../lib/hotkeyMigration';
-import { getHotkeyStartStopLabel, getHotkeyTriggerLabel } from '../lib/hotkey';
+import { getHotkeyBindingCodes, getHotkeyBindingLabel, getHotkeyCodeLabel, getHotkeyStartStopLabel } from '../lib/hotkey';
 import {
   checkAccessibilityPermission,
   checkMicrophonePermission,
@@ -28,6 +28,7 @@ import {
 } from '../lib/ipc';
 import type {
   HotkeyCapability,
+  HotkeyBinding,
   HotkeyMode,
   HotkeyStatus,
   HotkeyTrigger,
@@ -164,10 +165,17 @@ function RecordingSection() {
     );
   }
 
-  const onTriggerChange = (trigger: HotkeyTrigger) =>
-    savePrefs({ ...prefs, hotkey: { ...prefs.hotkey, trigger } });
   const onModeChange = (mode: HotkeyMode) =>
     savePrefs({ ...prefs, hotkey: { ...prefs.hotkey, mode } });
+  const onHotkeyKeysChange = (codes: string[]) =>
+    savePrefs({
+      ...prefs,
+      hotkey: {
+        ...prefs.hotkey,
+        trigger: inferLegacyTrigger(codes, prefs.hotkey.trigger),
+        keys: codes.map(code => ({ code })),
+      },
+    });
   const onShowCapsuleChange = (showCapsule: boolean) =>
     savePrefs({ ...prefs, showCapsule });
   const onRestoreClipboardChange = (restoreClipboardAfterPaste: boolean) =>
@@ -178,6 +186,7 @@ function RecordingSection() {
   const choices: Array<[HotkeyMode, string]> = [
     ['toggle', t('settings.recording.modeToggle')],
     ['hold', t('settings.recording.modeHold')],
+    ['doubleClick', t('settings.recording.modeDoubleClick')],
   ];
   const hotkeyDesc = capability.requiresAccessibilityPermission
     ? t('settings.recording.hotkeyDescAcc')
@@ -207,39 +216,49 @@ function RecordingSection() {
         </div>
       )}
       <SettingRow label={t('settings.recording.hotkeyLabel')} desc={hotkeyDesc}>
-        <select
-          value={prefs.hotkey.trigger}
-          onChange={e => onTriggerChange(e.target.value as HotkeyTrigger)}
-          style={{
-            ...inputStyle,
-            maxWidth: 200,
-            fontFamily: 'var(--ol-font-mono)',
-          }}
-        >
-          {capability.availableTriggers.map(tr => (
-            <option key={tr} value={tr}>{getHotkeyTriggerLabel(tr)}</option>
-          ))}
-        </select>
-      </SettingRow>
-      <SettingRow label={t('settings.recording.modeLabel')} desc={t('settings.recording.modeDesc')}>
-        <div style={{ display: 'inline-flex', padding: 2, borderRadius: 8, background: 'rgba(0,0,0,0.05)' }}>
-          {choices.map(([v, l]) => (
-            <button
-              key={v}
-              onClick={() => onModeChange(v)}
-              style={{
-                padding: '5px 14px', fontSize: 12, fontWeight: 500,
-                border: 0, borderRadius: 6, fontFamily: 'inherit',
-                background: prefs.hotkey.mode === v ? '#fff' : 'transparent',
-                color: prefs.hotkey.mode === v ? 'var(--ol-ink)' : 'var(--ol-ink-3)',
-                boxShadow: prefs.hotkey.mode === v ? '0 1px 2px rgba(0,0,0,.08)' : 'none',
-                cursor: 'default',
-                transition: 'background 0.16s var(--ol-motion-quick), color 0.16s var(--ol-motion-quick), box-shadow 0.18s var(--ol-motion-soft)',
-              }}
-            >
-              {l}
-            </button>
-          ))}
+        <div style={recordingHotkeyGroupStyle}>
+          <div style={recordingHotkeyLineStyle}>
+            <span style={recordingHotkeyFieldLabelStyle}>{t('settings.recording.modeLabel')}</span>
+            <div style={recordingHotkeySegmentedStyle}>
+              {choices.map(([v, l]) => (
+                <button
+                  key={v}
+                  onClick={() => onModeChange(v)}
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    height: 28,
+                    padding: '0 8px', fontSize: 12, fontWeight: 500,
+                    border: 0, borderRadius: 6, fontFamily: 'inherit',
+                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                    lineHeight: 1,
+                    whiteSpace: 'nowrap',
+                    background: prefs.hotkey.mode === v ? '#fff' : 'transparent',
+                    color: prefs.hotkey.mode === v ? 'var(--ol-ink)' : 'var(--ol-ink-3)',
+                    boxShadow: prefs.hotkey.mode === v ? '0 1px 2px rgba(0,0,0,.08)' : 'none',
+                    cursor: 'default',
+                    transition: 'background 0.16s var(--ol-motion-quick), color 0.16s var(--ol-motion-quick), box-shadow 0.18s var(--ol-motion-soft)',
+                  }}
+                >
+                  {l}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div style={recordingHotkeyLineStyle}>
+            <span style={recordingHotkeyFieldLabelStyle}>{t('settings.recording.keyLabel')}</span>
+            <HotkeyRecorder binding={prefs.hotkey} onCommit={onHotkeyKeysChange} />
+          </div>
+          <div
+            style={{
+              ...recordingHotkeyStatusStyle,
+              color: getHotkeyBindingCodes(prefs.hotkey).length > 0 ? '#16813d' : 'var(--ol-ink-4)',
+            }}
+          >
+            {getHotkeyBindingCodes(prefs.hotkey).length > 0
+              ? t('settings.recording.hotkeySetStatus', { hotkey: getHotkeyBindingLabel(prefs.hotkey) })
+              : t('settings.recording.hotkeyUnsetStatus')}
+          </div>
         </div>
       </SettingRow>
       <SettingRow label={t('settings.recording.capsuleLabel')} desc={t('settings.recording.capsuleDesc')}>
@@ -274,6 +293,204 @@ function RecordingSection() {
 
 // 不存进 prefs：autostart 状态由 OS 持有（mac LaunchAgent plist / linux .desktop /
 // windows HKCU\Run），prefs 缓存反而会与 OS 真相不一致。issue #194。
+function HotkeyRecorder({
+  binding,
+  onCommit,
+}: {
+  binding: HotkeyBinding;
+  onCommit: (codes: string[]) => void;
+}) {
+  const { t } = useTranslation();
+  const [recording, setRecording] = useState(false);
+  const [draftCodes, setDraftCodes] = useState<string[]>([]);
+  const pressedRef = useRef<Set<string>>(new Set());
+  const recordingRef = useRef(false);
+
+  const resetRecording = () => {
+    recordingRef.current = false;
+    pressedRef.current.clear();
+    setDraftCodes([]);
+    setRecording(false);
+  };
+
+  const commitCodes = (codes: string[]) => {
+    const ordered = orderHotkeyCodes(codes);
+    resetRecording();
+    onCommit(ordered);
+  };
+
+  const startRecording = () => {
+    recordingRef.current = true;
+    pressedRef.current.clear();
+    setDraftCodes([]);
+    setRecording(true);
+  };
+
+  useEffect(() => {
+    if (!recording) return undefined;
+
+    const stopEvent = (event: Event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      stopEvent(event);
+      if (event.key === 'Escape' || event.code === 'Escape') {
+        resetRecording();
+        return;
+      }
+      const code = normalizeKeyboardHotkeyCode(event);
+      if (!code) return;
+      pressedRef.current.add(code);
+      setDraftCodes(orderHotkeyCodes([...pressedRef.current]));
+    };
+
+    const onKeyUp = (event: KeyboardEvent) => {
+      stopEvent(event);
+      if (!recordingRef.current) return;
+      if (event.key === 'Escape' || event.code === 'Escape') {
+        resetRecording();
+        return;
+      }
+      const codes = orderHotkeyCodes([...pressedRef.current]);
+      if (codes.length > 0) commitCodes(codes);
+    };
+
+    const onMouseDown = (event: MouseEvent) => {
+      const code = mouseButtonToHotkeyCode(event.button);
+      if (!code) return;
+      stopEvent(event);
+      pressedRef.current.add(code);
+      commitCodes([...pressedRef.current]);
+    };
+
+    window.addEventListener('keydown', onKeyDown, true);
+    window.addEventListener('keyup', onKeyUp, true);
+    window.addEventListener('mousedown', onMouseDown, true);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown, true);
+      window.removeEventListener('keyup', onKeyUp, true);
+      window.removeEventListener('mousedown', onMouseDown, true);
+    };
+  }, [recording]);
+
+  const label = recording
+    ? draftCodes.length > 0
+      ? draftCodes.map(getHotkeyCodeLabel).join('+')
+      : t('settings.recording.hotkeyRecording')
+    : getHotkeyBindingLabel(binding);
+  const hasKeys = getHotkeyBindingCodes(binding).length > 0;
+
+  return (
+    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+      <button
+        type="button"
+        onClick={startRecording}
+        style={{
+          ...hotkeyRecorderButtonStyle,
+          borderColor: recording ? 'var(--ol-blue)' : 'var(--ol-line-strong)',
+          color: recording ? 'var(--ol-blue)' : 'var(--ol-ink)',
+        }}
+      >
+        <span style={hotkeyRecorderLabelStyle}>{label}</span>
+        {!recording && hasKeys && (
+          <span
+            role="button"
+            tabIndex={0}
+            aria-label={t('settings.recording.hotkeyClear')}
+            onClick={event => {
+              event.stopPropagation();
+              onCommit([]);
+            }}
+            onKeyDown={event => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                event.stopPropagation();
+                onCommit([]);
+              }
+            }}
+            style={hotkeyClearButtonStyle}
+          >
+            <Icon name="x" size={11} strokeWidth={2} />
+          </span>
+        )}
+      </button>
+    </div>
+  );
+}
+
+function inferLegacyTrigger(codes: string[], fallback: HotkeyTrigger): HotkeyTrigger {
+  if (codes.includes('ControlRight')) return 'rightControl';
+  if (codes.includes('ControlLeft')) return 'leftControl';
+  if (codes.includes('AltRight')) return 'rightAlt';
+  if (codes.includes('AltLeft')) return 'leftOption';
+  if (codes.includes('MetaRight')) return 'rightCommand';
+  if (codes.includes('Fn')) return 'fn';
+  return fallback;
+}
+
+function normalizeKeyboardHotkeyCode(event: KeyboardEvent): string | null {
+  if (event.key === 'Fn' || event.code === 'Fn') return 'Fn';
+  if (event.key === 'FnLock' || event.code === 'FnLock') return 'FnLock';
+  const code = event.code === 'OSLeft' ? 'MetaLeft' : event.code === 'OSRight' ? 'MetaRight' : event.code;
+  if (SUPPORTED_HOTKEY_CODES.has(code)) return code;
+  if (/^Key[A-Z]$/.test(code)) return code;
+  if (/^Digit[0-9]$/.test(code)) return code;
+  if (/^F([1-9]|1[0-9]|2[0-4])$/.test(code)) return code;
+  if (/^Numpad[0-9]$/.test(code)) return code;
+  return null;
+}
+
+function mouseButtonToHotkeyCode(button: number): string | null {
+  if (button === 3) return 'Mouse4';
+  if (button === 4) return 'Mouse5';
+  return null;
+}
+
+function orderHotkeyCodes(codes: string[]): string[] {
+  const seen = new Set<string>();
+  return codes
+    .filter(code => {
+      if (!code || seen.has(code)) return false;
+      seen.add(code);
+      return true;
+    })
+    .sort((a, b) => hotkeyCodeRank(a) - hotkeyCodeRank(b));
+}
+
+function hotkeyCodeRank(code: string): number {
+  const index = HOTKEY_CODE_ORDER.indexOf(code);
+  if (index >= 0) return index;
+  if (/^Key[A-Z]$/.test(code)) return 100 + code.charCodeAt(3);
+  if (/^Digit[0-9]$/.test(code)) return 200 + Number(code.slice(5));
+  if (/^F([1-9]|1[0-9]|2[0-4])$/.test(code)) return 300 + Number(code.slice(1));
+  if (/^Numpad[0-9]$/.test(code)) return 400 + Number(code.slice(6));
+  return 1000;
+}
+
+const SUPPORTED_HOTKEY_CODES = new Set([
+  'ControlLeft', 'ControlRight', 'AltLeft', 'AltRight', 'ShiftLeft', 'ShiftRight',
+  'MetaLeft', 'MetaRight', 'CapsLock', 'ScrollLock', 'Pause', 'PrintScreen',
+  'Backspace', 'Tab', 'Enter', 'Space', 'Insert', 'Delete', 'Home', 'End',
+  'PageUp', 'PageDown', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
+  'ContextMenu', 'NumpadAdd', 'NumpadSubtract', 'NumpadMultiply', 'NumpadDivide',
+  'NumpadDecimal', 'NumpadEnter', 'Backquote', 'Minus', 'Equal', 'BracketLeft',
+  'BracketRight', 'Backslash', 'Semicolon', 'Quote', 'Comma', 'Period', 'Slash',
+  'Fn', 'FnLock',
+]);
+
+const HOTKEY_CODE_ORDER = [
+  'ControlLeft', 'ControlRight', 'AltLeft', 'AltRight', 'ShiftLeft', 'ShiftRight',
+  'MetaLeft', 'MetaRight', 'Fn', 'FnLock', 'CapsLock', 'ScrollLock', 'Pause',
+  'PrintScreen', 'Backspace', 'Tab', 'Enter', 'Space', 'Insert', 'Delete', 'Home',
+  'End', 'PageUp', 'PageDown', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
+  'ContextMenu', 'Backquote', 'Minus', 'Equal', 'BracketLeft', 'BracketRight',
+  'Backslash', 'Semicolon', 'Quote', 'Comma', 'Period', 'Slash', 'NumpadAdd',
+  'NumpadSubtract', 'NumpadMultiply', 'NumpadDivide', 'NumpadDecimal', 'NumpadEnter',
+  'Mouse4', 'Mouse5',
+];
+
 function AutostartRow() {
   const { t } = useTranslation();
   const [enabled, setEnabled] = useState(false);
@@ -860,6 +1077,79 @@ const miniBtnStyle: CSSProperties = {
   color: 'var(--ol-ink-2)', cursor: 'default', flexShrink: 0,
   fontSize: 12, fontWeight: 500,
   transition: 'background 0.16s var(--ol-motion-quick), border-color 0.16s var(--ol-motion-quick), color 0.16s var(--ol-motion-quick)',
+};
+
+const recordingHotkeyControlWidth = 178;
+
+const hotkeyRecorderButtonStyle: CSSProperties = {
+  width: recordingHotkeyControlWidth,
+  height: 32,
+  padding: '0 8px 0 11px',
+  border: '0.5px solid var(--ol-line-strong)',
+  borderRadius: 8,
+  background: 'var(--ol-surface-2)',
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 8,
+  fontFamily: 'var(--ol-font-mono)',
+  fontSize: 12.5,
+  cursor: 'default',
+  transition: 'background 0.16s var(--ol-motion-quick), border-color 0.16s var(--ol-motion-quick), color 0.16s var(--ol-motion-quick)',
+};
+
+const recordingHotkeySegmentedStyle: CSSProperties = {
+  width: recordingHotkeyControlWidth,
+  display: 'inline-flex',
+  padding: 2,
+  borderRadius: 8,
+  background: 'rgba(0,0,0,0.05)',
+};
+
+const recordingHotkeyGroupStyle: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'auto',
+  rowGap: 10,
+  justifyItems: 'start',
+};
+
+const recordingHotkeyLineStyle: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: '64px auto',
+  alignItems: 'center',
+  columnGap: 10,
+};
+
+const recordingHotkeyFieldLabelStyle: CSSProperties = {
+  fontSize: 12,
+  color: 'var(--ol-ink-4)',
+  textAlign: 'right',
+  whiteSpace: 'nowrap',
+};
+
+const recordingHotkeyStatusStyle: CSSProperties = {
+  marginLeft: 74,
+  fontSize: 12,
+  lineHeight: 1.3,
+};
+
+const hotkeyRecorderLabelStyle: CSSProperties = {
+  minWidth: 0,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+};
+
+const hotkeyClearButtonStyle: CSSProperties = {
+  width: 18,
+  height: 18,
+  borderRadius: 999,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  flexShrink: 0,
+  background: 'rgba(0,0,0,0.2)',
+  color: '#fff',
 };
 
 const iconBtnStyle: CSSProperties = {
