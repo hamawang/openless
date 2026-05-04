@@ -645,12 +645,10 @@ pub(crate) fn show_qa_window<R: tauri::Runtime>(app: &AppHandle<R>, content_kind
         });
     }
     #[cfg(target_os = "windows")]
-    {
-        if !show_qa_window_no_activate(&window) {
-            log::warn!("[qa] show_no_activate failed; falling back to window.show()");
-            if let Err(e) = window.show() {
-                log::warn!("[qa] show fallback failed: {e}");
-            }
+    if !show_qa_window_no_activate(&window) {
+        log::warn!("[qa] show_no_activate failed; falling back to window.show()");
+        if let Err(e) = window.show() {
+            log::warn!("[qa] show fallback failed: {e}");
         }
     }
     #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
@@ -703,10 +701,7 @@ pub(crate) fn hide_qa_window<R: tauri::Runtime>(app: &AppHandle<R>) {
 fn show_qa_window_no_activate<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) -> bool {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     use windows::Win32::Foundation::HWND;
-    use windows::Win32::UI::WindowsAndMessaging::{
-        SetWindowPos, ShowWindow, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-        SWP_SHOWWINDOW, SW_SHOWNOACTIVATE,
-    };
+    use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_SHOWNOACTIVATE};
 
     let Ok(handle) = window.window_handle() else {
         return false;
@@ -720,17 +715,6 @@ fn show_qa_window_no_activate<R: tauri::Runtime>(window: &tauri::WebviewWindow<R
     }
 
     let _ = unsafe { ShowWindow(hwnd, SW_SHOWNOACTIVATE) };
-    let _ = unsafe {
-        SetWindowPos(
-            hwnd,
-            HWND_TOPMOST,
-            0,
-            0,
-            0,
-            0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW | SWP_NOACTIVATE,
-        )
-    };
     true
 }
 
