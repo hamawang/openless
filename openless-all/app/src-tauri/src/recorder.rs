@@ -144,6 +144,9 @@ fn run_audio_thread(
     let watchdog_handle = thread::Builder::new()
         .name("openless-recorder-watchdog".into())
         .spawn(move || {
+            // 记录 watchdog 启动时间，确保首次回调截止时间从播放真正开始时计时
+            let watchdog_start_time = std::time::Instant::now();
+
             while !stop_flag_for_watchdog.load(Ordering::SeqCst) {
                 thread::sleep(std::time::Duration::from_millis(WATCHDOG_CHECK_INTERVAL_MS));
 
@@ -165,7 +168,7 @@ fn run_audio_thread(
                     }
                     None => {
                         // 尚未收到首次回调，检查是否超过截止时间
-                        let elapsed = state_for_watchdog.stream_start_time.elapsed();
+                        let elapsed = watchdog_start_time.elapsed();
                         if elapsed.as_secs() > FIRST_CALLBACK_DEADLINE_SECS {
                             log::error!(
                                 "[recorder] watchdog: {} 秒内未收到首次回调，触发错误恢复",
@@ -337,8 +340,6 @@ struct StreamState {
     callback_count: AtomicUsize,
     peak_input_rms_milli: AtomicUsize,
     peak_output_rms_milli: AtomicUsize,
-    /// Stream 启动时间（用于检测"首次回调永远不到达"）
-    stream_start_time: std::time::Instant,
     /// 最后一次成功调用 consumer 的时间戳（用于 liveness 检测）
     last_callback_time: Mutex<Option<std::time::Instant>>,
 }
@@ -351,7 +352,6 @@ impl StreamState {
             callback_count: AtomicUsize::new(0),
             peak_input_rms_milli: AtomicUsize::new(0),
             peak_output_rms_milli: AtomicUsize::new(0),
-            stream_start_time: std::time::Instant::now(),
             // 初始化为 None，只有在第一次回调后才开始计时，避免误报慢启动设备
             last_callback_time: Mutex::new(None),
         }
