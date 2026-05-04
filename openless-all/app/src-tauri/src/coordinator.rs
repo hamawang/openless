@@ -378,6 +378,7 @@ impl Coordinator {
 
     pub fn update_hotkey_binding(&self) {
         self.inner.window_hotkey_pressed_codes.lock().clear();
+        *self.inner.hotkey_last_click_at.lock() = None;
         if let Some(monitor) = self.inner.hotkey.lock().as_ref() {
             monitor.update_binding(self.inner.prefs.get().hotkey);
         }
@@ -706,14 +707,17 @@ fn hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEvent>) {
 async fn handle_pressed_edge(inner: &Arc<Inner>) {
     let was_held = inner.hotkey_trigger_held.load(Ordering::SeqCst);
     if !was_held {
-        if !should_accept_pressed_edge(inner) {
+        let panel_visible = inner.qa_state.lock().panel_visible;
+        if !panel_visible && !should_accept_pressed_edge(inner) {
             return;
+        }
+        if panel_visible {
+            *inner.hotkey_last_click_at.lock() = None;
         }
         if inner.hotkey_trigger_held.swap(true, Ordering::SeqCst) {
             return;
         }
         // 路由：QA 浮窗可见时，rightOption 边沿走 QA；否则走主听写。详见 issue #118 v2。
-        let panel_visible = inner.qa_state.lock().panel_visible;
         if panel_visible {
             handle_qa_option_edge(inner).await;
         } else {
@@ -2858,6 +2862,43 @@ mod tests {
         assert!(!coordinator.inner.hotkey_trigger_held.load(Ordering::SeqCst));
         handle_released_edge(&coordinator.inner).await;
         assert!(!coordinator.inner.hotkey_trigger_held.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn qa_panel_press_bypasses_double_click_gate() {
+        let coordinator = Coordinator::new();
+        coordinator
+            .inner
+            .prefs
+            .set(crate::types::UserPreferences {
+                hotkey: crate::types::HotkeyBinding {
+                    trigger: HotkeyTrigger::RightControl,
+                    mode: HotkeyMode::DoubleClick,
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .unwrap();
+        {
+            let mut qa_state = coordinator.inner.qa_state.lock();
+            qa_state.panel_visible = true;
+            qa_state.phase = QaPhase::Processing;
+        }
+
+        handle_pressed_edge(&coordinator.inner).await;
+
+        assert!(coordinator.inner.hotkey_trigger_held.load(Ordering::SeqCst));
+        assert!(coordinator.inner.hotkey_last_click_at.lock().is_none());
+    }
+
+    #[test]
+    fn hotkey_binding_update_resets_double_click_state() {
+        let coordinator = Coordinator::new();
+        *coordinator.inner.hotkey_last_click_at.lock() = Some(Instant::now());
+
+        coordinator.update_hotkey_binding();
+
+        assert!(coordinator.inner.hotkey_last_click_at.lock().is_none());
     }
 
     #[test]
