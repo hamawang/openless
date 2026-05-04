@@ -10,6 +10,10 @@ import {
   handleWindowHotkeyEvent,
   isTauri,
 } from './lib/ipc';
+import {
+  isWindowHotkeyKeyboardCandidate,
+  windowMouseHotkeyCode,
+} from './lib/windowHotkeyFallback';
 import { QaPanel } from './pages/QaPanel';
 import { HotkeySettingsProvider } from './state/HotkeySettingsContext';
 
@@ -110,7 +114,7 @@ export function App({ isCapsule, isQa }: AppProps) {
   useEffect(() => {
     if (!isTauri || os !== 'win') return;
     const forwardKey = (event: KeyboardEvent) => {
-      if (!isWindowHotkeyCandidate(event)) return;
+      if (!isWindowHotkeyKeyboardCandidate(event)) return;
       void handleWindowHotkeyEvent(
         event.type as 'keydown' | 'keyup',
         event.key,
@@ -118,11 +122,25 @@ export function App({ isCapsule, isQa }: AppProps) {
         event.repeat,
       ).catch(error => console.warn('[window-hotkey] forward failed', error));
     };
+    const forwardMouse = (event: MouseEvent) => {
+      const code = windowMouseHotkeyCode(event.button);
+      if (!code) return;
+      void handleWindowHotkeyEvent(
+        event.type === 'mousedown' ? 'keydown' : 'keyup',
+        code,
+        code,
+        false,
+      ).catch(error => console.warn('[window-hotkey] mouse forward failed', error));
+    };
     window.addEventListener('keydown', forwardKey, true);
     window.addEventListener('keyup', forwardKey, true);
+    window.addEventListener('mousedown', forwardMouse, true);
+    window.addEventListener('mouseup', forwardMouse, true);
     return () => {
       window.removeEventListener('keydown', forwardKey, true);
       window.removeEventListener('keyup', forwardKey, true);
+      window.removeEventListener('mousedown', forwardMouse, true);
+      window.removeEventListener('mouseup', forwardMouse, true);
     };
   }, [os]);
 
@@ -133,16 +151,6 @@ export function App({ isCapsule, isQa }: AppProps) {
     <HotkeySettingsProvider>
       {gate === 'onboarding' ? <Onboarding onComplete={() => setGate('ready')} /> : <FloatingShell />}
     </HotkeySettingsProvider>
-  );
-}
-
-function isWindowHotkeyCandidate(event: KeyboardEvent): boolean {
-  return (
-    event.key === 'Escape' ||
-    event.code === 'ControlRight' ||
-    event.code === 'ControlLeft' ||
-    event.code === 'AltRight' ||
-    event.code === 'MetaRight'
   );
 }
 

@@ -204,6 +204,17 @@ fn is_shift_hotkey_code(code: &str) -> bool {
     matches!(code, "ShiftLeft" | "ShiftRight")
 }
 
+#[cfg(any(target_os = "macos", test))]
+fn dispatch_mac_caps_lock_edge(shared: &Shared, tx: &Sender<HotkeyEvent>) {
+    dispatch_hotkey_code(shared, tx, "CapsLock", true);
+    dispatch_hotkey_code(shared, tx, "CapsLock", false);
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn mac_keycode_uses_modifier_flags(keycode: i64) -> bool {
+    matches!(keycode, 54 | 55 | 56 | 58 | 59 | 60 | 61 | 62 | 63)
+}
+
 pub(crate) fn binding_matches_pressed_codes(
     binding: &HotkeyBinding,
     pressed_codes: &BTreeSet<String>,
@@ -224,9 +235,10 @@ mod platform {
     use std::sync::Arc;
 
     use super::{
-        dispatch_hotkey_code, dispatch_translation_modifier_code, install_error,
-        is_shift_hotkey_code, send_or_log, start_listener_thread, update_shared_binding,
-        HotkeyAdapter, HotkeyEvent, Shared, StartupTx,
+        dispatch_hotkey_code, dispatch_mac_caps_lock_edge, dispatch_translation_modifier_code,
+        install_error, is_shift_hotkey_code, mac_keycode_uses_modifier_flags, send_or_log,
+        start_listener_thread, update_shared_binding, HotkeyAdapter, HotkeyEvent, Shared,
+        StartupTx,
     };
     use crate::types::{HotkeyAdapterKind, HotkeyBinding, HotkeyInstallError};
 
@@ -305,7 +317,6 @@ mod platform {
     const MOUSE_EVENT_BUTTON_NUMBER: CgEventField = 3;
     const KEYBOARD_EVENT_KEYCODE: CgEventField = 9;
 
-    const FLAG_MASK_ALPHA_SHIFT: CgEventFlags = 0x0001_0000;
     const FLAG_MASK_SHIFT: CgEventFlags = 0x0002_0000;
     const FLAG_MASK_CONTROL: CgEventFlags = 0x0004_0000;
     const FLAG_MASK_ALTERNATE: CgEventFlags = 0x0008_0000;
@@ -434,6 +445,10 @@ mod platform {
     fn handle_flags_changed(ctx: &CallbackContext, event: CgEventRef) {
         let flags = unsafe { CGEventGetFlags(event) };
         let keycode = unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) };
+        if keycode == 57 {
+            dispatch_mac_caps_lock_edge(&ctx.shared, &ctx.tx);
+            return;
+        }
         if let Some(code) = mac_keycode_to_hotkey_code(keycode) {
             if is_shift_hotkey_code(code) {
                 // Shift 作为录音热键成员时只参与热键匹配，不再额外切到翻译模式。
@@ -490,10 +505,12 @@ mod platform {
     }
 
     fn mac_keycode_flag_mask(keycode: i64) -> Option<CgEventFlags> {
+        if !mac_keycode_uses_modifier_flags(keycode) {
+            return None;
+        }
         match keycode {
             54 | 55 => Some(FLAG_MASK_COMMAND),
             56 | 60 => Some(FLAG_MASK_SHIFT),
-            57 => Some(FLAG_MASK_ALPHA_SHIFT),
             58 | 61 => Some(FLAG_MASK_ALTERNATE),
             59 | 62 => Some(FLAG_MASK_CONTROL),
             63 => Some(FLAG_MASK_SECONDARY_FN),
@@ -667,6 +684,27 @@ mod tests {
             rx.try_recv(),
             Ok(HotkeyEvent::TranslationModifierPressed)
         ));
+    }
+
+    #[test]
+    fn mac_caps_lock_flags_changed_dispatches_single_key_edge() {
+        let shared = shared_with_binding(HotkeyBinding {
+            trigger: HotkeyTrigger::RightControl,
+            mode: HotkeyMode::Toggle,
+            keys: Some(vec![HotkeyKey::new("CapsLock")]),
+        });
+        let (tx, rx) = mpsc::channel();
+
+        dispatch_mac_caps_lock_edge(&shared, &tx);
+
+        assert!(matches!(rx.try_recv(), Ok(HotkeyEvent::Pressed)));
+        assert!(matches!(rx.try_recv(), Ok(HotkeyEvent::Released)));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn mac_caps_lock_is_not_a_modifier_flag_code() {
+        assert!(!mac_keycode_uses_modifier_flags(57));
     }
 }
 

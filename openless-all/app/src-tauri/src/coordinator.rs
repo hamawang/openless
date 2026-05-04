@@ -911,11 +911,6 @@ async fn handle_window_hotkey_event(
     #[cfg(target_os = "windows")]
     {
         if !window_hotkey_fallback_enabled() {
-            if event_type == "keydown" && !repeat {
-                log::info!(
-                    "[window-hotkey] ignored because Windows lifecycle owner is the low-level hook"
-                );
-            }
             return Ok(());
         }
 
