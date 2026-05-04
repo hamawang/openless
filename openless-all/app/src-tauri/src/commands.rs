@@ -300,6 +300,9 @@ fn asr_transcriptions_url(base_url: &str) -> Result<String, String> {
     if trimmed.ends_with("/audio/transcriptions") {
         return Ok(trimmed.to_string());
     }
+    if trimmed.ends_with("/audio") {
+        return Ok(format!("{trimmed}/transcriptions"));
+    }
     Ok(format!("{trimmed}/audio/transcriptions"))
 }
 
@@ -732,6 +735,10 @@ mod tests {
     fn asr_transcriptions_url_accepts_base_or_transcriptions_endpoint() {
         assert_eq!(
             asr_transcriptions_url("https://api.openai.com/v1").unwrap(),
+            "https://api.openai.com/v1/audio/transcriptions"
+        );
+        assert_eq!(
+            asr_transcriptions_url("https://api.openai.com/v1/audio").unwrap(),
             "https://api.openai.com/v1/audio/transcriptions"
         );
         assert_eq!(
