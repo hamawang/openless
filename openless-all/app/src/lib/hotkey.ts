@@ -1,6 +1,17 @@
 import i18n from '../i18n';
 import type { ComboBinding, HotkeyBinding, HotkeyTrigger, QaHotkeyBinding, ShortcutBinding } from './types';
 
+export function defaultQaShortcut(): ShortcutBinding {
+  return {
+    primary: ';',
+    modifiers: defaultAppShortcutModifiers(),
+  };
+}
+
+export function defaultAppShortcutModifiers(): string[] {
+  return currentPlatform().isMac ? ['cmd', 'shift'] : ['ctrl', 'shift'];
+}
+
 export function getHotkeyTriggerLabel(trigger: HotkeyTrigger | null | undefined): string {
   if (!trigger) return i18n.t('hotkey.fallback');
   if (trigger === 'custom') return i18n.t('hotkey.triggers.custom');
@@ -72,9 +83,10 @@ export function formatComboLabel(binding: ComboBinding | QaHotkeyBinding | Short
   return parts.join(platform.isMac ? '' : '+');
 }
 
-function currentPlatform(): { isMac: boolean; isWindows: boolean } {
-  const platform = navigator.platform || '';
-  const userAgent = navigator.userAgent || '';
+export function currentPlatform(): { isMac: boolean; isWindows: boolean } {
+  const nav = typeof navigator === 'undefined' ? null : navigator;
+  const platform = nav?.platform || '';
+  const userAgent = nav?.userAgent || '';
   return {
     isMac: platform.includes('Mac') || userAgent.includes('Mac'),
     isWindows: platform.includes('Win') || userAgent.includes('Windows'),
@@ -110,7 +122,7 @@ function formatPrimary(primary: string): string {
     return trimmed.toUpperCase();
   }
   // 常见命名键的 macOS 符号
-  const isMac = navigator.platform.includes('Mac') || navigator.userAgent.includes('Mac');
+  const isMac = currentPlatform().isMac;
   if (isMac) {
     switch (trimmed.toLowerCase()) {
       case 'space': return '\u2423';

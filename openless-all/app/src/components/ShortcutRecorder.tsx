@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import { formatComboLabel } from '../lib/hotkey';
+import { currentPlatform, formatComboLabel } from '../lib/hotkey';
 import { setShortcutRecordingActive, validateShortcutBinding } from '../lib/ipc';
 import type { ShortcutBinding } from '../lib/types';
 
@@ -154,7 +154,7 @@ export function ShortcutRecorder({
 
 function modifiersFromKeyboardEvent(e: KeyboardEvent): string[] {
   const modifiers: string[] = [];
-  if (e.metaKey && e.key !== 'Meta') modifiers.push('cmd');
+  if (e.metaKey && e.key !== 'Meta') modifiers.push(currentPlatform().isMac ? 'cmd' : 'super');
   if (e.ctrlKey && e.key !== 'Control') modifiers.push('ctrl');
   if (e.altKey && e.key !== 'Alt') modifiers.push('alt');
   if (e.shiftKey && e.key !== 'Shift') modifiers.push('shift');
@@ -176,6 +176,8 @@ function modifierPrimaryFromCode(code: string, key: string): string {
 }
 
 function primaryFromKeyboardEvent(e: KeyboardEvent): string {
+  const printable = primaryFromPrintableCode(e.code);
+  if (printable) return printable;
   if (e.key.length === 1) return e.key;
   const codeToName: Record<string, string> = {
     Space: 'Space',
@@ -194,4 +196,24 @@ function primaryFromKeyboardEvent(e: KeyboardEvent): string {
   };
   if (/^F\d{1,2}$/.test(e.key)) return e.key;
   return codeToName[e.code] || e.key;
+}
+
+function primaryFromPrintableCode(code: string): string {
+  if (/^Key[A-Z]$/.test(code)) return code.slice(3);
+  if (/^Digit[0-9]$/.test(code)) return code.slice(5);
+  const codeToPrimary: Record<string, string> = {
+    Backquote: '`',
+    Minus: '-',
+    Equal: '=',
+    BracketLeft: '[',
+    BracketRight: ']',
+    Backslash: '\\',
+    Semicolon: ';',
+    Quote: "'",
+    Comma: ',',
+    Period: '.',
+    Slash: '/',
+    IntlBackslash: '\\',
+  };
+  return codeToPrimary[code] || '';
 }

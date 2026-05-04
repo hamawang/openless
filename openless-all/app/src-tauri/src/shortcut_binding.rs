@@ -166,27 +166,27 @@ fn char_to_code(ch: char) -> Option<Code> {
         'X' => Code::KeyX,
         'Y' => Code::KeyY,
         'Z' => Code::KeyZ,
-        '0' => Code::Digit0,
-        '1' => Code::Digit1,
-        '2' => Code::Digit2,
-        '3' => Code::Digit3,
-        '4' => Code::Digit4,
-        '5' => Code::Digit5,
-        '6' => Code::Digit6,
-        '7' => Code::Digit7,
-        '8' => Code::Digit8,
-        '9' => Code::Digit9,
+        '0' | ')' => Code::Digit0,
+        '1' | '!' => Code::Digit1,
+        '2' | '@' => Code::Digit2,
+        '3' | '#' => Code::Digit3,
+        '4' | '$' => Code::Digit4,
+        '5' | '%' => Code::Digit5,
+        '6' | '^' => Code::Digit6,
+        '7' | '&' => Code::Digit7,
+        '8' | '*' => Code::Digit8,
+        '9' | '(' => Code::Digit9,
         ';' | ':' => Code::Semicolon,
-        ',' => Code::Comma,
-        '.' => Code::Period,
-        '/' => Code::Slash,
-        '\\' => Code::Backslash,
-        '[' => Code::BracketLeft,
-        ']' => Code::BracketRight,
-        '\'' => Code::Quote,
-        '`' => Code::Backquote,
-        '-' => Code::Minus,
-        '=' => Code::Equal,
+        ',' | '<' => Code::Comma,
+        '.' | '>' => Code::Period,
+        '/' | '?' => Code::Slash,
+        '\\' | '|' => Code::Backslash,
+        '[' | '{' => Code::BracketLeft,
+        ']' | '}' => Code::BracketRight,
+        '\'' | '"' => Code::Quote,
+        '`' | '~' => Code::Backquote,
+        '-' | '_' => Code::Minus,
+        '=' | '+' => Code::Equal,
         ' ' => Code::Space,
         _ => return None,
     };
@@ -227,5 +227,27 @@ mod tests {
             legacy_modifier_trigger(&binding),
             Some(HotkeyTrigger::RightControl)
         );
+    }
+
+    #[test]
+    fn accepts_shifted_printable_aliases() {
+        let cases = [
+            ("?", Code::Slash),
+            ("!", Code::Digit1),
+            (":", Code::Semicolon),
+            ("+", Code::Equal),
+            ("_", Code::Minus),
+            ("{", Code::BracketLeft),
+            ("|", Code::Backslash),
+        ];
+        for (primary, expected) in cases {
+            let binding = ShortcutBinding {
+                primary: primary.into(),
+                modifiers: vec!["shift".into()],
+            };
+            let parsed = parse_global_hotkey(&binding).expect("shifted printable parses");
+            assert_eq!(parsed.key, expected);
+            assert!(parsed.mods.contains(Modifiers::SHIFT));
+        }
     }
 }

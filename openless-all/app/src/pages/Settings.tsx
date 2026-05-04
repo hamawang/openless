@@ -9,6 +9,7 @@ import { ShortcutRecorder } from '../components/ShortcutRecorder';
 import { isDialogStatus, UpdateDialog, useAutoUpdate } from '../components/AutoUpdate';
 import { APP_VERSION_LABEL } from '../lib/appVersion';
 import { isHotkeyModeMigrationNoticeActive } from '../lib/hotkeyMigration';
+import { defaultQaShortcut } from '../lib/hotkey';
 import {
   checkAccessibilityPermission,
   checkMicrophonePermission,
@@ -36,7 +37,6 @@ import type {
   HotkeyMode,
   HotkeyStatus,
   PermissionStatus,
-  ShortcutBinding,
   WindowsImeStatus,
 } from '../lib/types';
 import { useHotkeySettings } from '../state/HotkeySettingsContext';
@@ -973,13 +973,6 @@ function ShortcutsSection() {
       ))}
     </Card>
   );
-}
-
-function defaultQaShortcut(): ShortcutBinding {
-  const isMac = navigator.platform.includes('Mac') || navigator.userAgent.includes('Mac');
-  return isMac
-    ? { primary: ';', modifiers: ['cmd', 'shift'] }
-    : { primary: ';', modifiers: ['ctrl', 'shift'] };
 }
 
 function PermissionsSection() {

@@ -9,13 +9,14 @@ import { useTranslation } from 'react-i18next';
 import { Card, PageHeader } from './_atoms';
 import { useHotkeySettings } from '../state/HotkeySettingsContext';
 import { setQaHotkey } from '../lib/ipc';
-import { formatComboLabel } from '../lib/hotkey';
+import { defaultQaShortcut, formatComboLabel } from '../lib/hotkey';
 import { ShortcutRecorder } from '../components/ShortcutRecorder';
 
 export function SelectionAsk() {
   const { t } = useTranslation();
   const { prefs, updatePrefs: savePrefs } = useHotkeySettings();
-  const defaultHotkeyLabel = 'Cmd+Shift+;';
+  const defaultQaHotkey = defaultQaShortcut();
+  const defaultHotkeyLabel = formatComboLabel(defaultQaHotkey);
   const recordHotkeyLabel = prefs ? formatComboLabel(prefs.dictationHotkey) : '快捷键';
 
   if (!prefs) {
@@ -79,8 +80,9 @@ export function SelectionAsk() {
           </div>
           <button
             onClick={async () => {
-              await setQaHotkey(enabled ? null : { primary: ';', modifiers: ['cmd', 'shift'] });
-              await savePrefs({ ...prefs, qaHotkey: enabled ? null : { primary: ';', modifiers: ['cmd', 'shift'] } });
+              const nextHotkey = enabled ? null : defaultQaHotkey;
+              await setQaHotkey(nextHotkey);
+              await savePrefs({ ...prefs, qaHotkey: nextHotkey });
             }}
             style={{ fontSize: 12, padding: '5px 14px', background: enabled ? 'rgba(0,0,0,0.06)' : 'var(--ol-blue)', color: enabled ? 'var(--ol-ink-2)' : '#fff', border: 0, borderRadius: 6, fontFamily: 'inherit', fontWeight: 500, cursor: 'default', marginBottom: 10 }}
           >

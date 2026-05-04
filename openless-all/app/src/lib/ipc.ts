@@ -19,6 +19,7 @@ import type {
   VocabPresetStore,
 } from './types';
 import { OL_DATA } from './mockData';
+import { defaultAppShortcutModifiers, defaultQaShortcut, formatComboLabel } from './hotkey';
 
 declare global {
   interface Window {
@@ -54,12 +55,12 @@ const mockSettings: UserPreferences = {
   allowNonTsfInsertionFallback: true,
   workingLanguages: ['简体中文'],
   translationTargetLanguage: '',
-  qaHotkey: { primary: ';', modifiers: ['cmd', 'shift'] },
+  qaHotkey: defaultQaShortcut(),
   qaSaveHistory: false,
   customComboHotkey: null,
   translationHotkey: { primary: 'Shift', modifiers: [] },
-  switchStyleHotkey: { primary: 'S', modifiers: ['cmd', 'shift'] },
-  openAppHotkey: { primary: 'O', modifiers: ['cmd', 'shift'] },
+  switchStyleHotkey: { primary: 'S', modifiers: defaultAppShortcutModifiers() },
+  openAppHotkey: { primary: 'O', modifiers: defaultAppShortcutModifiers() },
 };
 
 const mockHotkeyCapability: HotkeyCapability = {
@@ -293,7 +294,7 @@ export function restartApp(): Promise<void> {
 // 详见 issue #118。后端会发 `qa:state` / `qa:dismiss` 事件；前端通过下面四个
 // 命令查询与控制 QA 浮窗。
 export function getQaHotkeyLabel(): Promise<string> {
-  return invokeOrMock('get_qa_hotkey_label', undefined, () => 'Cmd+Shift+;');
+  return invokeOrMock('get_qa_hotkey_label', undefined, () => formatComboLabel(defaultQaShortcut()));
 }
 
 export function setQaHotkey(binding: QaHotkeyBinding | null): Promise<void> {
