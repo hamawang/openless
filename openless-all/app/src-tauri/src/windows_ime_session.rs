@@ -68,6 +68,10 @@ impl PreparedWindowsImeSession {
     pub fn should_restore_when_active_profile_check_fails(&self) -> bool {
         self.has_saved_profile()
     }
+
+    pub fn activation_failed_with_saved_profile(&self) -> bool {
+        self.has_saved_profile() && !self.openless_was_activated()
+    }
 }
 
 pub struct WindowsImeSessionController {
@@ -140,9 +144,11 @@ impl WindowsImeSessionController {
 
     pub fn restore_session(&self, prepared: PreparedWindowsImeSession) {
         let should_restore = match self.profile_manager.is_openless_profile_active() {
-            Ok(openless_active) => {
-                restore_decision(prepared.saved_profile.as_ref(), openless_active)
-            }
+            Ok(openless_active) => restore_decision(
+                prepared.saved_profile.as_ref(),
+                openless_active,
+                prepared.activation_failed_with_saved_profile(),
+            ),
             Err(error) => {
                 if prepared.should_restore_when_active_profile_check_fails() {
                     log::warn!(
@@ -242,5 +248,6 @@ mod tests {
         assert!(prepared.has_saved_profile());
         assert!(!prepared.openless_was_activated());
         assert!(!prepared.is_ready_for_tsf_submit());
+        assert!(prepared.activation_failed_with_saved_profile());
     }
 }

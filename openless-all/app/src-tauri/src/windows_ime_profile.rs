@@ -77,8 +77,9 @@ pub enum ProfileRestoreDecision {
 pub fn restore_decision(
     saved: Option<&ImeProfileSnapshot>,
     openless_profile_is_current: bool,
+    openless_activation_failed: bool,
 ) -> ProfileRestoreDecision {
-    if saved.is_some() && openless_profile_is_current {
+    if saved.is_some() && (openless_profile_is_current || openless_activation_failed) {
         ProfileRestoreDecision::RestoreSavedProfile
     } else {
         ProfileRestoreDecision::KeepCurrentProfile
@@ -628,7 +629,15 @@ mod tests {
     #[test]
     fn restore_is_required_when_openless_is_active_and_snapshot_exists() {
         assert_eq!(
-            restore_decision(Some(&text_service_snapshot()), true),
+            restore_decision(Some(&text_service_snapshot()), true, false),
+            ProfileRestoreDecision::RestoreSavedProfile
+        );
+    }
+
+    #[test]
+    fn restore_is_required_after_activation_failure_with_snapshot() {
+        assert_eq!(
+            restore_decision(Some(&text_service_snapshot()), false, true),
             ProfileRestoreDecision::RestoreSavedProfile
         );
     }
@@ -636,7 +645,7 @@ mod tests {
     #[test]
     fn restore_is_skipped_when_snapshot_is_missing() {
         assert_eq!(
-            restore_decision(None, true),
+            restore_decision(None, true, true),
             ProfileRestoreDecision::KeepCurrentProfile
         );
     }
@@ -644,7 +653,7 @@ mod tests {
     #[test]
     fn restore_is_skipped_when_user_already_changed_away_from_openless() {
         assert_eq!(
-            restore_decision(Some(&text_service_snapshot()), false),
+            restore_decision(Some(&text_service_snapshot()), false, false),
             ProfileRestoreDecision::KeepCurrentProfile
         );
     }
