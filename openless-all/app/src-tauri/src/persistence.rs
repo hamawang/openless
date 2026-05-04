@@ -734,3 +734,32 @@ impl CredentialsVault {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{list_vocab_presets, save_vocab_presets};
+    use crate::types::VocabPreset;
+    use std::fs;
+    use std::path::PathBuf;
+
+    #[test]
+    fn vocab_presets_roundtrip_json_file() {
+        let tmp: PathBuf = std::env::temp_dir().join(format!("openless-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&tmp).expect("create temp dir");
+        // Linux path helper uses XDG_DATA_HOME first.
+        unsafe {
+            std::env::set_var("XDG_DATA_HOME", &tmp);
+        }
+        let presets = vec![VocabPreset {
+            id: "test".into(),
+            name: "测试".into(),
+            phrases: vec!["PR".into(), "CI".into()],
+        }];
+        save_vocab_presets(&presets).expect("save presets");
+        let loaded = list_vocab_presets().expect("list presets");
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].id, "test");
+        assert_eq!(loaded[0].phrases, vec!["PR".to_string(), "CI".to_string()]);
+        let _ = fs::remove_dir_all(&tmp);
+    }
+}

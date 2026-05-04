@@ -8,6 +8,8 @@ import type { DictionaryEntry, VocabPreset } from '../lib/types';
 import { DEFAULT_VOCAB_PRESETS, loadVocabPresets, persistVocabPresets } from '../lib/vocabPresets';
 import { Btn, Card, PageHeader } from './_atoms';
 
+const NEW_PRESET_DRAFT_ID = '__new__';
+
 export function Vocab() {
   const { t } = useTranslation();
   const [entries, setEntries] = useState<DictionaryEntry[]>([]);
@@ -113,22 +115,19 @@ export function Vocab() {
           .filter(Boolean),
       ),
     );
-    const next = presets.map(p => (p.id === editingPresetId ? { ...p, name, phrases } : p));
+    const next =
+      editingPresetId === NEW_PRESET_DRAFT_ID
+        ? [...presets, { id: `user-${Date.now()}`, name, phrases }]
+        : presets.map(p => (p.id === editingPresetId ? { ...p, name, phrases } : p));
     setPresets(next);
     void persistVocabPresets(next).catch(err => setError(err instanceof Error ? err.message : String(err)));
     setEditingPresetId(null);
   };
 
   const createPreset = () => {
-    const next: VocabPreset = {
-      id: `user-${Date.now()}`,
-      name: t('vocab.presets.newPreset'),
-      phrases: [],
-    };
-    const updated = [...presets, next];
-    setPresets(updated);
-    void persistVocabPresets(updated).catch(err => setError(err instanceof Error ? err.message : String(err)));
-    startEditPreset(next);
+    setEditingPresetId(NEW_PRESET_DRAFT_ID);
+    setPresetNameDraft(t('vocab.presets.newPreset'));
+    setPresetPhrasesDraft('');
   };
 
   const applySelectedPresets = async () => {
