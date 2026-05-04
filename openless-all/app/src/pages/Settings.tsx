@@ -597,10 +597,6 @@ function ProviderTools({ kind, modelAccount, onModelSelected }: { kind: 'llm' | 
         setResult('empty', t('settings.providers.modelMissing'));
         return;
       }
-      if (kind === 'asr' && message === 'asrModelUnavailable') {
-        setResult('empty', t('settings.providers.asrModelUnavailable'));
-        return;
-      }
       if (message === 'modelsEmpty') {
         setResult('empty', t('settings.providers.modelsEmpty'));
         return;
@@ -672,6 +668,14 @@ function providerErrorMessage(error: unknown, t: ReturnType<typeof useTranslatio
   if (message.startsWith('providerHttpStatus:')) {
     return t('settings.providers.providerHttpStatus', { status: message.split(':')[1] || '?' });
   }
+  if (message === 'endpointMustUseHttps') return t('settings.providers.endpointMustUseHttps');
+  if (message === 'endpointInvalid') return t('settings.providers.endpointInvalid');
+  if (message === 'providerResponseTooLarge') return t('settings.providers.responseTooLarge');
+  if (message === 'asrInvalidJson') return t('settings.providers.asrInvalidJson');
+  if (message === 'asrMissingTextField') return t('settings.providers.asrMissingTextField');
+  if (message === 'providerNetworkError') return t('common.networkError');
+  if (message === 'providerReadResponseFailed' || message === 'providerClientInitFailed') return t('common.operationFailed');
+  if (message === 'providerRequestTimeout') return t('settings.providers.requestTimeout');
   if (message.includes('API Key')) return t('settings.providers.apiKeyMissing');
   if (message.includes('Endpoint')) return t('settings.providers.endpointMissing');
   if (message.includes('timeout') || message.includes('超时')) return t('settings.providers.requestTimeout');

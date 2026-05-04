@@ -239,7 +239,8 @@ async fn validate_asr_provider() -> Result<(), String> {
 }
 
 async fn validate_asr_transcription(config: &ProviderConfig, model: &str) -> Result<(), String> {
-    let url = format!("{}/audio/transcriptions", config.base_url.trim_end_matches('/'));
+    const MAX_ASR_VALIDATE_BODY_BYTES: usize = 1024 * 1024;
+    let url = asr_transcriptions_url(&config.base_url)?;
     let wav = encode_wav_16k_mono_silence(250);
     let wav_part = reqwest::multipart::Part::bytes(wav)
         .file_name("openless-asr-check.wav")
@@ -251,7 +252,7 @@ async fn validate_asr_transcription(config: &ProviderConfig, model: &str) -> Res
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(20))
         .build()
-        .map_err(|e| format!("HTTP client 初始化失败: {e}"))?;
+        .map_err(|_| "providerClientInitFailed".to_string())?;
     let response = client
         .post(&url)
         .header("Authorization", format!("Bearer {}", config.api_key))
@@ -260,25 +261,46 @@ async fn validate_asr_transcription(config: &ProviderConfig, model: &str) -> Res
         .await
         .map_err(|e| {
             if e.is_timeout() {
-                "请求超时".to_string()
+                "providerRequestTimeout".to_string()
             } else {
-                format!("网络错误: {e}")
+                "providerNetworkError".to_string()
             }
         })?;
     let status = response.status();
-    let body = response
-        .text()
-        .await
-        .map_err(|e| format!("读取响应失败: {e}"))?;
     if !status.is_success() {
         return Err(format!("providerHttpStatus:{}", status.as_u16()));
     }
-    let json: Value =
-        serde_json::from_str(&body).map_err(|e| format!("转写响应不是有效 JSON: {e}"))?;
+    if let Some(len) = response.content_length() {
+        if len as usize > MAX_ASR_VALIDATE_BODY_BYTES {
+            return Err("providerResponseTooLarge".to_string());
+        }
+    }
+    let body = response
+        .bytes()
+        .await
+        .map_err(|_| "providerReadResponseFailed".to_string())?;
+    if body.len() > MAX_ASR_VALIDATE_BODY_BYTES {
+        return Err("providerResponseTooLarge".to_string());
+    }
+    let json: Value = serde_json::from_slice(&body).map_err(|_| "asrInvalidJson".to_string())?;
     if !json.is_object() || json.get("text").is_none() {
-        return Err("ASR 转写响应缺少 text 字段".to_string());
+        return Err("asrMissingTextField".to_string());
     }
     Ok(())
+}
+
+fn asr_transcriptions_url(base_url: &str) -> Result<String, String> {
+    let trimmed = base_url.trim().trim_end_matches('/');
+    let parsed = reqwest::Url::parse(trimmed).map_err(|_| "endpointInvalid".to_string())?;
+    let host = parsed.host_str().unwrap_or_default();
+    let localhost = host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1";
+    if parsed.scheme() != "https" && !localhost {
+        return Err("endpointMustUseHttps".to_string());
+    }
+    if trimmed.ends_with("/audio/transcriptions") {
+        return Ok(trimmed.to_string());
+    }
+    Ok(format!("{trimmed}/audio/transcriptions"))
 }
 
 fn encode_wav_16k_mono_silence(duration_ms: u32) -> Vec<u8> {
@@ -661,8 +683,8 @@ fn _ensure_snapshot_used(_: CredentialsSnapshot) {}
 #[cfg(test)]
 mod tests {
     use super::{
-        fetch_provider_models, models_url, parse_model_ids, persist_settings, ProviderConfig,
-        SettingsWriter,
+        asr_transcriptions_url, fetch_provider_models, models_url, parse_model_ids,
+        persist_settings, ProviderConfig, SettingsWriter,
     };
     use crate::types::{
         HotkeyBinding, HotkeyMode, HotkeyTrigger, QaHotkeyBinding, UserPreferences,
@@ -703,6 +725,18 @@ mod tests {
         assert_eq!(
             models_url("https://api.openai.com/v1/chat/completions"),
             "https://api.openai.com/v1/models"
+        );
+    }
+
+    #[test]
+    fn asr_transcriptions_url_accepts_base_or_transcriptions_endpoint() {
+        assert_eq!(
+            asr_transcriptions_url("https://api.openai.com/v1").unwrap(),
+            "https://api.openai.com/v1/audio/transcriptions"
+        );
+        assert_eq!(
+            asr_transcriptions_url("https://api.openai.com/v1/audio/transcriptions").unwrap(),
+            "https://api.openai.com/v1/audio/transcriptions"
         );
     }
 
