@@ -155,12 +155,9 @@ pub async fn validate_provider_credentials(kind: String) -> Result<ProviderCheck
         "llm" => validate_llm_provider()
             .await
             .map(|()| ProviderCheckResult { ok: true }),
-        "asr" => {
-            let config = read_openai_provider_config(&kind)?;
-            fetch_provider_models(&config)
-                .await
-                .map(|_| ProviderCheckResult { ok: true })
-        }
+        "asr" => validate_asr_provider()
+            .await
+            .map(|()| ProviderCheckResult { ok: true }),
         _ => Err(format!("unknown provider kind: {kind}")),
     }
 }
@@ -230,6 +227,123 @@ async fn validate_llm_provider() -> Result<(), String> {
             }
             other => other.to_string(),
         })
+}
+
+async fn validate_asr_provider() -> Result<(), String> {
+    let config = read_openai_provider_config("asr")?;
+    let model = CredentialsVault::get(CredentialAccount::AsrModel)
+        .map_err(|e| e.to_string())?
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| "asrModelMissing".to_string())?;
+    validate_asr_transcription(&config, model.trim()).await
+}
+
+async fn validate_asr_transcription(config: &ProviderConfig, model: &str) -> Result<(), String> {
+    const MAX_ASR_VALIDATE_BODY_BYTES: usize = 1024 * 1024;
+    let url = asr_transcriptions_url(&config.base_url)?;
+    let wav = encode_wav_16k_mono_silence(250);
+    let wav_part = reqwest::multipart::Part::bytes(wav)
+        .file_name("openless-asr-check.wav")
+        .mime_str("audio/wav")
+        .map_err(|e| format!("请求体构建失败: {e}"))?;
+    let form = reqwest::multipart::Form::new()
+        .part("file", wav_part)
+        .text("model", model.to_string());
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .build()
+        .map_err(|_| "providerClientInitFailed".to_string())?;
+    let response = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", config.api_key))
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| {
+            if e.is_timeout() {
+                "providerRequestTimeout".to_string()
+            } else {
+                "providerNetworkError".to_string()
+            }
+        })?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("providerHttpStatus:{}", status.as_u16()));
+    }
+    if let Some(len) = response.content_length() {
+        if len as usize > MAX_ASR_VALIDATE_BODY_BYTES {
+            return Err("providerResponseTooLarge".to_string());
+        }
+    }
+    use futures_util::StreamExt;
+    let mut body = Vec::<u8>::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|_| "providerReadResponseFailed".to_string())?;
+        if body.len().saturating_add(chunk.len()) > MAX_ASR_VALIDATE_BODY_BYTES {
+            return Err("providerResponseTooLarge".to_string());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    let json: Value = serde_json::from_slice(&body).map_err(|_| "asrInvalidJson".to_string())?;
+    if !json.is_object() || json.get("text").is_none() {
+        return Err("asrMissingTextField".to_string());
+    }
+    Ok(())
+}
+
+fn asr_transcriptions_url(base_url: &str) -> Result<String, String> {
+    let parsed = reqwest::Url::parse(base_url.trim()).map_err(|_| "endpointInvalid".to_string())?;
+    let host = parsed.host_str().unwrap_or_default();
+    let localhost = host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1";
+    if parsed.scheme() != "https" && !localhost {
+        return Err("endpointMustUseHttps".to_string());
+    }
+
+    // Work on the URL path only so we don't corrupt query parameters.
+    let mut url = parsed.clone();
+    let path = parsed.path().trim_end_matches('/');
+    let next_path = if path.ends_with("/audio/transcriptions") {
+        path.to_string()
+    } else if path.ends_with("/audio") {
+        format!("{path}/transcriptions")
+    } else if let Some(prefix) = path.strip_suffix("/chat/completions") {
+        format!("{prefix}/audio/transcriptions")
+    } else {
+        format!("{path}/audio/transcriptions")
+    };
+    url.set_path(&next_path);
+    Ok(url.to_string())
+}
+
+fn encode_wav_16k_mono_silence(duration_ms: u32) -> Vec<u8> {
+    let sample_rate: u32 = 16_000;
+    let num_channels: u16 = 1;
+    let bits_per_sample: u16 = 16;
+    let bytes_per_sample = (bits_per_sample / 8) as usize;
+    let samples = (sample_rate as usize * duration_ms as usize) / 1000;
+    let pcm_len = samples * bytes_per_sample;
+    let data_size = pcm_len as u32;
+    let byte_rate = sample_rate * num_channels as u32 * bits_per_sample as u32 / 8;
+    let block_align = num_channels * bits_per_sample / 8;
+    let chunk_size = 36 + data_size;
+
+    let mut wav = Vec::with_capacity(44 + pcm_len);
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&chunk_size.to_le_bytes());
+    wav.extend_from_slice(b"WAVE");
+    wav.extend_from_slice(b"fmt ");
+    wav.extend_from_slice(&16u32.to_le_bytes());
+    wav.extend_from_slice(&1u16.to_le_bytes());
+    wav.extend_from_slice(&num_channels.to_le_bytes());
+    wav.extend_from_slice(&sample_rate.to_le_bytes());
+    wav.extend_from_slice(&byte_rate.to_le_bytes());
+    wav.extend_from_slice(&block_align.to_le_bytes());
+    wav.extend_from_slice(&bits_per_sample.to_le_bytes());
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&data_size.to_le_bytes());
+    wav.resize(44 + pcm_len, 0);
+    wav
 }
 
 async fn fetch_provider_models(config: &ProviderConfig) -> Result<Vec<String>, String> {
@@ -582,8 +696,8 @@ fn _ensure_snapshot_used(_: CredentialsSnapshot) {}
 #[cfg(test)]
 mod tests {
     use super::{
-        fetch_provider_models, models_url, parse_model_ids, persist_settings, ProviderConfig,
-        SettingsWriter,
+        asr_transcriptions_url, fetch_provider_models, models_url, parse_model_ids,
+        persist_settings, ProviderConfig, SettingsWriter,
     };
     use crate::types::{
         HotkeyBinding, HotkeyMode, HotkeyTrigger, QaHotkeyBinding, UserPreferences,
@@ -624,6 +738,30 @@ mod tests {
         assert_eq!(
             models_url("https://api.openai.com/v1/chat/completions"),
             "https://api.openai.com/v1/models"
+        );
+    }
+
+    #[test]
+    fn asr_transcriptions_url_accepts_base_or_transcriptions_endpoint() {
+        assert_eq!(
+            asr_transcriptions_url("https://api.openai.com/v1").unwrap(),
+            "https://api.openai.com/v1/audio/transcriptions"
+        );
+        assert_eq!(
+            asr_transcriptions_url("https://api.openai.com/v1/chat/completions").unwrap(),
+            "https://api.openai.com/v1/audio/transcriptions"
+        );
+        assert_eq!(
+            asr_transcriptions_url("https://api.openai.com/v1/audio").unwrap(),
+            "https://api.openai.com/v1/audio/transcriptions"
+        );
+        assert_eq!(
+            asr_transcriptions_url("https://api.openai.com/v1/audio/transcriptions").unwrap(),
+            "https://api.openai.com/v1/audio/transcriptions"
+        );
+        assert_eq!(
+            asr_transcriptions_url("https://api.openai.com/v1?api-version=2024-12-01").unwrap(),
+            "https://api.openai.com/v1/audio/transcriptions?api-version=2024-12-01"
         );
     }
 
