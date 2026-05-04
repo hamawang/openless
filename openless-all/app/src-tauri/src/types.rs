@@ -346,6 +346,9 @@ fn legacy_trigger_code(trigger: HotkeyTrigger) -> &'static str {
         HotkeyTrigger::RightControl => "ControlRight",
         HotkeyTrigger::LeftControl => "ControlLeft",
         HotkeyTrigger::RightCommand => "MetaRight",
+        #[cfg(target_os = "windows")]
+        HotkeyTrigger::Fn => "ControlRight",
+        #[cfg(not(target_os = "windows"))]
         HotkeyTrigger::Fn => "Fn",
     }
 }
@@ -658,6 +661,15 @@ mod tests {
 
         assert_eq!(binding.effective_codes(), vec!["ControlRight".to_string()]);
         assert_eq!(binding.display_label(), "右 Control");
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn legacy_fn_trigger_uses_windows_control_right_alias() {
+        let binding: HotkeyBinding =
+            serde_json::from_str(r#"{"trigger":"fn","mode":"toggle"}"#).unwrap();
+
+        assert_eq!(binding.effective_codes(), vec!["ControlRight".to_string()]);
     }
 
     #[test]
