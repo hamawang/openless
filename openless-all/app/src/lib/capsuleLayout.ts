@@ -11,6 +11,7 @@ export interface CapsulePillMetrics {
 export interface CapsuleHostMetrics {
   width: number;
   height: number;
+  horizontalInset: number;
   bottomInset: number;
   badgeGap: number;
 }
@@ -35,9 +36,17 @@ export function getCapsuleHostMetrics(
   translationActive: boolean,
 ): CapsuleHostMetrics {
   if (os === 'win') {
-    return { width: 220, height: translationActive ? 118 : 84, bottomInset: 12, badgeGap: 8 };
+    const horizontalInset = 12;
+    const pill = getCapsulePillMetrics(os);
+    return {
+      width: pill.width + horizontalInset * 2,
+      height: translationActive ? 118 : 84,
+      horizontalInset,
+      bottomInset: 12,
+      badgeGap: 8,
+    };
   }
-  return { width: 176, height: 42, bottomInset: 0, badgeGap: 8 };
+  return { width: 176, height: 42, horizontalInset: 0, bottomInset: 0, badgeGap: 8 };
 }
 
 export function getCapsuleMessageLayout(
