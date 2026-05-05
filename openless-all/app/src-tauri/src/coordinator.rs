@@ -98,6 +98,20 @@ struct SessionState {
     front_app: Option<String>,
 }
 
+struct SharedRecordingMuteState {
+    guard: Option<crate::audio_mute::AudioMuteGuard>,
+    holders: u32,
+}
+
+impl SharedRecordingMuteState {
+    fn new() -> Self {
+        Self {
+            guard: None,
+            holders: 0,
+        }
+    }
+}
+
 impl Default for SessionState {
     fn default() -> Self {
         Self {
@@ -132,7 +146,7 @@ struct Inner {
     /// 释放时机由 prefs.local_asr_keep_loaded_secs 决定。
     local_asr_cache: Arc<crate::asr::local::LocalAsrCache>,
     recorder: Mutex<Option<SessionResource<Recorder>>>,
-    recording_mute: Mutex<Option<crate::audio_mute::AudioMuteGuard>>,
+    recording_mute: Mutex<SharedRecordingMuteState>,
     hotkey: Mutex<Option<HotkeyMonitor>>,
     hotkey_status: Mutex<HotkeyStatus>,
     hotkey_trigger_held: AtomicBool,
@@ -153,8 +167,6 @@ struct Inner {
     qa_asr: Mutex<Option<Arc<VolcengineStreamingASR>>>,
     /// QA 用的 Recorder 句柄。
     qa_recorder: Mutex<Option<Recorder>>,
-    /// QA 录音期间的系统输出静音 guard。
-    qa_recording_mute: Mutex<Option<crate::audio_mute::AudioMuteGuard>>,
     /// QA SSE 流取消标志。begin_qa_session 重置为 false；cancel_qa_session 设 true；
     /// polish::chat_completion_history_streaming 的 loop 每帧检查，true 时 break loop
     /// 避免取消后 LLM 仍 drain HTTP body 烧 token。详见 issue #161。
@@ -230,7 +242,7 @@ impl Coordinator {
                 state: Mutex::new(SessionState::default()),
                 asr: Mutex::new(None),
                 recorder: Mutex::new(None),
-                recording_mute: Mutex::new(None),
+                recording_mute: Mutex::new(SharedRecordingMuteState::new()),
                 hotkey: Mutex::new(None),
                 hotkey_status: Mutex::new(HotkeyStatus::default()),
                 hotkey_trigger_held: AtomicBool::new(false),
@@ -240,7 +252,6 @@ impl Coordinator {
                 capsule_layout: Mutex::new(None),
                 qa_asr: Mutex::new(None),
                 qa_recorder: Mutex::new(None),
-                qa_recording_mute: Mutex::new(None),
                 qa_stream_cancelled: Arc::new(AtomicBool::new(false)),
                 local_asr_cache: Arc::new(crate::asr::local::LocalAsrCache::new()),
             }),
@@ -878,45 +889,37 @@ fn store_recorder_for_session(inner: &Arc<Inner>, session_id: u64, recorder: Rec
     *inner.recorder.lock() = Some(SessionResource::new(session_id, recorder));
 }
 
-fn activate_recording_mute(inner: &Arc<Inner>) {
-    if !inner.prefs.get().mute_during_recording || inner.recording_mute.lock().is_some() {
+fn acquire_recording_mute(inner: &Arc<Inner>, owner: &str) {
+    if !inner.prefs.get().mute_during_recording {
         return;
     }
-    match crate::audio_mute::AudioMuteGuard::activate() {
-        Ok(guard) => {
-            *inner.recording_mute.lock() = Some(guard);
-            log::info!("[audio-mute] system output muted for dictation recording");
-        }
-        Err(err) => {
-            log::warn!("[audio-mute] failed to mute output for dictation: {err}");
+    let mut mute = inner.recording_mute.lock();
+    if mute.holders == 0 {
+        match crate::audio_mute::AudioMuteGuard::activate() {
+            Ok(guard) => {
+                mute.guard = Some(guard);
+                log::info!("[audio-mute] system output muted for recording");
+            }
+            Err(err) => {
+                log::warn!("[audio-mute] failed to mute output for {owner}: {err}");
+                return;
+            }
         }
     }
+    mute.holders = mute.holders.saturating_add(1);
+    log::info!("[audio-mute] acquired by {owner}; holders={}", mute.holders);
 }
 
-fn restore_recording_mute(inner: &Arc<Inner>) {
-    if inner.recording_mute.lock().take().is_some() {
-        log::info!("[audio-mute] system output mute restored for dictation");
-    }
-}
-
-fn activate_qa_recording_mute(inner: &Arc<Inner>) {
-    if !inner.prefs.get().mute_during_recording || inner.qa_recording_mute.lock().is_some() {
+fn release_recording_mute(inner: &Arc<Inner>, owner: &str) {
+    let mut mute = inner.recording_mute.lock();
+    if mute.holders == 0 {
         return;
     }
-    match crate::audio_mute::AudioMuteGuard::activate() {
-        Ok(guard) => {
-            *inner.qa_recording_mute.lock() = Some(guard);
-            log::info!("[audio-mute] system output muted for QA recording");
-        }
-        Err(err) => {
-            log::warn!("[audio-mute] failed to mute output for QA: {err}");
-        }
-    }
-}
-
-fn restore_qa_recording_mute(inner: &Arc<Inner>) {
-    if inner.qa_recording_mute.lock().take().is_some() {
-        log::info!("[audio-mute] system output mute restored for QA");
+    mute.holders -= 1;
+    log::info!("[audio-mute] released by {owner}; holders={}", mute.holders);
+    if mute.holders == 0 {
+        mute.guard.take();
+        log::info!("[audio-mute] system output mute restored after recording");
     }
 }
 
@@ -924,7 +927,7 @@ fn stop_qa_recorder(inner: &Arc<Inner>) {
     if let Some(rec) = inner.qa_recorder.lock().take() {
         rec.stop();
     }
-    restore_qa_recording_mute(inner);
+    release_recording_mute(inner, "qa");
 }
 
 fn take_recorder_for_session(inner: &Arc<Inner>, session_id: u64) -> Option<Recorder> {
@@ -935,7 +938,7 @@ fn take_recorder_for_session(inner: &Arc<Inner>, session_id: u64) -> Option<Reco
 fn stop_recorder_for_session(inner: &Arc<Inner>, session_id: u64) {
     if let Some(recorder) = take_recorder_for_session(inner, session_id) {
         recorder.stop();
-        restore_recording_mute(inner);
+        release_recording_mute(inner, "dictation");
     }
 }
 
@@ -957,7 +960,7 @@ fn stop_recorder_if_pending_start_stop(inner: &Arc<Inner>) {
     }
     if let Some(rec) = take_recorder_for_session(inner, session_id) {
         rec.stop();
-        restore_recording_mute(inner);
+        release_recording_mute(inner, "dictation");
         let elapsed = inner.state.lock().started_at.elapsed().as_millis() as u64;
         emit_capsule(inner, CapsuleState::Transcribing, 0.0, elapsed, None, None);
         log::info!("[coord] stopped recorder while ASR is still connecting");
@@ -1291,7 +1294,7 @@ fn start_recorder_for_starting(
         );
     });
 
-    activate_recording_mute(inner);
+    acquire_recording_mute(inner, "dictation");
     match Recorder::start(consumer, level_handler) {
         Ok((rec, runtime_errors)) => {
             store_recorder_for_session(inner, session_id, rec);
@@ -1311,7 +1314,7 @@ fn start_recorder_for_starting(
                 None,
             );
             restore_prepared_windows_ime_session(inner, session_id);
-            restore_recording_mute(inner);
+            release_recording_mute(inner, "dictation");
             inner.state.lock().phase = SessionPhase::Idle;
             schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
             return Err(e.to_string());
@@ -1497,7 +1500,7 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
 
     if let Some(rec) = take_recorder_for_session(inner, current_session_id) {
         rec.stop();
-        restore_recording_mute(inner);
+        release_recording_mute(inner, "dictation");
     }
 
     let asr_opt = take_asr_for_session(inner, current_session_id);
@@ -2559,7 +2562,7 @@ async fn begin_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
         );
     });
 
-    activate_qa_recording_mute(inner);
+    acquire_recording_mute(inner, "qa");
     match Recorder::start(consumer, level_handler) {
         Ok((rec, runtime_errors)) => {
             *inner.qa_recorder.lock() = Some(rec);
@@ -2570,7 +2573,7 @@ async fn begin_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
         Err(e) => {
             log::error!("[coord] QA recorder start failed: {e}");
             inner.qa_asr.lock().take();
-            restore_qa_recording_mute(inner);
+            release_recording_mute(inner, "qa");
             finish_qa_with_error(inner, format!("录音启动失败: {e}"));
             return Err(e.to_string());
         }
