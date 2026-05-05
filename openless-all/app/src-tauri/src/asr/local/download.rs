@@ -201,7 +201,11 @@ impl DownloadManager {
         };
 
         let manager = Arc::clone(self);
-        tokio::spawn(async move {
+        // 用 tauri::async_runtime::spawn 而不是 tokio::spawn ——
+        // Tauri 同步 command 不在 tokio runtime 上下文里，调 tokio::spawn 会立刻
+        // panic("there is no reactor running, must be called from the context of a Tokio 1.x runtime")。
+        // tauri::async_runtime 走 Tauri 持有的 runtime handle，不依赖调用方上下文。
+        tauri::async_runtime::spawn(async move {
             let result = run_download(&app, model_id, mirror, &flag).await;
             manager.cancel_flags.lock().remove(&key);
             match result {

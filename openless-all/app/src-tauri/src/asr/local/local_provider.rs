@@ -65,8 +65,11 @@ impl LocalQwenAsr {
         }));
 
         // qwen_transcribe_stream 是阻塞调用；用 spawn_blocking 防止占住 tokio runtime。
+        // 用 tauri::async_runtime::spawn_blocking 而非 tokio 的 —— 同 download.rs 注释，
+        // 走 Tauri 持有的 runtime handle，不依赖调用方上下文（虽然这里目前都在 async 路径上调，
+        // 但保持一致更稳）。
         let engine = Arc::clone(&self.engine);
-        let text = tokio::task::spawn_blocking(move || engine.transcribe_stream(&samples_f32))
+        let text = tauri::async_runtime::spawn_blocking(move || engine.transcribe_stream(&samples_f32))
             .await
             .context("transcribe spawn_blocking join 失败")?
             .context("qwen_transcribe_stream 失败")?;
