@@ -137,7 +137,7 @@ export function Translation() {
           <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10 }}>{t('translation.howto.title')}</div>
           <ol style={{ margin: 0, paddingLeft: 18, fontSize: 12.5, color: 'var(--ol-ink-2)', lineHeight: 1.7 }}>
             <li>{t('translation.howto.step1', { trigger: triggerLabel })}</li>
-            <li>{t('translation.howto.step2')}</li>
+            <li>{t('translation.howto.step2', { trigger: triggerLabel })}</li>
             <li>{t('translation.howto.step3')}</li>
             <li>{t('translation.howto.step4')}</li>
             <li>{t('translation.howto.step5')}</li>
