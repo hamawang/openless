@@ -52,6 +52,7 @@ const mockSettings: UserPreferences = {
   workingLanguages: ['简体中文'],
   translationTargetLanguage: '',
   chineseScriptPreference: 'auto',
+  outputLanguagePreference: 'auto',
   qaHotkey: { primary: ';', modifiers: ['cmd', 'shift'] },
   qaSaveHistory: false,
   localAsrActiveModel: 'qwen3-asr-0.6b',

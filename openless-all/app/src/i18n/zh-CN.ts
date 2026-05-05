@@ -401,6 +401,8 @@ export const zhCN = {
       zh: '简体中文',
       zhTW: '繁體中文',
       en: 'English',
+      ja: '日本語',
+      ko: '한국어',
       restartHint: '部分原生菜单（系统托盘等）可能需要重启 App 才会切换。',
     },
     about: {

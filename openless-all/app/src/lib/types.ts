@@ -122,6 +122,8 @@ export interface UserPreferences {
   translationTargetLanguage: string;
   /** 中文输出字形偏好：由界面语言（简/繁）自动同步，不单独暴露设置项。 */
   chineseScriptPreference: 'auto' | 'simplified' | 'traditional';
+  /** 最终输出语言偏好：由界面语言自动同步，不单独暴露设置项。 */
+  outputLanguagePreference: 'auto' | 'zhCn' | 'zhTw' | 'en' | 'ja' | 'ko';
   /** 划词语音问答快捷键。null = 未启用。详见 issue #118。 */
   qaHotkey: QaHotkeyBinding | null;
   /** 是否把 Q&A 历史写到本地存档。详见 issue #118。 */

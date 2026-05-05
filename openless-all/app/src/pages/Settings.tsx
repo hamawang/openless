@@ -38,6 +38,7 @@ import { useHotkeySettings } from '../state/HotkeySettingsContext';
 import i18n, {
   FOLLOW_SYSTEM,
   getLocalePreference,
+  outputPrefsForLocale,
   setLocalePreference,
   type SupportedLocale,
 } from '../i18n';
@@ -1098,11 +1099,15 @@ function LanguageSection() {
   const apply = async (next: SupportedLocale | typeof FOLLOW_SYSTEM) => {
     setPref(next);
     const resolved = await setLocalePreference(next);
-    const chineseScriptPreference =
-      resolved === 'zh-CN' ? 'simplified' : resolved === 'zh-TW' ? 'traditional' : 'auto';
+    const localePrefs = outputPrefsForLocale(resolved);
     await updatePrefs(current => {
-      if (current.chineseScriptPreference === chineseScriptPreference) return current;
-      return { ...current, chineseScriptPreference };
+      if (
+        current.chineseScriptPreference === localePrefs.chineseScriptPreference &&
+        current.outputLanguagePreference === localePrefs.outputLanguagePreference
+      ) {
+        return current;
+      }
+      return { ...current, ...localePrefs };
     });
   };
 
@@ -1120,6 +1125,8 @@ function LanguageSection() {
           <option value="zh-CN">{t('settings.language.zh')}</option>
           <option value="zh-TW">{t('settings.language.zhTW')}</option>
           <option value="en">{t('settings.language.en')}</option>
+          <option value="ja">{t('settings.language.ja')}</option>
+          <option value="ko">{t('settings.language.ko')}</option>
         </select>
       </SettingRow>
       <div style={{ fontSize: 11, color: 'var(--ol-ink-4)', marginTop: 8, lineHeight: 1.6 }}>

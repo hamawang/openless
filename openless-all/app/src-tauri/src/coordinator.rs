@@ -32,7 +32,8 @@ use crate::recorder::{Recorder, RecorderError};
 use crate::selection::{capture_selection, SelectionContext};
 use crate::types::{
     CapsulePayload, CapsuleState, ChineseScriptPreference, DictationSession, HotkeyCapability,
-    HotkeyMode, HotkeyStatus, HotkeyStatusState, InsertStatus, PolishMode,
+    HotkeyMode, HotkeyStatus, HotkeyStatusState, InsertStatus, OutputLanguagePreference,
+    PolishMode,
 };
 #[cfg(target_os = "windows")]
 use crate::windows_ime_ipc::ImeSubmitTarget;
@@ -477,6 +478,7 @@ impl Coordinator {
         let prefs = self.inner.prefs.get();
         let working_languages = prefs.working_languages;
         let chinese_script_preference = prefs.chinese_script_preference;
+        let output_language_preference = prefs.output_language_preference;
         // repolish 是历史记录里手动重新润色，不再绑定原 session 的前台 app；
         // 当下用户调起的 app 才是相关上下文（如果可拿）。
         let front_app = capture_frontmost_app();
@@ -486,6 +488,7 @@ impl Coordinator {
             &hotwords,
             &working_languages,
             chinese_script_preference,
+            output_language_preference,
             front_app.as_deref(),
         )
         .await
@@ -1645,6 +1648,7 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     let hotword_strs = enabled_phrases(inner);
     let working_languages = prefs.working_languages.clone();
     let chinese_script_preference = prefs.chinese_script_preference;
+    let output_language_preference = prefs.output_language_preference;
     let front_app = inner.state.lock().front_app.clone();
     let translation_target = prefs.translation_target_language.trim().to_string();
     let translation_active =
@@ -1661,6 +1665,7 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
             &translation_target,
             &working_languages,
             chinese_script_preference,
+            output_language_preference,
             front_app.as_deref(),
         )
         .await
@@ -1671,6 +1676,7 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
             &hotword_strs,
             &working_languages,
             chinese_script_preference,
+            output_language_preference,
             front_app.as_deref(),
         )
         .await
@@ -2216,6 +2222,7 @@ async fn polish_or_passthrough(
     hotwords: &[String],
     working_languages: &[String],
     chinese_script_preference: ChineseScriptPreference,
+    output_language_preference: OutputLanguagePreference,
     front_app: Option<&str>,
 ) -> (String, Option<String>) {
     if mode == PolishMode::Raw {
@@ -2227,6 +2234,7 @@ async fn polish_or_passthrough(
         hotwords,
         working_languages,
         chinese_script_preference,
+        output_language_preference,
         front_app,
     )
     .await
@@ -2246,6 +2254,7 @@ async fn polish_text(
     hotwords: &[String],
     working_languages: &[String],
     chinese_script_preference: ChineseScriptPreference,
+    output_language_preference: OutputLanguagePreference,
     front_app: Option<&str>,
 ) -> anyhow::Result<String> {
     let api_key = CredentialsVault::get(CredentialAccount::ArkApiKey)?.unwrap_or_default();
@@ -2267,6 +2276,7 @@ async fn polish_text(
             hotwords,
             working_languages,
             chinese_script_preference,
+            output_language_preference,
             front_app,
         )
         .await?)
@@ -2278,6 +2288,7 @@ async fn translate_or_passthrough(
     target_language: &str,
     working_languages: &[String],
     chinese_script_preference: ChineseScriptPreference,
+    output_language_preference: OutputLanguagePreference,
     front_app: Option<&str>,
 ) -> (String, Option<String>) {
     match translate_text(
@@ -2285,6 +2296,7 @@ async fn translate_or_passthrough(
         target_language,
         working_languages,
         chinese_script_preference,
+        output_language_preference,
         front_app,
     )
     .await
@@ -2303,6 +2315,7 @@ async fn translate_text(
     target_language: &str,
     working_languages: &[String],
     chinese_script_preference: ChineseScriptPreference,
+    output_language_preference: OutputLanguagePreference,
     front_app: Option<&str>,
 ) -> anyhow::Result<String> {
     let api_key = CredentialsVault::get(CredentialAccount::ArkApiKey)?.unwrap_or_default();
@@ -2323,6 +2336,7 @@ async fn translate_text(
             target_language,
             working_languages,
             chinese_script_preference,
+            output_language_preference,
             front_app,
         )
         .await?)
@@ -2651,6 +2665,7 @@ async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
     let prefs = inner.prefs.get();
     let working_languages = prefs.working_languages.clone();
     let chinese_script_preference = prefs.chinese_script_preference;
+    let output_language_preference = prefs.output_language_preference;
     let (messages_for_llm, front_app) = {
         let st = inner.qa_state.lock();
         (st.messages.clone(), st.front_app.clone())
@@ -2690,6 +2705,7 @@ async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
         &messages_for_llm,
         &working_languages,
         chinese_script_preference,
+        output_language_preference,
         front_app.as_deref(),
         on_delta,
         should_cancel,
@@ -2838,6 +2854,7 @@ async fn answer_chat_dispatch<F, C>(
     messages: &[crate::types::QaChatMessage],
     working_languages: &[String],
     chinese_script_preference: ChineseScriptPreference,
+    output_language_preference: OutputLanguagePreference,
     front_app: Option<&str>,
     on_delta: F,
     should_cancel: C,
@@ -2862,6 +2879,7 @@ where
             messages,
             working_languages,
             chinese_script_preference,
+            output_language_preference,
             front_app,
             on_delta,
             should_cancel,

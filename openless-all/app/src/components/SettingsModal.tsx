@@ -14,6 +14,7 @@ import { openExternal } from '../lib/ipc';
 import {
   FOLLOW_SYSTEM,
   getLocalePreference,
+  outputPrefsForLocale,
   setLocalePreference,
   type SupportedLocale,
 } from '../i18n';
@@ -318,11 +319,15 @@ function LanguagePicker() {
   const apply = async (next: SupportedLocale | typeof FOLLOW_SYSTEM) => {
     setPref(next);
     const resolved = await setLocalePreference(next);
-    const chineseScriptPreference =
-      resolved === 'zh-CN' ? 'simplified' : resolved === 'zh-TW' ? 'traditional' : 'auto';
+    const localePrefs = outputPrefsForLocale(resolved);
     await updatePrefs(current => {
-      if (current.chineseScriptPreference === chineseScriptPreference) return current;
-      return { ...current, chineseScriptPreference };
+      if (
+        current.chineseScriptPreference === localePrefs.chineseScriptPreference &&
+        current.outputLanguagePreference === localePrefs.outputLanguagePreference
+      ) {
+        return current;
+      }
+      return { ...current, ...localePrefs };
     });
   };
 
@@ -343,6 +348,8 @@ function LanguagePicker() {
       <option value="zh-CN">{t('settings.language.zh')}</option>
       <option value="zh-TW">{t('settings.language.zhTW')}</option>
       <option value="en">{t('settings.language.en')}</option>
+      <option value="ja">{t('settings.language.ja')}</option>
+      <option value="ko">{t('settings.language.ko')}</option>
     </select>
   );
 }

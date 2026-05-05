@@ -33,6 +33,18 @@ pub enum ChineseScriptPreference {
     Traditional,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum OutputLanguagePreference {
+    #[default]
+    Auto,
+    ZhCn,
+    ZhTw,
+    En,
+    Ja,
+    Ko,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum InsertStatus {
@@ -131,6 +143,10 @@ pub struct UserPreferences {
     /// 由前端「界面语言」选择同步驱动（简体/繁体），详见 issue #259。
     #[serde(default)]
     pub chinese_script_preference: ChineseScriptPreference,
+    /// 最终输出语言偏好（不额外暴露为 UI 开关）：
+    /// 由前端「界面语言」选择同步驱动：zh-CN/zh-TW/en/ja/ko，其他为 Auto。
+    #[serde(default)]
+    pub output_language_preference: OutputLanguagePreference,
     /// 划词语音问答（QA）的全局快捷键。`None` = 关闭功能；`Some(...)` 时
     /// coordinator 用 global-hotkey crate 注册组合键（modifier + 主键）。
     /// 默认 Cmd+Shift+; (macOS) / Ctrl+Shift+; (Windows)。详见 issue #118。
@@ -194,6 +210,7 @@ impl Default for UserPreferences {
             working_languages: default_working_languages(),
             translation_target_language: String::new(),
             chinese_script_preference: ChineseScriptPreference::Auto,
+            output_language_preference: OutputLanguagePreference::Auto,
             qa_hotkey: default_qa_hotkey(),
             qa_save_history: false,
             local_asr_active_model: default_local_asr_model(),

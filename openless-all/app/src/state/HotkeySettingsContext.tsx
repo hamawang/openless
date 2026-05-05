@@ -10,7 +10,7 @@ import {
 } from 'react';
 import { getHotkeyCapability, getSettings, setSettings } from '../lib/ipc';
 import type { HotkeyBinding, HotkeyCapability, UserPreferences } from '../lib/types';
-import i18n from '../i18n';
+import i18n, { outputPrefsForLocale, type SupportedLocale } from '../i18n';
 
 interface HotkeySettingsContextValue {
   prefs: UserPreferences | null;
@@ -64,19 +64,29 @@ export function HotkeySettingsProvider({ children }: { children: ReactNode }) {
     const currentPrefs = latestPrefsRef.current;
     if (!currentPrefs) return;
     const lang = (i18n.resolvedLanguage || i18n.language || '').toLowerCase();
-    const nextScript: UserPreferences['chineseScriptPreference'] =
+    const resolvedLocale: SupportedLocale =
       lang.startsWith('zh-tw') || lang.includes('hant')
-        ? 'traditional'
+        ? 'zh-TW'
         : lang.startsWith('zh-cn') || lang.startsWith('zh')
-          ? 'simplified'
-          : 'auto';
-    if (currentPrefs.chineseScriptPreference === nextScript) return;
-    const merged = { ...currentPrefs, chineseScriptPreference: nextScript };
+          ? 'zh-CN'
+          : lang.startsWith('ja')
+            ? 'ja'
+            : lang.startsWith('ko')
+              ? 'ko'
+              : 'en';
+    const nextLocalePrefs = outputPrefsForLocale(resolvedLocale);
+    if (
+      currentPrefs.chineseScriptPreference === nextLocalePrefs.chineseScriptPreference &&
+      currentPrefs.outputLanguagePreference === nextLocalePrefs.outputLanguagePreference
+    ) {
+      return;
+    }
+    const merged = { ...currentPrefs, ...nextLocalePrefs };
     latestPrefsRef.current = merged;
     setPrefs(merged);
-    void queueSetSettings(current => ({ ...current, chineseScriptPreference: nextScript })).catch(
+    void queueSetSettings(current => ({ ...current, ...nextLocalePrefs })).catch(
       error => {
-        console.warn('[settings] sync chineseScriptPreference failed', error);
+        console.warn('[settings] sync locale output preferences failed', error);
       },
     );
   }, [prefs, queueSetSettings]);
