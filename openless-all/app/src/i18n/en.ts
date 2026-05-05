@@ -533,6 +533,7 @@ export const en: typeof zhCN = {
     activeBadge: 'In use',
     downloadedBadge: 'Downloaded',
     download: 'Download',
+    resume: 'Resume',
     cancel: 'Cancel',
     delete: 'Delete',
     setActive: 'Set as default',

@@ -343,7 +343,11 @@ function ModelRow({
   const downloadedBytes = progress?.bytesDownloaded ?? model.downloadedBytes;
   const totalBytes = progress?.bytesTotal ?? remoteSize?.totalBytes ?? 0;
   const ratio = totalBytes > 0 ? Math.min(1, downloadedBytes / totalBytes) : 0;
-  const showProgress = isDownloading || progress?.phase === 'failed' || progress?.phase === 'cancelled';
+  // 进度条要保留：有 partial 残留（downloadedBytes>0 但未完整）就一直显示，
+  // 让用户看到上次下到哪里了，再点下载会从那里续。
+  const hasPartial = !model.isDownloaded && model.downloadedBytes > 0;
+  const showProgress =
+    isDownloading || progress?.phase === 'failed' || progress?.phase === 'cancelled' || hasPartial;
 
   const sizeLabel = remoteSize?.loading
     ? t('localAsr.sizeLoading')
@@ -427,13 +431,20 @@ function ModelRow({
               {t('localAsr.cancel')}
             </Btn>
           ) : (
-            <Btn
-              variant="primary"
-              size="sm"
-              disabled={disabled || !engineAvailable}
-              onClick={onDownload}>
-              {t('localAsr.download')}
-            </Btn>
+            <>
+              <Btn
+                variant="primary"
+                size="sm"
+                disabled={disabled || !engineAvailable}
+                onClick={onDownload}>
+                {hasPartial ? t('localAsr.resume') : t('localAsr.download')}
+              </Btn>
+              {hasPartial && (
+                <Btn variant="ghost" size="sm" disabled={disabled} onClick={onDelete}>
+                  {t('localAsr.delete')}
+                </Btn>
+              )}
+            </>
           )}
         </div>
       </div>

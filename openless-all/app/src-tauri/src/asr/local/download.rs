@@ -1,17 +1,17 @@
-//! Qwen3-ASR 模型下载管理。
+//! Qwen3-ASR 模型下载管理 —— 并发分块 + 断点续传。
 //!
-//! 流程：
-//!   1. GET `<mirror>/api/models/<repo>/tree/main` 拿真实文件清单 + 尺寸
-//!   2. 过滤掉 .gitattributes / README 等非权重文件
-//!   3. 串行下载每个文件 → `.partial` → 原子 rename
-//!   4. 全部成功后写哨兵 `.openless-asr-ready` 标记完整
-//!
-//! 取消：每个 chunk 边界检查 `AtomicBool`；失败 / 取消保留 `.partial`，
-//! 下次以 HTTP `Range` 头续传（与 antirez `download_model.sh` 行为对齐）。
+//! 设计要点（与 huggingface_hub / aria2 / hf_transfer 同款）：
+//! - **HTTP Range 分块**：32 MB 一块，避免长连接被 CDN 中途踢
+//! - **N 并发**：4 个 worker 同时下不同 range，绕过 HF CDN 单连接限速
+//! - **sparse 文件 + seek+write**：每块知道自己的 offset 直接写到位
+//! - **`.partial.idx` 哨兵**：每完成一块原子追加索引；下次只下未完成的块
+//! - **per-chunk retry**：4 次指数退避（1s/4s/16s）
+//! - **服务端忽略 Range 返回 200 防御**：检测到非 206 直接 fail，让 retry 处理
+//! - **取消尊重**：每块边界 + 每流块边界检查 AtomicBool
 
-use std::collections::HashMap;
-use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -19,7 +19,7 @@ use futures_util::StreamExt;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 
 use super::models::{model_dir, ModelId, READY_SENTINEL};
 
@@ -27,9 +27,7 @@ use super::models::{model_dir, ModelId, READY_SENTINEL};
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum Mirror {
-    /// 国外官方源 `huggingface.co`
     Huggingface,
-    /// 国内镜像 `hf-mirror.com`（社区维护，非官方但稳定）
     HfMirror,
 }
 
@@ -62,7 +60,6 @@ impl Mirror {
     }
 }
 
-/// 远端单个文件描述（来自 HF tree API）。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteFile {
@@ -88,11 +85,8 @@ struct HfTreeEntry {
     size: Option<u64>,
 }
 
-/// 拉远端文件清单（HF tree API）。供下载流程 + 前端"查看模型大小"按钮共用。
 pub async fn fetch_remote_info(model_id: ModelId, mirror: Mirror) -> Result<RemoteInfo> {
-    let client = reqwest::Client::builder()
-        .build()
-        .context("build reqwest client failed")?;
+    let client = build_client()?;
     let files = fetch_file_list(&client, model_id.hf_repo(), mirror).await?;
     let total_bytes = files.iter().map(|f| f.size).sum();
     Ok(RemoteInfo {
@@ -135,8 +129,6 @@ async fn fetch_file_list(
     Ok(files)
 }
 
-/// 是否保留下载？过滤 docs / git-attribute / 图片。
-/// 白名单：模型权重 / 配置 / 词表用到的所有真实扩展名。
 fn keep_file(path: &str) -> bool {
     if path.starts_with('.') {
         return false;
@@ -151,7 +143,6 @@ fn keep_file(path: &str) -> bool {
     matches!(ext, "json" | "safetensors" | "txt" | "bin" | "model" | "tiktoken")
 }
 
-/// 进度事件 payload；前端按 `model_id` 过滤。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DownloadProgress {
@@ -177,7 +168,7 @@ pub enum DownloadPhase {
 
 #[derive(Default)]
 pub struct DownloadManager {
-    cancel_flags: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    cancel_flags: Mutex<std::collections::HashMap<String, Arc<AtomicBool>>>,
 }
 
 impl DownloadManager {
@@ -185,8 +176,6 @@ impl DownloadManager {
         Self::default()
     }
 
-    /// 启动一次下载；同一模型并发调只接受第一次（直到上一次结束/取消）。
-    /// 立即返回；进度通过 Tauri 事件流上报。
     pub fn start(self: &Arc<Self>, app: AppHandle, model_id: ModelId, mirror: Mirror) {
         let key = model_id.as_str().to_string();
         let flag = {
@@ -201,12 +190,8 @@ impl DownloadManager {
         };
 
         let manager = Arc::clone(self);
-        // 用 tauri::async_runtime::spawn 而不是 tokio::spawn ——
-        // Tauri 同步 command 不在 tokio runtime 上下文里，调 tokio::spawn 会立刻
-        // panic("there is no reactor running, must be called from the context of a Tokio 1.x runtime")。
-        // tauri::async_runtime 走 Tauri 持有的 runtime handle，不依赖调用方上下文。
         tauri::async_runtime::spawn(async move {
-            let result = run_download(&app, model_id, mirror, &flag).await;
+            let result = run_download(&app, model_id, mirror, Arc::clone(&flag)).await;
             manager.cancel_flags.lock().remove(&key);
             match result {
                 Ok(()) => log::info!("[local-asr] download finished: {key}"),
@@ -218,6 +203,9 @@ impl DownloadManager {
     pub fn cancel(&self, model_id: ModelId) {
         if let Some(flag) = self.cancel_flags.lock().get(model_id.as_str()) {
             flag.store(true, Ordering::SeqCst);
+            log::info!("[local-asr] cancel requested for {}", model_id.as_str());
+        } else {
+            log::info!("[local-asr] cancel requested for {} but no active download", model_id.as_str());
         }
     }
 
@@ -226,31 +214,29 @@ impl DownloadManager {
     }
 }
 
+fn build_client() -> Result<reqwest::Client> {
+    // native-tls (macOS=SecureTransport) 不像 rustls 那样把 CDN unclean close
+    // 当致命错误。User-Agent 是 HF 反滥用必看的字段。
+    reqwest::Client::builder()
+        .use_native_tls()
+        .user_agent(concat!("openless/", env!("CARGO_PKG_VERSION")))
+        .connect_timeout(std::time::Duration::from_secs(30))
+        .pool_idle_timeout(std::time::Duration::from_secs(60))
+        .build()
+        .context("build reqwest client failed")
+}
+
 async fn run_download(
     app: &AppHandle,
     model_id: ModelId,
     mirror: Mirror,
-    cancel: &AtomicBool,
+    cancel: Arc<AtomicBool>,
 ) -> Result<()> {
     let dir = model_dir(model_id)?;
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("create model dir failed: {}", dir.display()))?;
 
-    // 用 native-tls (macOS = SecureTransport) 而非 rustls：HuggingFace 的 LFS CDN
-    // 经常不发 TLS close_notify 就关 TCP，rustls 0.22+ 把这当致命 unexpected_eof。
-    // SecureTransport 对 unclean close 容错。(Volcengine WebSocket 继续走 rustls。)
-    //
-    // 关键：必须发 User-Agent。HF 把 no-UA 流量算异常，可能限速 / 强制断流。
-    // pool_idle_timeout 短一点，避免复用已被 CDN 关掉的连接造成 EOF。
-    let client = reqwest::Client::builder()
-        .use_native_tls()
-        .user_agent(concat!("openless/", env!("CARGO_PKG_VERSION")))
-        .connect_timeout(std::time::Duration::from_secs(30))
-        .pool_idle_timeout(std::time::Duration::from_secs(15))
-        .build()
-        .context("build reqwest client failed")?;
-
-    // 第一步：拉真实文件清单 + 尺寸（不再硬编码）。
+    let client = build_client()?;
     let info = match fetch_remote_info(model_id, mirror).await {
         Ok(i) => i,
         Err(e) => {
@@ -303,15 +289,50 @@ async fn run_download(
             bytes_done_before_current += file.size;
             continue;
         }
+
         let url = format!(
             "{}/{}/resolve/main/{}",
             mirror.base_url(),
             model_id.hf_repo(),
             file.path
         );
-        // download_one 内部用 Range 把文件切成 32MB 分块，每块独立 retry。
-        // 这样 CDN 中途断流只丢一个 chunk，不丢整个 1.7GB 文件。
-        let result = download_one(&client, &url, &dest, file.size, cancel, |file_bytes| {
+
+        // per-file 进度回调：内部传"该文件已下字节"，加 bytes_done_before_current
+        // 算总进度。Arc<dyn Fn> 让多个并发任务共享同一个 emitter。
+        let app_for_cb = app.clone();
+        let model_id_str = model_id.as_str().to_string();
+        let file_path = file.path.clone();
+        let on_progress: Arc<dyn Fn(u64) + Send + Sync> = Arc::new(move |bytes_in_file| {
+            let _ = app_for_cb.emit(
+                "local-asr-download-progress",
+                DownloadProgress {
+                    model_id: model_id_str.clone(),
+                    file: file_path.clone(),
+                    file_index: idx,
+                    file_count,
+                    bytes_downloaded: bytes_done_before_current + bytes_in_file,
+                    bytes_total: total_bytes,
+                    phase: DownloadPhase::Progress,
+                    error: None,
+                },
+            );
+        });
+
+        let result = download_one(
+            &client,
+            &url,
+            &dest,
+            file.size,
+            Arc::clone(&cancel),
+            on_progress,
+        )
+        .await;
+
+        if cancel.load(Ordering::SeqCst) {
+            emit_cancelled(app, model_id, &file.path, idx, file_count, total_bytes);
+            return Ok(());
+        }
+        if let Err(e) = result {
             emit(
                 app,
                 DownloadProgress {
@@ -319,42 +340,17 @@ async fn run_download(
                     file: file.path.clone(),
                     file_index: idx,
                     file_count,
-                    bytes_downloaded: bytes_done_before_current + file_bytes,
+                    bytes_downloaded: super::models::downloaded_bytes(model_id),
                     bytes_total: total_bytes,
-                    phase: DownloadPhase::Progress,
-                    error: None,
+                    phase: DownloadPhase::Failed,
+                    error: Some(format!("{e:#}")),
                 },
             );
-        })
-        .await;
-        match result {
-            Ok(()) => {
-                bytes_done_before_current += file.size;
-            }
-            Err(e) => {
-                if cancel.load(Ordering::SeqCst) {
-                    emit_cancelled(app, model_id, &file.path, idx, file_count, total_bytes);
-                    return Ok(());
-                }
-                emit(
-                    app,
-                    DownloadProgress {
-                        model_id: model_id.as_str().into(),
-                        file: file.path.clone(),
-                        file_index: idx,
-                        file_count,
-                        bytes_downloaded: super::models::downloaded_bytes(model_id),
-                        bytes_total: total_bytes,
-                        phase: DownloadPhase::Failed,
-                        error: Some(format!("{e:#}")),
-                    },
-                );
-                return Err(e);
-            }
+            return Err(e);
         }
+        bytes_done_before_current += file.size;
     }
 
-    // 全部成功 → 写哨兵 → is_downloaded 返回 true。
     let sentinel = dir.join(READY_SENTINEL);
     std::fs::write(&sentinel, b"")
         .with_context(|| format!("write sentinel failed: {}", sentinel.display()))?;
@@ -375,118 +371,215 @@ async fn run_download(
     Ok(())
 }
 
-/// 下载单个文件到 `dest` —— **HTTP Range 分块**模式。
-///
-/// 关键：
-/// - 分块大小 32 MB；HF CDN 对几秒内完成的小请求容错好，对几分钟的长连接经常踢
-/// - 每块 4 次 retry，指数退避 1s/4s/16s，每次都从 .partial 真实长度续传
-/// - 如果服务端忽略 Range 返回 200（HF 偶尔，非常少见）→ 截断 .partial 重头来
-/// - 失败 / 取消时保留 .partial，下次续传不重头
+const CHUNK_SIZE: u64 = 32 * 1024 * 1024;
+const PARALLEL: usize = 4;
+const PER_CHUNK_ATTEMPTS: u32 = 4;
+
 async fn download_one(
     client: &reqwest::Client,
     url: &str,
     dest: &Path,
     total_size: u64,
-    cancel: &AtomicBool,
-    mut on_progress: impl FnMut(u64),
+    cancel: Arc<AtomicBool>,
+    on_progress: Arc<dyn Fn(u64) + Send + Sync>,
 ) -> Result<()> {
-    const CHUNK_SIZE: u64 = 32 * 1024 * 1024;
-    const PER_CHUNK_ATTEMPTS: u32 = 4;
-
     let partial = dest.with_extension("partial");
-    if let Some(parent) = partial.parent() {
-        std::fs::create_dir_all(parent).ok();
+    let idx_path = partial.with_extension("partial.idx");
+
+    // 文件大小未知（HF 没给 size）→ 退化为单连接整文件下，行为同最早的实现
+    if total_size == 0 {
+        return single_stream_download(client, url, dest, cancel, on_progress).await;
     }
 
-    // 已有 partial 比远端文件还大 = 上次下了被换掉的旧版本，从头来
-    let initial = std::fs::metadata(&partial).map(|m| m.len()).unwrap_or(0);
-    if initial > total_size && total_size > 0 {
-        std::fs::remove_file(&partial).ok();
-    }
-
-    loop {
+    // 远端文件 ≤ 一个 chunk 大小：直接单 chunk，不走 sparse + idx
+    if total_size <= CHUNK_SIZE {
+        let result = chunk_with_retry(
+            client, url, &partial, 0, total_size - 1, &cancel, &on_progress,
+        )
+        .await;
         if cancel.load(Ordering::SeqCst) {
             anyhow::bail!("cancelled");
         }
+        result?;
+        finalize(&partial, dest, &idx_path).await?;
+        return Ok(());
+    }
 
-        let downloaded = std::fs::metadata(&partial).map(|m| m.len()).unwrap_or(0);
-        if downloaded >= total_size && total_size > 0 {
-            break;
-        }
+    // 1. 计算 chunk 计划
+    let chunks: Vec<(usize, u64, u64)> = chunk_plan(total_size);
+    let total_chunks = chunks.len();
 
-        let chunk_end = if total_size > 0 {
-            (downloaded + CHUNK_SIZE - 1).min(total_size - 1)
-        } else {
-            // 极少数情况：HF 没给 size。退化为单连接整文件下（旧行为）。
-            u64::MAX
-        };
+    // 2. 读已完成的 chunk 索引
+    let done_set = read_idx(&idx_path);
 
-        let chunk_result = download_chunk(
-            client,
-            url,
-            &partial,
-            downloaded,
-            chunk_end,
-            total_size,
-            cancel,
-            PER_CHUNK_ATTEMPTS,
-            &mut on_progress,
-        )
-        .await;
-        if let Err(e) = chunk_result {
-            // 检查是否还是有进展（哪怕这块没下完）
-            let new_downloaded = std::fs::metadata(&partial).map(|m| m.len()).unwrap_or(0);
-            if new_downloaded > downloaded {
-                log::warn!(
-                    "[local-asr] chunk failed but advanced {}→{}; loop will retry remainder",
-                    downloaded,
-                    new_downloaded
-                );
-                continue;
+    // 3. 预先把 .partial 撑到最终大小（sparse 文件，holes = 零字节）
+    if !partial.exists() || std::fs::metadata(&partial).map(|m| m.len()).unwrap_or(0) != total_size {
+        let f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .open(&partial)
+            .with_context(|| format!("create partial failed: {}", partial.display()))?;
+        f.set_len(total_size)
+            .with_context(|| format!("set_len partial failed: {}", partial.display()))?;
+    }
+
+    // 4. 总计已下字节（用于初始化进度）
+    let initial_done: u64 = chunks
+        .iter()
+        .filter(|(i, _, _)| done_set.contains(i))
+        .map(|(_, s, e)| e - s + 1)
+        .sum();
+    let bytes_in_file = Arc::new(AtomicU64::new(initial_done));
+    on_progress(initial_done);
+
+    // 5. 调度 N 并发 worker
+    let remaining: Vec<(usize, u64, u64)> = chunks
+        .into_iter()
+        .filter(|(i, _, _)| !done_set.contains(i))
+        .collect();
+
+    if remaining.is_empty() {
+        finalize(&partial, dest, &idx_path).await?;
+        return Ok(());
+    }
+
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(PARALLEL));
+    let idx_path_arc = Arc::new(idx_path.clone());
+    let partial_arc = Arc::new(partial.clone());
+    let url_arc: Arc<str> = Arc::from(url);
+    let client = client.clone();
+    let mut futs = futures_util::stream::FuturesUnordered::new();
+
+    for (chunk_idx, start, end) in remaining {
+        let permit_owned = Arc::clone(&semaphore);
+        let client = client.clone();
+        let url_arc = Arc::clone(&url_arc);
+        let partial_arc = Arc::clone(&partial_arc);
+        let idx_path_arc = Arc::clone(&idx_path_arc);
+        let cancel = Arc::clone(&cancel);
+        let bytes_in_file = Arc::clone(&bytes_in_file);
+        let on_progress = Arc::clone(&on_progress);
+
+        futs.push(tauri::async_runtime::spawn(async move {
+            let _permit = match permit_owned.acquire_owned().await {
+                Ok(p) => p,
+                Err(_) => return Err(anyhow::anyhow!("semaphore closed")),
+            };
+            let result = chunk_with_retry_seek(
+                &client,
+                &url_arc,
+                &partial_arc,
+                start,
+                end,
+                &cancel,
+                &bytes_in_file,
+                &on_progress,
+            )
+            .await;
+            if result.is_ok() {
+                if let Err(e) = append_idx(&idx_path_arc, chunk_idx) {
+                    log::warn!("[local-asr] append .partial.idx failed: {e:#}");
+                }
             }
-            return Err(e);
+            result
+        }));
+    }
+
+    let mut first_err: Option<anyhow::Error> = None;
+    while let Some(joined) = futs.next().await {
+        match joined {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                if first_err.is_none() {
+                    first_err = Some(e);
+                }
+            }
+            Err(e) => {
+                if first_err.is_none() {
+                    first_err = Some(anyhow::anyhow!("join: {e}"));
+                }
+            }
         }
     }
 
-    tokio::fs::rename(&partial, dest)
-        .await
-        .with_context(|| format!("rename partial → final failed: {}", dest.display()))?;
+    if cancel.load(Ordering::SeqCst) {
+        anyhow::bail!("cancelled");
+    }
+    if let Some(e) = first_err {
+        return Err(e);
+    }
+
+    // 6. 校验 + 落盘
+    let actual = std::fs::metadata(&partial).map(|m| m.len()).unwrap_or(0);
+    if actual != total_size {
+        anyhow::bail!("downloaded size {actual} != expected {total_size}");
+    }
+    finalize(&partial, dest, &idx_path).await?;
     Ok(())
 }
 
-/// 单个 chunk 的 HTTP Range 请求 + retry。
-async fn download_chunk(
+fn chunk_plan(total: u64) -> Vec<(usize, u64, u64)> {
+    let mut v = Vec::new();
+    let mut s = 0u64;
+    let mut idx = 0usize;
+    while s < total {
+        let e = (s + CHUNK_SIZE - 1).min(total - 1);
+        v.push((idx, s, e));
+        s = e + 1;
+        idx += 1;
+    }
+    v
+}
+
+fn read_idx(path: &Path) -> HashSet<usize> {
+    let content = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(_) => return HashSet::new(),
+    };
+    content
+        .lines()
+        .filter_map(|l| l.trim().parse::<usize>().ok())
+        .collect()
+}
+
+fn append_idx(path: &Path, idx: usize) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+    writeln!(f, "{idx}")
+}
+
+async fn finalize(partial: &Path, dest: &Path, idx_path: &Path) -> Result<()> {
+    tokio::fs::rename(partial, dest)
+        .await
+        .with_context(|| format!("rename partial → final failed: {}", dest.display()))?;
+    let _ = std::fs::remove_file(idx_path);
+    Ok(())
+}
+
+/// 单 chunk + per-chunk retry。append 模式（一次性写到底，给小文件路径）。
+async fn chunk_with_retry(
     client: &reqwest::Client,
     url: &str,
     partial: &Path,
     range_start: u64,
     range_end: u64,
-    total_size: u64,
     cancel: &AtomicBool,
-    max_attempts: u32,
-    on_progress: &mut impl FnMut(u64),
+    on_progress: &Arc<dyn Fn(u64) + Send + Sync>,
 ) -> Result<()> {
     let mut last_err: Option<anyhow::Error> = None;
-    for attempt in 1..=max_attempts {
+    for attempt in 1..=PER_CHUNK_ATTEMPTS {
         if cancel.load(Ordering::SeqCst) {
             anyhow::bail!("cancelled");
         }
-        // 每次重新计算 .partial 真实长度，万一上一次请求写了一些再失败的，我们顺势接续
-        let cur = std::fs::metadata(partial).map(|m| m.len()).unwrap_or(0);
-        let try_start = cur.max(range_start);
-        if try_start > range_end {
-            return Ok(());
-        }
-
-        match try_download_range(client, url, partial, try_start, range_end, total_size, cancel, on_progress).await {
+        match try_download_range_append(client, url, partial, range_start, range_end, cancel, on_progress).await {
             Ok(()) => return Ok(()),
             Err(e) => {
                 let msg = format!("{e:#}");
                 last_err = Some(e);
-                if attempt < max_attempts {
+                if attempt < PER_CHUNK_ATTEMPTS && !cancel.load(Ordering::SeqCst) {
                     let backoff = std::time::Duration::from_secs(1u64 << (2 * (attempt - 1)));
                     log::warn!(
-                        "[local-asr] chunk [{try_start}-{range_end}] attempt {attempt}/{max_attempts} failed: {msg}; sleep {:?}",
+                        "[local-asr] small-file chunk attempt {attempt}/{PER_CHUNK_ATTEMPTS} failed: {msg}; sleep {:?}",
                         backoff
                     );
                     tokio::time::sleep(backoff).await;
@@ -494,46 +587,29 @@ async fn download_chunk(
             }
         }
     }
-    Err(last_err.unwrap_or_else(|| anyhow::anyhow!("download_chunk failed after {max_attempts} attempts")))
+    Err(last_err.unwrap_or_else(|| anyhow::anyhow!("chunk failed after {PER_CHUNK_ATTEMPTS} attempts")))
 }
 
-async fn try_download_range(
+async fn try_download_range_append(
     client: &reqwest::Client,
     url: &str,
     partial: &Path,
     range_start: u64,
     range_end: u64,
-    total_size: u64,
     cancel: &AtomicBool,
-    on_progress: &mut impl FnMut(u64),
+    on_progress: &Arc<dyn Fn(u64) + Send + Sync>,
 ) -> Result<()> {
     let mut req = client.get(url);
-    if total_size > 0 {
-        req = req.header("Range", format!("bytes={range_start}-{range_end}"));
-    } else if range_start > 0 {
-        req = req.header("Range", format!("bytes={range_start}-"));
-    }
-    let resp = req
-        .send()
-        .await
-        .with_context(|| format!("HTTP GET {url} failed"))?;
-
+    req = req.header("Range", format!("bytes={range_start}-{range_end}"));
+    let resp = req.send().await.with_context(|| format!("HTTP GET {url} failed"))?;
     let status = resp.status();
-    let is_partial = status.as_u16() == 206;
-    let is_full_ok = status.as_u16() == 200;
-    if !is_partial && !is_full_ok {
+    if status.as_u16() != 200 && status.as_u16() != 206 {
         anyhow::bail!("HTTP {status} for {url}");
     }
-
-    // 服务端忽略了 Range 返回 200 + 全文件：会污染 .partial，需要先截断从头来。
-    if is_full_ok && range_start > 0 {
-        log::warn!(
-            "[local-asr] server ignored Range (got 200 not 206) for {url}; truncating partial and restarting"
-        );
+    if status.as_u16() == 200 && range_start > 0 {
         let _ = std::fs::remove_file(partial);
     }
-
-    let effective_start = if is_full_ok { 0 } else { range_start };
+    let effective_start = if status.as_u16() == 200 { 0 } else { range_start };
 
     let mut file = tokio::fs::OpenOptions::new()
         .create(true)
@@ -555,6 +631,130 @@ async fn try_download_range(
         on_progress(effective_start + written);
     }
     file.flush().await.ok();
+    Ok(())
+}
+
+/// 大文件并发版：seek 到 chunk 起点写入，**不**append。`bytes_in_file`
+/// 是跨所有并发任务累加的总进度。
+async fn chunk_with_retry_seek(
+    client: &reqwest::Client,
+    url: &str,
+    partial: &Path,
+    range_start: u64,
+    range_end: u64,
+    cancel: &AtomicBool,
+    bytes_in_file: &Arc<AtomicU64>,
+    on_progress: &Arc<dyn Fn(u64) + Send + Sync>,
+) -> Result<()> {
+    let mut last_err: Option<anyhow::Error> = None;
+    for attempt in 1..=PER_CHUNK_ATTEMPTS {
+        if cancel.load(Ordering::SeqCst) {
+            anyhow::bail!("cancelled");
+        }
+        match try_download_range_seek(client, url, partial, range_start, range_end, cancel, bytes_in_file, on_progress).await {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                let msg = format!("{e:#}");
+                last_err = Some(e);
+                if attempt < PER_CHUNK_ATTEMPTS && !cancel.load(Ordering::SeqCst) {
+                    let backoff = std::time::Duration::from_secs(1u64 << (2 * (attempt - 1)));
+                    log::warn!(
+                        "[local-asr] chunk [{range_start}-{range_end}] attempt {attempt}/{PER_CHUNK_ATTEMPTS} failed: {msg}; sleep {:?}",
+                        backoff
+                    );
+                    tokio::time::sleep(backoff).await;
+                }
+            }
+        }
+    }
+    Err(last_err.unwrap_or_else(|| anyhow::anyhow!("chunk [{range_start}-{range_end}] failed after {PER_CHUNK_ATTEMPTS} attempts")))
+}
+
+async fn try_download_range_seek(
+    client: &reqwest::Client,
+    url: &str,
+    partial: &Path,
+    range_start: u64,
+    range_end: u64,
+    cancel: &AtomicBool,
+    bytes_in_file: &Arc<AtomicU64>,
+    on_progress: &Arc<dyn Fn(u64) + Send + Sync>,
+) -> Result<()> {
+    let resp = client
+        .get(url)
+        .header("Range", format!("bytes={range_start}-{range_end}"))
+        .send()
+        .await
+        .with_context(|| format!("HTTP GET {url} failed"))?;
+
+    let status = resp.status();
+    // 并发 seek 模式严格要求 206。服务端忽略 Range 返回 200 + 全文件会
+    // 把整个文件写到 range_start 偏移导致灾难性后果，此时直接 fail，
+    // 让外层 retry 再试一次。
+    if status.as_u16() != 206 {
+        anyhow::bail!("expected HTTP 206 Partial Content for ranged GET, got {status}");
+    }
+
+    let mut file = tokio::fs::OpenOptions::new()
+        .write(true)
+        .create(false) // 文件已经被 set_len 创建好了，这里仅写入
+        .open(partial)
+        .await
+        .with_context(|| format!("open partial for seek failed: {}", partial.display()))?;
+    file.seek(std::io::SeekFrom::Start(range_start))
+        .await
+        .with_context(|| format!("seek to {range_start} failed"))?;
+
+    let mut stream = resp.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        if cancel.load(Ordering::SeqCst) {
+            file.flush().await.ok();
+            anyhow::bail!("cancelled");
+        }
+        let bytes = chunk.context("read stream chunk failed")?;
+        file.write_all(&bytes).await.context("write chunk failed")?;
+        let new_total = bytes_in_file.fetch_add(bytes.len() as u64, Ordering::Relaxed) + bytes.len() as u64;
+        on_progress(new_total);
+    }
+    file.flush().await.ok();
+    Ok(())
+}
+
+/// total_size 未知时的退化路径：单 GET 整文件。HF 给的 size 几乎总是有，
+/// 这条只是保险。
+async fn single_stream_download(
+    client: &reqwest::Client,
+    url: &str,
+    dest: &Path,
+    cancel: Arc<AtomicBool>,
+    on_progress: Arc<dyn Fn(u64) + Send + Sync>,
+) -> Result<()> {
+    let partial = PathBuf::from(dest).with_extension("partial");
+    let resp = client.get(url).send().await?;
+    let status = resp.status();
+    if !status.is_success() {
+        anyhow::bail!("HTTP {status} for {url}");
+    }
+    let mut file = tokio::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&partial)
+        .await?;
+    let mut stream = resp.bytes_stream();
+    let mut total: u64 = 0;
+    while let Some(chunk) = stream.next().await {
+        if cancel.load(Ordering::SeqCst) {
+            anyhow::bail!("cancelled");
+        }
+        let bytes = chunk?;
+        file.write_all(&bytes).await?;
+        total += bytes.len() as u64;
+        on_progress(total);
+    }
+    file.flush().await.ok();
+    drop(file);
+    tokio::fs::rename(&partial, dest).await?;
     Ok(())
 }
 

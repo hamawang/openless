@@ -531,6 +531,7 @@ export const zhCN = {
     activeBadge: '当前使用',
     downloadedBadge: '已下载',
     download: '下载',
+    resume: '继续下载',
     cancel: '取消',
     delete: '删除',
     setActive: '设为默认',
