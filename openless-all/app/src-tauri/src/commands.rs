@@ -610,6 +610,9 @@ pub fn set_qa_hotkey(
         }
     }
     let mut prefs = coord.prefs().get();
+    if let Some(binding) = binding.as_ref() {
+        reject_dictation_qa_hotkey_overlap(&prefs.dictation_hotkey, binding)?;
+    }
     prefs.qa_hotkey = binding;
     coord.prefs().set(prefs).map_err(|e| e.to_string())?;
     coord.update_qa_hotkey_binding();
@@ -644,6 +647,9 @@ pub fn set_dictation_hotkey(
     crate::shortcut_binding::validate_binding(&binding).map_err(|e| e.to_string())?;
     reject_bare_shift_dictation_shortcut(&binding)?;
     let mut prefs = coord.prefs().get();
+    if let Some(qa_hotkey) = prefs.qa_hotkey.as_ref() {
+        reject_dictation_qa_hotkey_overlap(&binding, qa_hotkey)?;
+    }
     prefs.dictation_hotkey = binding;
     coord.prefs().set(prefs).map_err(|e| e.to_string())?;
     coord.update_hotkey_binding();
@@ -722,6 +728,9 @@ pub fn set_combo_hotkey(coord: CoordinatorState<'_>, binding: ComboBinding) -> R
     };
     reject_bare_shift_dictation_shortcut(&shortcut)?;
     crate::combo_hotkey::validate_binding(&shortcut).map_err(|e| e.to_string())?;
+    if let Some(qa_hotkey) = prefs.qa_hotkey.as_ref() {
+        reject_dictation_qa_hotkey_overlap(&shortcut, qa_hotkey)?;
+    }
     prefs.custom_combo_hotkey = Some(binding);
     prefs.dictation_hotkey = shortcut;
     prefs.hotkey.trigger = crate::types::HotkeyTrigger::Custom;
@@ -736,6 +745,34 @@ fn reject_bare_shift_dictation_shortcut(binding: &ShortcutBinding) -> Result<(),
         return Err("Shift 单键目前只能用于翻译快捷键".into());
     }
     Ok(())
+}
+
+fn reject_dictation_qa_hotkey_overlap(
+    dictation: &ShortcutBinding,
+    qa: &ShortcutBinding,
+) -> Result<(), String> {
+    if shortcut_bindings_overlap(dictation, qa) {
+        return Err("QA 快捷键不能和听写快捷键相同".into());
+    }
+    Ok(())
+}
+
+fn shortcut_bindings_overlap(left: &ShortcutBinding, right: &ShortcutBinding) -> bool {
+    let left_legacy = crate::shortcut_binding::legacy_modifier_trigger(left);
+    let right_legacy = crate::shortcut_binding::legacy_modifier_trigger(right);
+    match (left_legacy, right_legacy) {
+        (Some(left), Some(right)) => left == right,
+        (Some(_), None) | (None, Some(_)) => false,
+        (None, None) => {
+            let Ok(left) = crate::shortcut_binding::parse_global_hotkey(left) else {
+                return false;
+            };
+            let Ok(right) = crate::shortcut_binding::parse_global_hotkey(right) else {
+                return false;
+            };
+            left == right
+        }
+    }
 }
 
 // ─────────────────────────── unused but exported (silences dead_code) ───────────────────────────
@@ -863,6 +900,50 @@ mod tests {
             super::reject_bare_shift_dictation_shortcut(&binding),
             Err("Shift 单键目前只能用于翻译快捷键".into())
         );
+    }
+
+    #[test]
+    fn dictation_qa_overlap_rejects_same_modifier_only_binding() {
+        let binding = ShortcutBinding {
+            primary: "RightControl".into(),
+            modifiers: vec![],
+        };
+
+        assert_eq!(
+            super::reject_dictation_qa_hotkey_overlap(&binding, &binding),
+            Err("QA 快捷键不能和听写快捷键相同".into())
+        );
+    }
+
+    #[test]
+    fn dictation_qa_overlap_rejects_same_combo_binding() {
+        let dictation = ShortcutBinding {
+            primary: ";".into(),
+            modifiers: vec!["ctrl".into(), "shift".into()],
+        };
+        let qa = ShortcutBinding {
+            primary: ";".into(),
+            modifiers: vec!["control".into(), "shift".into()],
+        };
+
+        assert_eq!(
+            super::reject_dictation_qa_hotkey_overlap(&dictation, &qa),
+            Err("QA 快捷键不能和听写快捷键相同".into())
+        );
+    }
+
+    #[test]
+    fn dictation_qa_overlap_allows_distinct_bindings() {
+        let dictation = ShortcutBinding {
+            primary: "RightControl".into(),
+            modifiers: vec![],
+        };
+        let qa = ShortcutBinding {
+            primary: ";".into(),
+            modifiers: vec!["ctrl".into(), "shift".into()],
+        };
+
+        assert!(super::reject_dictation_qa_hotkey_overlap(&dictation, &qa).is_ok());
     }
 
     #[tokio::test]

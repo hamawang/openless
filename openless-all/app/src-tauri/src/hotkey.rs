@@ -31,6 +31,32 @@ pub enum HotkeyEvent {
     QaShortcutPressed,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::Ordering;
+
+    #[test]
+    fn reset_shared_held_state_clears_all_shortcut_latches() {
+        let shared = Shared {
+            binding: RwLock::new(HotkeyBinding::default()),
+            trigger_held: AtomicBool::new(true),
+            qa_trigger: RwLock::new(None),
+            qa_trigger_held: AtomicBool::new(true),
+            translation_trigger: RwLock::new(None),
+            translation_trigger_held: AtomicBool::new(true),
+            translation_modifier_held: AtomicBool::new(true),
+        };
+
+        reset_shared_held_state(&shared);
+
+        assert!(!shared.trigger_held.load(Ordering::SeqCst));
+        assert!(!shared.qa_trigger_held.load(Ordering::SeqCst));
+        assert!(!shared.translation_trigger_held.load(Ordering::SeqCst));
+        assert!(!shared.translation_modifier_held.load(Ordering::SeqCst));
+    }
+}
+
 pub trait HotkeyAdapter: Send + Sync {
     fn kind(&self) -> HotkeyAdapterKind;
     fn update_binding(&self, binding: HotkeyBinding);
@@ -39,6 +65,7 @@ pub trait HotkeyAdapter: Send + Sync {
         qa_trigger: Option<HotkeyTrigger>,
         translation_trigger: Option<HotkeyTrigger>,
     );
+    fn reset_held_state(&self);
     fn shutdown(&self) {}
 }
 
@@ -87,6 +114,10 @@ impl HotkeyMonitor {
 
     pub fn kind(&self) -> HotkeyAdapterKind {
         self.adapter.kind()
+    }
+
+    pub fn reset_held_state(&self) {
+        self.adapter.reset_held_state();
     }
 
     pub fn capability() -> HotkeyCapability {
@@ -177,6 +208,21 @@ fn update_shared_modifier_shortcuts(
         .store(false, std::sync::atomic::Ordering::SeqCst);
 }
 
+fn reset_shared_held_state(shared: &Shared) {
+    shared
+        .trigger_held
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    shared
+        .qa_trigger_held
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    shared
+        .translation_trigger_held
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    shared
+        .translation_modifier_held
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+}
+
 // ─────────────────────────── macOS implementation ───────────────────────────
 
 #[cfg(target_os = "macos")]
@@ -187,8 +233,9 @@ mod platform {
     use std::sync::Arc;
 
     use super::{
-        install_error, send_or_log, start_listener_thread, update_shared_binding,
-        update_shared_modifier_shortcuts, HotkeyAdapter, HotkeyEvent, Shared, StartupTx,
+        install_error, reset_shared_held_state, send_or_log, start_listener_thread,
+        update_shared_binding, update_shared_modifier_shortcuts, HotkeyAdapter, HotkeyEvent,
+        Shared, StartupTx,
     };
     use crate::types::{HotkeyAdapterKind, HotkeyBinding, HotkeyInstallError, HotkeyTrigger};
 
@@ -228,6 +275,10 @@ mod platform {
             translation_trigger: Option<HotkeyTrigger>,
         ) {
             update_shared_modifier_shortcuts(&self.shared, qa_trigger, translation_trigger);
+        }
+
+        fn reset_held_state(&self) {
+            reset_shared_held_state(&self.shared);
         }
     }
 
@@ -519,8 +570,9 @@ mod platform {
     };
 
     use super::{
-        install_error, send_or_log, start_listener_thread, update_shared_binding,
-        update_shared_modifier_shortcuts, HotkeyAdapter, HotkeyEvent, Shared, StartupTx,
+        install_error, reset_shared_held_state, send_or_log, start_listener_thread,
+        update_shared_binding, update_shared_modifier_shortcuts, HotkeyAdapter, HotkeyEvent,
+        Shared, StartupTx,
     };
     use crate::types::{HotkeyAdapterKind, HotkeyBinding, HotkeyInstallError, HotkeyTrigger};
 
@@ -579,6 +631,10 @@ mod platform {
             translation_trigger: Option<HotkeyTrigger>,
         ) {
             update_shared_modifier_shortcuts(&self.shared, qa_trigger, translation_trigger);
+        }
+
+        fn reset_held_state(&self) {
+            reset_shared_held_state(&self.shared);
         }
 
         fn shutdown(&self) {
@@ -812,7 +868,7 @@ mod platform {
     use rdev::{listen, Event, EventType, Key};
 
     use super::{
-        install_error, start_listener_thread, update_shared_binding,
+        install_error, reset_shared_held_state, start_listener_thread, update_shared_binding,
         update_shared_modifier_shortcuts, HotkeyAdapter, HotkeyEvent, Shared, StartupTx,
     };
     use crate::types::{HotkeyAdapterKind, HotkeyBinding, HotkeyInstallError, HotkeyTrigger};
@@ -859,6 +915,10 @@ mod platform {
             translation_trigger: Option<HotkeyTrigger>,
         ) {
             update_shared_modifier_shortcuts(&self.shared, qa_trigger, translation_trigger);
+        }
+
+        fn reset_held_state(&self) {
+            reset_shared_held_state(&self.shared);
         }
     }
 

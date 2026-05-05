@@ -674,9 +674,7 @@ impl Coordinator {
             .shortcut_recording_active
             .store(active, Ordering::SeqCst);
         if active {
-            self.inner
-                .hotkey_trigger_held
-                .store(false, Ordering::SeqCst);
+            reset_shortcut_held_state(&self.inner);
         }
         log::info!("[coord] shortcut recording active={active}");
     }
@@ -1417,6 +1415,13 @@ fn hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEvent>) {
                 async_runtime::spawn(async move { handle_qa_hotkey_pressed(&inner_cloned).await });
             }
         }
+    }
+}
+
+fn reset_shortcut_held_state(inner: &Arc<Inner>) {
+    inner.hotkey_trigger_held.store(false, Ordering::SeqCst);
+    if let Some(monitor) = inner.hotkey.lock().as_ref() {
+        monitor.reset_held_state();
     }
 }
 
@@ -3471,6 +3476,19 @@ mod tests {
             SessionPhase::Listening
         );
         assert!(coordinator.inner.hotkey_trigger_held.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn enabling_shortcut_recording_clears_dictation_hold_latch() {
+        let coordinator = Coordinator::new();
+        coordinator
+            .inner
+            .hotkey_trigger_held
+            .store(true, Ordering::SeqCst);
+
+        coordinator.set_shortcut_recording_active(true);
+
+        assert!(!coordinator.inner.hotkey_trigger_held.load(Ordering::SeqCst));
     }
 
     #[test]
