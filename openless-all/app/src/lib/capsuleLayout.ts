@@ -26,7 +26,7 @@ export interface CapsuleMessageLayout {
 export function getCapsulePillMetrics(os: OS): CapsulePillMetrics {
   if (os === 'win') {
     // Windows metrics describe the visible outer footprint of the pill.
-    return { width: 196, height: 52, textWidth: 118, boxSizing: 'border-box' };
+    return { width: 196, height: 52, textWidth: 104, boxSizing: 'border-box' };
   }
 
   return { width: 176, height: 42, textWidth: 84, boxSizing: 'content-box' };

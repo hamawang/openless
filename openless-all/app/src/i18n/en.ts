@@ -391,6 +391,7 @@ export const en: typeof zhCN = {
       labelDesc: 'Choose "Follow system" to match the OS language at launch.',
       followSystem: 'Follow system',
       zh: '简体中文',
+      zhTW: '繁體中文',
       en: 'English',
       restartHint: 'Some native menus (system tray, etc.) may require an app restart to fully switch.',
     },

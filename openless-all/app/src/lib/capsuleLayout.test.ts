@@ -13,7 +13,7 @@ function assertEqual<T>(actual: T, expected: T, name: string) {
 const winMetrics = getCapsulePillMetrics('win');
 assertEqual(winMetrics.width, 196, 'windows capsule widens pill');
 assertEqual(winMetrics.height, 52, 'windows capsule increases pill height');
-assertEqual(winMetrics.textWidth, 118, 'windows capsule widens text slot');
+assertEqual(winMetrics.textWidth, 104, 'windows capsule keeps side controls clear');
 assertEqual(winMetrics.boxSizing, 'border-box', 'windows capsule pill width is an outer border-box metric');
 
 const winHost = getCapsuleHostMetrics('win', false);
