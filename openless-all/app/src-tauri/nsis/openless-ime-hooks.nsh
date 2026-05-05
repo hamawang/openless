@@ -33,14 +33,14 @@
       ExecWait '"$WINDIR\System32\regsvr32.exe" /s /u "$INSTDIR\windows-ime\x64\OpenLessIme.dll"' $0
       ${EnableX64FSRedirection}
     ${EndIf}
-    !insertmacro OPENLESS_IME_ABORT_IF_FAILED $0 "x64 unregistration"
+    DetailPrint "OpenLess x64 TSF IME unregister exit code $0"
   ${EndIf}
 !macroend
 
 !macro OPENLESS_IME_UNREGISTER_X86
   DetailPrint "Unregistering OpenLess x86 TSF IME"
   ExecWait '"$WINDIR\SysWOW64\regsvr32.exe" /s /u "$INSTDIR\windows-ime\x86\OpenLessIme.dll"' $0
-  !insertmacro OPENLESS_IME_ABORT_IF_FAILED $0 "x86 unregistration"
+  DetailPrint "OpenLess x86 TSF IME unregister exit code $0"
 !macroend
 
 !macro NSIS_HOOK_PREINSTALL
