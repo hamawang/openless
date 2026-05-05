@@ -127,6 +127,8 @@ export interface UserPreferences {
   workingLanguages: string[];
   /** 翻译模式目标语言（单选，原生名）；空串 = 不启用 Shift 翻译。详见 issue #4。 */
   translationTargetLanguage: string;
+  /** 中文输出字形偏好：由界面语言（简/繁）自动同步，不单独暴露设置项。 */
+  chineseScriptPreference: 'auto' | 'simplified' | 'traditional';
   /** 划词语音问答快捷键。null = 未启用。详见 issue #118。 */
   qaHotkey: QaHotkeyBinding | null;
   /** 是否把 Q&A 历史写到本地存档。详见 issue #118。 */

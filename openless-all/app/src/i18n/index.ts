@@ -30,6 +30,11 @@ function detectSystemLocale(): SupportedLocale {
   return 'en';
 }
 
+function resolveLocalePreference(pref: SupportedLocale | typeof FOLLOW_SYSTEM_VALUE): SupportedLocale {
+  if (pref === FOLLOW_SYSTEM_VALUE) return detectSystemLocale();
+  return pref;
+}
+
 function getStoredLocale(): SupportedLocale | null {
   if (typeof window === 'undefined') return null;
   const raw = window.localStorage.getItem(LOCALE_STORAGE_KEY);
@@ -66,14 +71,17 @@ export function getLocalePreference(): SupportedLocale | typeof FOLLOW_SYSTEM_VA
  * 写入用户偏好并立即切换 i18n 语言。
  * pref === 'system' 时清除存储项，重新走 navigator 检测。
  */
-export async function setLocalePreference(pref: SupportedLocale | typeof FOLLOW_SYSTEM_VALUE): Promise<void> {
+export async function setLocalePreference(
+  pref: SupportedLocale | typeof FOLLOW_SYSTEM_VALUE,
+): Promise<SupportedLocale> {
+  const resolved = resolveLocalePreference(pref);
   if (pref === FOLLOW_SYSTEM_VALUE) {
     window.localStorage.removeItem(LOCALE_STORAGE_KEY);
-    await i18n.changeLanguage(detectSystemLocale());
-    return;
+  } else {
+    window.localStorage.setItem(LOCALE_STORAGE_KEY, pref);
   }
-  window.localStorage.setItem(LOCALE_STORAGE_KEY, pref);
-  await i18n.changeLanguage(pref);
+  await i18n.changeLanguage(resolved);
+  return resolved;
 }
 
 export const FOLLOW_SYSTEM = FOLLOW_SYSTEM_VALUE;

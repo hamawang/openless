@@ -15,7 +15,6 @@ import type {
   ShortcutBinding,
   UserPreferences,
   WindowsImeStatus,
-  VocabPreset,
   VocabPresetStore,
 } from './types';
 import { OL_DATA } from './mockData';
@@ -27,7 +26,8 @@ declare global {
   }
 }
 
-const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+const isTauri =
+  globalThis.window !== undefined && '__TAURI_INTERNALS__' in globalThis.window;
 
 export async function invokeOrMock<T>(
   cmd: string,
@@ -56,6 +56,7 @@ const mockSettings: UserPreferences = {
   workingLanguages: ['简体中文'],
   translationTargetLanguage: '',
   qaHotkey: defaultQaShortcut(),
+  chineseScriptPreference: 'auto',
   qaSaveHistory: false,
   customComboHotkey: null,
   translationHotkey: { primary: 'Shift', modifiers: [] },

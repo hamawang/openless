@@ -39,6 +39,7 @@ chrono = { version = "0.4", features = ["serde"] }
 bytes = "1"
 url = "2"
 raw-window-handle = "0.6"
+ferrous-opencc = "0.4"
 
 # Hotkey + audio + insertion
 global-hotkey = "0.6"

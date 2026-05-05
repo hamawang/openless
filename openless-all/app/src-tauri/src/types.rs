@@ -24,6 +24,15 @@ impl PolishMode {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum ChineseScriptPreference {
+    #[default]
+    Auto,
+    Simplified,
+    Traditional,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum InsertStatus {
@@ -115,6 +124,14 @@ pub struct UserPreferences {
     /// 由前端从内置语言列表中选择，后端只接收最终的原生名字符串拼进 prompt。详见 issue #4。
     #[serde(default)]
     pub translation_target_language: String,
+    /// 中文输出字形偏好（不额外暴露为 UI 开关）：
+    /// - Simplified: 中文输出优先简体
+    /// - Traditional: 中文输出优先繁体
+    /// - Auto: 不额外约束
+    ///
+    /// 由前端「界面语言」选择同步驱动（简体/繁体），详见 issue #259。
+    #[serde(default)]
+    pub chinese_script_preference: ChineseScriptPreference,
     /// 划词语音问答（QA）的全局快捷键。`None` = 关闭功能；`Some(...)` 时
     /// coordinator 用 global-hotkey crate 注册组合键（modifier + 主键）。
     /// 默认 Cmd+Shift+; (macOS) / Ctrl+Shift+; (Windows)。详见 issue #118。
@@ -344,6 +361,7 @@ impl Default for UserPreferences {
             allow_non_tsf_insertion_fallback: true,
             working_languages: default_working_languages(),
             translation_target_language: String::new(),
+            chinese_script_preference: ChineseScriptPreference::Auto,
             qa_hotkey: default_qa_hotkey(),
             qa_save_history: false,
             custom_combo_hotkey: None,

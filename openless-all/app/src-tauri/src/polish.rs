@@ -10,7 +10,7 @@ use std::time::Duration;
 use serde_json::{json, Value};
 use thiserror::Error;
 
-use crate::types::{PolishMode, QaChatMessage};
+use crate::types::{ChineseScriptPreference, PolishMode, QaChatMessage};
 
 const DEFAULT_TEMPERATURE: f32 = 0.3;
 const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
@@ -90,10 +90,13 @@ impl OpenAICompatibleLLMProvider {
         mode: PolishMode,
         hotwords: &[String],
         working_languages: &[String],
+        chinese_script_preference: ChineseScriptPreference,
         front_app: Option<&str>,
     ) -> Result<String, LLMError> {
         let mut system_prompt = compose_system_prompt(mode, hotwords);
-        if let Some(premise) = context_premise(working_languages, front_app) {
+        if let Some(premise) =
+            context_premise(working_languages, chinese_script_preference, front_app)
+        {
             system_prompt = format!("{}\n\n{}", premise, system_prompt);
         }
         let user_prompt = prompts::user_prompt(raw_text);
@@ -108,6 +111,7 @@ impl OpenAICompatibleLLMProvider {
         &self,
         messages: &[QaChatMessage],
         working_languages: &[String],
+        chinese_script_preference: ChineseScriptPreference,
         front_app: Option<&str>,
         on_delta: F,
         should_cancel: C,
@@ -117,7 +121,9 @@ impl OpenAICompatibleLLMProvider {
         C: Fn() -> bool + Send + Sync,
     {
         let mut system_prompt = prompts::qa_system_prompt();
-        if let Some(premise) = context_premise(working_languages, front_app) {
+        if let Some(premise) =
+            context_premise(working_languages, chinese_script_preference, front_app)
+        {
             system_prompt = format!("{}\n\n{}", premise, system_prompt);
         }
         self.chat_completion_history_streaming(&system_prompt, messages, on_delta, should_cancel)
@@ -131,10 +137,13 @@ impl OpenAICompatibleLLMProvider {
         raw_text: &str,
         target_language: &str,
         working_languages: &[String],
+        chinese_script_preference: ChineseScriptPreference,
         front_app: Option<&str>,
     ) -> Result<String, LLMError> {
         let mut system_prompt = prompts::translate_system_prompt(target_language);
-        if let Some(premise) = context_premise(working_languages, front_app) {
+        if let Some(premise) =
+            context_premise(working_languages, chinese_script_preference, front_app)
+        {
             system_prompt = format!("{}\n\n{}", premise, system_prompt);
         }
         let user_prompt = prompts::user_prompt(raw_text);
@@ -378,7 +387,11 @@ fn chat_completions_url(base_url: &str) -> String {
 ///     当前前台应用：…（请按这个 app 的常见沟通风格调整语气）
 ///
 /// 两个字段都空时返回 None，调用方就不拼前缀。详见 issue #4 / #116。
-fn context_premise(working_languages: &[String], front_app: Option<&str>) -> Option<String> {
+fn context_premise(
+    working_languages: &[String],
+    chinese_script_preference: ChineseScriptPreference,
+    front_app: Option<&str>,
+) -> Option<String> {
     let langs: Vec<&str> = working_languages
         .iter()
         .map(|s| s.trim())
@@ -386,7 +399,19 @@ fn context_premise(working_languages: &[String], front_app: Option<&str>) -> Opt
         .collect();
     let app = front_app.map(str::trim).filter(|s| !s.is_empty());
 
-    if langs.is_empty() && app.is_none() {
+    let script_line = match chinese_script_preference {
+        ChineseScriptPreference::Simplified => Some(
+            "中文输出偏好：简体中文。若最终输出包含中文，请统一使用简体字形（不要混用繁体）。"
+                .to_string(),
+        ),
+        ChineseScriptPreference::Traditional => Some(
+            "中文输出偏好：繁体中文。若最终输出包含中文，请统一使用繁体字形（不要混用简体）。"
+                .to_string(),
+        ),
+        ChineseScriptPreference::Auto => None,
+    };
+
+    if langs.is_empty() && app.is_none() && script_line.is_none() {
         return None;
     }
 
@@ -401,6 +426,9 @@ fn context_premise(working_languages: &[String], front_app: Option<&str>) -> Opt
         lines.push(format!(
             "当前前台应用：{name}。请按这个应用的常见沟通风格调整语气——例如邮件类 app 偏正式、聊天类 app 偏口语、IDE / 文档类 app 偏技术或结构化。\u{4E0D}主动加入与用户原意无关的客套话。"
         ));
+    }
+    if let Some(line) = script_line {
+        lines.push(line);
     }
     Some(lines.join("\n"))
 }
@@ -982,7 +1010,14 @@ mod tests {
         ));
 
         let output = provider
-            .polish("原文", PolishMode::Raw, &[], &[], None)
+            .polish(
+                "原文",
+                PolishMode::Raw,
+                &[],
+                &[],
+                ChineseScriptPreference::Auto,
+                None,
+            )
             .await
             .unwrap();
         assert_eq!(output, "最终文本。");
