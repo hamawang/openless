@@ -389,6 +389,7 @@ export const zhCN = {
       labelDesc: '选择「跟随系统」时按操作系统当前语言显示。',
       followSystem: '跟随系统',
       zh: '简体中文',
+      zhTW: '繁體中文',
       en: 'English',
       restartHint: '部分原生菜单（系统托盘等）可能需要重启 App 才会切换。',
     },

@@ -12,8 +12,9 @@ import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
 import { en } from './en';
 import { zhCN } from './zh-CN';
+import { zhTW } from './zh-TW';
 
-export const SUPPORTED_LOCALES = ['zh-CN', 'en'] as const;
+export const SUPPORTED_LOCALES = ['zh-CN', 'zh-TW', 'en'] as const;
 export type SupportedLocale = (typeof SUPPORTED_LOCALES)[number];
 
 export const LOCALE_STORAGE_KEY = 'ol.locale';
@@ -22,14 +23,17 @@ const FOLLOW_SYSTEM_VALUE = 'system';
 function detectSystemLocale(): SupportedLocale {
   if (typeof navigator === 'undefined') return 'zh-CN';
   const nav = (navigator.language || '').toLowerCase();
-  if (nav.startsWith('zh')) return 'zh-CN';
+  if (nav.startsWith('zh')) {
+    if (nav.includes('hant') || nav.includes('tw') || nav.includes('hk') || nav.includes('mo')) return 'zh-TW';
+    return 'zh-CN';
+  }
   return 'en';
 }
 
 function getStoredLocale(): SupportedLocale | null {
   if (typeof window === 'undefined') return null;
   const raw = window.localStorage.getItem(LOCALE_STORAGE_KEY);
-  return raw === 'zh-CN' || raw === 'en' ? raw : null;
+  return raw === 'zh-CN' || raw === 'zh-TW' || raw === 'en' ? raw : null;
 }
 
 const initialLng: SupportedLocale = getStoredLocale() ?? detectSystemLocale();
@@ -37,6 +41,7 @@ const initialLng: SupportedLocale = getStoredLocale() ?? detectSystemLocale();
 void i18n.use(initReactI18next).init({
   resources: {
     'zh-CN': { translation: zhCN },
+    'zh-TW': { translation: zhTW },
     en: { translation: en },
   },
   lng: initialLng,
