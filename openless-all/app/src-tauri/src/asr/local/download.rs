@@ -384,7 +384,11 @@ async fn run_download(
         }));
     }
 
+    // 区分"用户主动取消" vs "我们因为某个 worker 失败了主动 abort 其它 worker"：
+    // 都共用同一个 cancel AtomicBool（worker 端只看一个 flag 就够），但外层用
+    // `self_aborted` 记是哪种情况，决定最后 emit Cancelled 还是 Failed。
     let mut first_err: Option<anyhow::Error> = None;
+    let mut self_aborted = false;
     while let Some(joined) = futs.next().await {
         match joined {
             Ok(Ok(())) => {}
@@ -392,9 +396,12 @@ async fn run_download(
                 if first_err.is_none() {
                     first_err = Some(e);
                 }
-                // 取消其它正在跑的：cancel flag 设为 true，让所有 spawn task 早退
+                // 一个 worker 失败 → 让其它 worker 立即停，免得它们继续吃带宽
+                // 然后用户还得等到所有任务完成才看到失败。
                 if !cancel.load(Ordering::SeqCst) {
-                    log::warn!("[local-asr] one file failed; signaling others to stop");
+                    log::warn!("[local-asr] one file failed; aborting other workers");
+                    cancel.store(true, Ordering::SeqCst);
+                    self_aborted = true;
                 }
             }
             Err(e) => {
@@ -405,7 +412,8 @@ async fn run_download(
         }
     }
 
-    if cancel.load(Ordering::SeqCst) {
+    // 用户主动 cancel（不是我们因为错误自己 set 的）→ Cancelled
+    if cancel.load(Ordering::SeqCst) && !self_aborted {
         emit_cancelled(app, model_id, "", 0, file_count, total_bytes);
         return Ok(());
     }
@@ -684,17 +692,24 @@ async fn try_download_range_append(
     if status.as_u16() != 200 && status.as_u16() != 206 {
         anyhow::bail!("HTTP {status} for {url}");
     }
-    if status.as_u16() == 200 && range_start > 0 {
-        let _ = std::fs::remove_file(partial);
-    }
     let effective_start = if status.as_u16() == 200 { 0 } else { range_start };
 
+    // 截断 partial 到本次 attempt 的起点，再 seek 写入。
+    // 老 append 实现的 bug：若上一次 attempt 已写了部分字节后失败，retry 拿到的还是
+    // 完整 chunk → append → 文件比应有大小多 N 字节 → 永久损坏。
+    // 小文件路径每个 chunk 是整个文件（≤ 32MB），用 truncate 重写最直白。
     let mut file = tokio::fs::OpenOptions::new()
         .create(true)
-        .append(true)
+        .write(true)
         .open(partial)
         .await
         .with_context(|| format!("open partial failed: {}", partial.display()))?;
+    file.set_len(effective_start)
+        .await
+        .with_context(|| format!("truncate partial failed: {}", partial.display()))?;
+    file.seek(std::io::SeekFrom::Start(effective_start))
+        .await
+        .with_context(|| format!("seek partial failed: {}", partial.display()))?;
 
     let mut stream = resp.bytes_stream();
     let mut written: u64 = 0;
