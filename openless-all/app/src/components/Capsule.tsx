@@ -236,6 +236,7 @@ function Pill({ os, state, level, insertedChars, message, onCancel, onConfirm }:
         padding: '0 8px',
         width: metrics.width,
         height: metrics.height,
+        boxSizing: metrics.boxSizing,
         borderRadius: 999,
         background: 'rgba(255, 255, 255, 0.62)',
         backdropFilter: 'blur(28px) saturate(180%)',
@@ -321,6 +322,7 @@ export function Capsule() {
         justifyContent: 'center',
         paddingLeft: hostMetrics.horizontalInset,
         paddingRight: hostMetrics.horizontalInset,
+        boxSizing: hostMetrics.boxSizing,
         paddingTop: os === 'win'
           ? Math.max(0, hostMetrics.height - metrics.height - hostMetrics.bottomInset)
           : 0,
