@@ -166,9 +166,12 @@ Full end-user walkthrough: [USAGE.md](USAGE.md).
 
 ## Build from source (developers)
 
-The active codebase is in `openless-all/app/` (Tauri 2 + Rust + React/TS).
+The active codebase is in `openless-all/app/` (Tauri 2 + Rust + React/TS). The macOS build links a vendored C ASR engine ([`antirez/qwen-asr`](https://github.com/antirez/qwen-asr)) pulled in as a git submodule under `src-tauri/vendor/qwen-asr/`, so initialize submodules on first clone.
 
 ```bash
+# First clone only — pull in vendored submodules
+git submodule update --init --recursive
+
 cd "openless-all/app"
 npm ci
 
