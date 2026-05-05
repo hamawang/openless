@@ -20,7 +20,11 @@
 
 !macro OPENLESS_IME_REGISTER_X86
   DetailPrint "Registering OpenLess x86 TSF IME"
-  ExecWait '"$WINDIR\SysWOW64\regsvr32.exe" /s "$INSTDIR\windows-ime\x86\OpenLessIme.dll"' $0
+  ${If} ${RunningX64}
+    ExecWait '"$WINDIR\SysWOW64\regsvr32.exe" /s "$INSTDIR\windows-ime\x86\OpenLessIme.dll"' $0
+  ${Else}
+    ExecWait '"$WINDIR\System32\regsvr32.exe" /s "$INSTDIR\windows-ime\x86\OpenLessIme.dll"' $0
+  ${EndIf}
   !insertmacro OPENLESS_IME_ABORT_IF_FAILED $0 "x86 registration"
 !macroend
 
@@ -39,7 +43,11 @@
 
 !macro OPENLESS_IME_UNREGISTER_X86
   DetailPrint "Unregistering OpenLess x86 TSF IME"
-  ExecWait '"$WINDIR\SysWOW64\regsvr32.exe" /s /u "$INSTDIR\windows-ime\x86\OpenLessIme.dll"' $0
+  ${If} ${RunningX64}
+    ExecWait '"$WINDIR\SysWOW64\regsvr32.exe" /s /u "$INSTDIR\windows-ime\x86\OpenLessIme.dll"' $0
+  ${Else}
+    ExecWait '"$WINDIR\System32\regsvr32.exe" /s /u "$INSTDIR\windows-ime\x86\OpenLessIme.dll"' $0
+  ${EndIf}
   DetailPrint "OpenLess x86 TSF IME unregister exit code $0"
 !macroend
 
