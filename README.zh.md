@@ -169,9 +169,12 @@ OpenLess 只做一件事：**把语音变成可用的书面文字（尤其是 AI
 
 ## 从源码构建（开发者）
 
-当前活跃代码库在 `openless-all/app/`（Tauri 2 + Rust + React/TS）。
+当前活跃代码库在 `openless-all/app/`（Tauri 2 + Rust + React/TS）。macOS 构建会链接一份 vendored 的本地 ASR 引擎（[`antirez/qwen-asr`](https://github.com/antirez/qwen-asr)），以 git submodule 形式挂在 `src-tauri/vendor/qwen-asr/`，首次 clone 后必须先拉子模块。
 
 ```bash
+# 首次 clone 后拉取子模块
+git submodule update --init --recursive
+
 cd "openless-all/app"
 npm ci
 
