@@ -91,7 +91,7 @@ assert.deepEqual(tauriConfig.bundle.windows.wix.componentRefs, [
   "OpenLessImeDllX64Component",
   "OpenLessImeDllX86Component",
 ]);
-assert.equal(tauriConfig.bundle.windows.nsis.installMode, "both", "NSIS must request elevation so TSF can register in HKLM");
+assert.equal(tauriConfig.bundle.windows.nsis.installMode, "perMachine", "NSIS must force a machine-wide install because TSF registration is machine-wide");
 assert.equal(tauriConfig.bundle.windows.nsis.installerHooks, "nsis/openless-ime-hooks.nsh", "NSIS must install and register the TSF DLLs");
 
 assert.match(imeSolution, /Release\|Win32/, "IME solution should include a Win32 Release configuration");
@@ -127,6 +127,7 @@ assert.match(nsisHook, /SetOutPath "\$INSTDIR\\windows-ime\\x86"/, "NSIS should 
 assert.match(nsisHook, /File \/oname=OpenLessIme\.dll/, "NSIS should embed OpenLessIme.dll in the installer");
 assert.match(nsisHook, /Sysnative\\regsvr32\.exe/, "NSIS should use 64-bit regsvr32 for the x64 IME");
 assert.match(nsisHook, /SysWOW64\\regsvr32\.exe/, "NSIS should use 32-bit regsvr32 for the x86 IME");
+assert.match(nsisHook, /System32\\regsvr32\.exe[\s\S]*windows-ime\\x86\\OpenLessIme\.dll/, "NSIS should use System32 regsvr32 for the x86 IME on 32-bit Windows");
 assert.match(nsisHook, /Abort/, "NSIS install should fail if TSF registration fails");
 assert.match(nsisHook, /OPENLESS_IME_ABORT_IF_FAILED \$0 "x64 registration"/, "NSIS install should fail if x64 TSF registration fails");
 assert.match(nsisHook, /OPENLESS_IME_ABORT_IF_FAILED \$0 "x86 registration"/, "NSIS install should fail if x86 TSF registration fails");
@@ -146,6 +147,8 @@ assert.match(imeInstallSmoke, /LanguageProfile\\0x00000804\\\{9B5F5E04-23F6-47DA
 assert.match(imeInstallSmoke, /Category\\Category\\\{34745C63-B2F0-4784-8B67-5E12C8701A31\}/, "install smoke should check the keyboard TSF category");
 assert.match(ciWorkflow, /windows-ime-install-smoke\.ps1[\s\S]*-InstallerKind nsis/, "CI should install and verify the NSIS artifact");
 assert.match(ciWorkflow, /windows-ime-install-smoke\.ps1[\s\S]*-InstallerKind msi/, "CI should install and verify the MSI artifact");
+assert.match(ciWorkflow, /InstallerKind nsis[\s\S]*\$LASTEXITCODE -ne 0[\s\S]*NSIS installer smoke failed/, "CI should fail immediately when the NSIS smoke run fails");
+assert.match(ciWorkflow, /InstallerKind msi[\s\S]*\$LASTEXITCODE -ne 0[\s\S]*MSI installer smoke failed/, "CI should fail when the MSI smoke run fails");
 
 assert.match(launcher, /powershell\.exe/, "launcher should call powershell.exe");
 assert.match(launcher, /-ExecutionPolicy Bypass/, "launcher should bypass execution policy for this process");
