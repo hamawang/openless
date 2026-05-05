@@ -7,7 +7,7 @@ import { useTranslation } from 'react-i18next';
 import { isTauri, restartApp } from '../lib/ipc';
 import { Btn } from '../pages/_atoms';
 
-const UPDATE_CHECK_TIMEOUT_MS = 15_000;
+const UPDATE_CHECK_TIMEOUT_MS = 8_000; // 缩短超时，让镜像站慢的情况能更快 fallback
 
 export type UpdateStatus =
   | 'idle'

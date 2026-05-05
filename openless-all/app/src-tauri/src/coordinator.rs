@@ -1363,9 +1363,11 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
             if let Err(e) = asr.send_last_frame().await {
                 log::error!("[coord] send last frame failed: {e}");
             }
-            match asr.await_final_result().await {
-                Ok(r) => r,
-                Err(e) => {
+            // 添加全局超时保护：防止 await_final_result() 永远挂起
+            let timeout_duration = std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS);
+            match tokio::time::timeout(timeout_duration, asr.await_final_result()).await {
+                Ok(Ok(r)) => r,
+                Ok(Err(e)) => {
                     log::error!("[coord] await final failed: {e}");
                     emit_capsule(
                         inner,
@@ -1380,26 +1382,69 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
                     schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
                     return Err(e.to_string());
                 }
+                Err(_) => {
+                    // 全局超时：最后的防线
+                    log::error!(
+                        "[coord] 全局超时 {} 秒 - 强制恢复",
+                        COORDINATOR_GLOBAL_TIMEOUT_SECS
+                    );
+                    // 清理 ASR session，避免资源泄漏
+                    asr.cancel();
+                    emit_capsule(
+                        inner,
+                        CapsuleState::Error,
+                        0.0,
+                        elapsed,
+                        Some("识别超时".to_string()),
+                        None,
+                    );
+                    restore_prepared_windows_ime_session(inner, current_session_id);
+                    inner.state.lock().phase = SessionPhase::Idle;
+                    schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
+                    return Err("global timeout".to_string());
+                }
             }
         }
-        ActiveAsr::Whisper(w) => match w.transcribe().await {
-            Ok(r) => r,
-            Err(e) => {
-                log::error!("[coord] whisper transcribe failed: {e}");
-                emit_capsule(
-                    inner,
-                    CapsuleState::Error,
-                    0.0,
-                    elapsed,
-                    Some(format!("识别失败: {e}")),
-                    None,
-                );
-                restore_prepared_windows_ime_session(inner, current_session_id);
-                inner.state.lock().phase = SessionPhase::Idle;
-                schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
-                return Err(e.to_string());
+        ActiveAsr::Whisper(w) => {
+            // Whisper 也添加类似的超时保护
+            let timeout_duration = std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS);
+            match tokio::time::timeout(timeout_duration, w.transcribe()).await {
+                Ok(Ok(r)) => r,
+                Ok(Err(e)) => {
+                    log::error!("[coord] whisper transcribe failed: {e}");
+                    emit_capsule(
+                        inner,
+                        CapsuleState::Error,
+                        0.0,
+                        elapsed,
+                        Some(format!("识别失败: {e}")),
+                        None,
+                    );
+                    restore_prepared_windows_ime_session(inner, current_session_id);
+                    inner.state.lock().phase = SessionPhase::Idle;
+                    schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
+                    return Err(e.to_string());
+                }
+                Err(_) => {
+                    log::error!(
+                        "[coord] whisper 全局超时 {} 秒",
+                        COORDINATOR_GLOBAL_TIMEOUT_SECS
+                    );
+                    emit_capsule(
+                        inner,
+                        CapsuleState::Error,
+                        0.0,
+                        elapsed,
+                        Some("识别超时".to_string()),
+                        None,
+                    );
+                    restore_prepared_windows_ime_session(inner, current_session_id);
+                    inner.state.lock().phase = SessionPhase::Idle;
+                    schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
+                    return Err("whisper global timeout".to_string());
+                }
             }
-        },
+        }
     };
 
     // ASR 完成后 cancel 检查：用户在 transcribe 进行中按 Esc 时，这里就会命中。
@@ -2243,12 +2288,25 @@ async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
     if let Err(e) = asr.send_last_frame().await {
         log::error!("[coord] QA: send last frame failed: {e}");
     }
-    let raw = match asr.await_final_result().await {
-        Ok(r) => r,
-        Err(e) => {
+    // 添加全局超时保护：防止 await_final_result() 永远挂起
+    let timeout_duration = std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS);
+    let raw = match tokio::time::timeout(timeout_duration, asr.await_final_result()).await {
+        Ok(Ok(r)) => r,
+        Ok(Err(e)) => {
             log::error!("[coord] QA: await final failed: {e}");
             finish_qa_with_error(inner, format!("识别失败: {e}"));
             return Err(e.to_string());
+        }
+        Err(_) => {
+            // 全局超时：最后的防线
+            log::error!(
+                "[coord] QA: 全局超时 {} 秒 - 强制恢复",
+                COORDINATOR_GLOBAL_TIMEOUT_SECS
+            );
+            // 清理 ASR session，避免资源泄漏
+            asr.cancel();
+            finish_qa_with_error(inner, "识别超时".to_string());
+            return Err("global timeout".to_string());
         }
     };
 
@@ -2906,6 +2964,11 @@ fn enabled_phrases(inner: &Arc<Inner>) -> Vec<String> {
 /// 终止态（Done / Cancelled / Error）后延迟 N ms 把胶囊改回 Idle，让浮窗自动消失。
 /// 用户点 ✕ / ✓ / 中途出错 / 按 Esc 都走这里，统一 2 秒。
 const CAPSULE_AUTO_HIDE_DELAY_MS: u64 = 2000;
+
+/// Coordinator 全局超时保护：防止 ASR await_final_result() 永远挂起。
+/// 设置为 15 秒（比 ASR 的 12 秒 FINAL_RESULT_TIMEOUT 稍长），
+/// 只在 ASR 超时机制失效时作为最后的防线触发。
+const COORDINATOR_GLOBAL_TIMEOUT_SECS: u64 = 15;
 
 /// begin_session 中各 await 之间的 cancel race 检查结果。
 enum BeginOutcome {
