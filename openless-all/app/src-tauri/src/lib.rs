@@ -238,6 +238,7 @@ pub fn run() {
             commands::local_asr_download_model,
             commands::local_asr_cancel_download,
             commands::local_asr_delete_model,
+            commands::local_asr_test_model,
             restart_app,
         ])
         .build(tauri::generate_context!())

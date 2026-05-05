@@ -237,17 +237,16 @@ async fn run_download(
         .with_context(|| format!("create model dir failed: {}", dir.display()))?;
 
     // 用 native-tls (macOS = SecureTransport) 而非 rustls：HuggingFace 的 LFS CDN
-    // 经常不发 TLS close_notify 就关 TCP，rustls 0.22+ 把这当致命 unexpected_eof，
-    // 实际数据已经收齐也算"下载失败"。SecureTransport 对 unclean close 容错。
-    // (Volcengine WebSocket 那边继续用 rustls，那条链路稳定。)
+    // 经常不发 TLS close_notify 就关 TCP，rustls 0.22+ 把这当致命 unexpected_eof。
+    // SecureTransport 对 unclean close 容错。(Volcengine WebSocket 继续走 rustls。)
     //
-    // 不设 .timeout() —— 大模型文件 1 GB 起步，整体超时不合适；只设 connect_timeout
-    // 防止首次连接卡死。pool_idle_timeout 让连接早释放，避免 CDN 关掉旧连接但 hyper
-    // 还在用导致下次请求 EOF。
+    // 关键：必须发 User-Agent。HF 把 no-UA 流量算异常，可能限速 / 强制断流。
+    // pool_idle_timeout 短一点，避免复用已被 CDN 关掉的连接造成 EOF。
     let client = reqwest::Client::builder()
         .use_native_tls()
+        .user_agent(concat!("openless/", env!("CARGO_PKG_VERSION")))
         .connect_timeout(std::time::Duration::from_secs(30))
-        .pool_idle_timeout(std::time::Duration::from_secs(20))
+        .pool_idle_timeout(std::time::Duration::from_secs(15))
         .build()
         .context("build reqwest client failed")?;
 
@@ -310,50 +309,24 @@ async fn run_download(
             model_id.hf_repo(),
             file.path
         );
-        // 大文件经常被 CDN 中途断流。Range 续传 + 指数退避 (1s, 4s, 16s) 多试几次，
-        // 不让用户手点。每次 retry 都从 .partial 当前长度断点续传，不会重复下载。
-        const MAX_ATTEMPTS: u32 = 4;
-        let mut result: Result<()> = Ok(());
-        for attempt in 1..=MAX_ATTEMPTS {
-            if cancel.load(Ordering::SeqCst) {
-                emit_cancelled(app, model_id, &file.path, idx, file_count, total_bytes);
-                return Ok(());
-            }
-            result = download_one(&client, &url, &dest, cancel, |bytes| {
-                emit(
-                    app,
-                    DownloadProgress {
-                        model_id: model_id.as_str().into(),
-                        file: file.path.clone(),
-                        file_index: idx,
-                        file_count,
-                        bytes_downloaded: bytes_done_before_current + bytes,
-                        bytes_total: total_bytes,
-                        phase: DownloadPhase::Progress,
-                        error: None,
-                    },
-                );
-            })
-            .await;
-            if result.is_ok() || cancel.load(Ordering::SeqCst) {
-                break;
-            }
-            if attempt < MAX_ATTEMPTS {
-                let backoff = std::time::Duration::from_secs(1u64 << (2 * (attempt - 1)));
-                log::warn!(
-                    "[local-asr] {} attempt {}/{} failed: {:#}; sleeping {:?} then retry from byte {}",
-                    file.path,
-                    attempt,
-                    MAX_ATTEMPTS,
-                    result.as_ref().err().map(|e| e.to_string()).unwrap_or_default(),
-                    backoff,
-                    std::fs::metadata(dest.with_extension("partial"))
-                        .map(|m| m.len())
-                        .unwrap_or(0),
-                );
-                tokio::time::sleep(backoff).await;
-            }
-        }
+        // download_one 内部用 Range 把文件切成 32MB 分块，每块独立 retry。
+        // 这样 CDN 中途断流只丢一个 chunk，不丢整个 1.7GB 文件。
+        let result = download_one(&client, &url, &dest, file.size, cancel, |file_bytes| {
+            emit(
+                app,
+                DownloadProgress {
+                    model_id: model_id.as_str().into(),
+                    file: file.path.clone(),
+                    file_index: idx,
+                    file_count,
+                    bytes_downloaded: bytes_done_before_current + file_bytes,
+                    bytes_total: total_bytes,
+                    phase: DownloadPhase::Progress,
+                    error: None,
+                },
+            );
+        })
+        .await;
         match result {
             Ok(()) => {
                 bytes_done_before_current += file.size;
@@ -402,54 +375,186 @@ async fn run_download(
     Ok(())
 }
 
-/// 下载单个文件到 `dest`，失败/取消时**保留** `.partial` 用于续传（HTTP Range 头）。
+/// 下载单个文件到 `dest` —— **HTTP Range 分块**模式。
+///
+/// 关键：
+/// - 分块大小 32 MB；HF CDN 对几秒内完成的小请求容错好，对几分钟的长连接经常踢
+/// - 每块 4 次 retry，指数退避 1s/4s/16s，每次都从 .partial 真实长度续传
+/// - 如果服务端忽略 Range 返回 200（HF 偶尔，非常少见）→ 截断 .partial 重头来
+/// - 失败 / 取消时保留 .partial，下次续传不重头
 async fn download_one(
     client: &reqwest::Client,
     url: &str,
     dest: &Path,
+    total_size: u64,
     cancel: &AtomicBool,
-    mut on_chunk: impl FnMut(u64),
+    mut on_progress: impl FnMut(u64),
 ) -> Result<()> {
-    let partial = dest.with_extension("partial");
-    let resume_from = std::fs::metadata(&partial).map(|m| m.len()).unwrap_or(0);
+    const CHUNK_SIZE: u64 = 32 * 1024 * 1024;
+    const PER_CHUNK_ATTEMPTS: u32 = 4;
 
+    let partial = dest.with_extension("partial");
+    if let Some(parent) = partial.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+
+    // 已有 partial 比远端文件还大 = 上次下了被换掉的旧版本，从头来
+    let initial = std::fs::metadata(&partial).map(|m| m.len()).unwrap_or(0);
+    if initial > total_size && total_size > 0 {
+        std::fs::remove_file(&partial).ok();
+    }
+
+    loop {
+        if cancel.load(Ordering::SeqCst) {
+            anyhow::bail!("cancelled");
+        }
+
+        let downloaded = std::fs::metadata(&partial).map(|m| m.len()).unwrap_or(0);
+        if downloaded >= total_size && total_size > 0 {
+            break;
+        }
+
+        let chunk_end = if total_size > 0 {
+            (downloaded + CHUNK_SIZE - 1).min(total_size - 1)
+        } else {
+            // 极少数情况：HF 没给 size。退化为单连接整文件下（旧行为）。
+            u64::MAX
+        };
+
+        let chunk_result = download_chunk(
+            client,
+            url,
+            &partial,
+            downloaded,
+            chunk_end,
+            total_size,
+            cancel,
+            PER_CHUNK_ATTEMPTS,
+            &mut on_progress,
+        )
+        .await;
+        if let Err(e) = chunk_result {
+            // 检查是否还是有进展（哪怕这块没下完）
+            let new_downloaded = std::fs::metadata(&partial).map(|m| m.len()).unwrap_or(0);
+            if new_downloaded > downloaded {
+                log::warn!(
+                    "[local-asr] chunk failed but advanced {}→{}; loop will retry remainder",
+                    downloaded,
+                    new_downloaded
+                );
+                continue;
+            }
+            return Err(e);
+        }
+    }
+
+    tokio::fs::rename(&partial, dest)
+        .await
+        .with_context(|| format!("rename partial → final failed: {}", dest.display()))?;
+    Ok(())
+}
+
+/// 单个 chunk 的 HTTP Range 请求 + retry。
+async fn download_chunk(
+    client: &reqwest::Client,
+    url: &str,
+    partial: &Path,
+    range_start: u64,
+    range_end: u64,
+    total_size: u64,
+    cancel: &AtomicBool,
+    max_attempts: u32,
+    on_progress: &mut impl FnMut(u64),
+) -> Result<()> {
+    let mut last_err: Option<anyhow::Error> = None;
+    for attempt in 1..=max_attempts {
+        if cancel.load(Ordering::SeqCst) {
+            anyhow::bail!("cancelled");
+        }
+        // 每次重新计算 .partial 真实长度，万一上一次请求写了一些再失败的，我们顺势接续
+        let cur = std::fs::metadata(partial).map(|m| m.len()).unwrap_or(0);
+        let try_start = cur.max(range_start);
+        if try_start > range_end {
+            return Ok(());
+        }
+
+        match try_download_range(client, url, partial, try_start, range_end, total_size, cancel, on_progress).await {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                let msg = format!("{e:#}");
+                last_err = Some(e);
+                if attempt < max_attempts {
+                    let backoff = std::time::Duration::from_secs(1u64 << (2 * (attempt - 1)));
+                    log::warn!(
+                        "[local-asr] chunk [{try_start}-{range_end}] attempt {attempt}/{max_attempts} failed: {msg}; sleep {:?}",
+                        backoff
+                    );
+                    tokio::time::sleep(backoff).await;
+                }
+            }
+        }
+    }
+    Err(last_err.unwrap_or_else(|| anyhow::anyhow!("download_chunk failed after {max_attempts} attempts")))
+}
+
+async fn try_download_range(
+    client: &reqwest::Client,
+    url: &str,
+    partial: &Path,
+    range_start: u64,
+    range_end: u64,
+    total_size: u64,
+    cancel: &AtomicBool,
+    on_progress: &mut impl FnMut(u64),
+) -> Result<()> {
     let mut req = client.get(url);
-    if resume_from > 0 {
-        req = req.header("Range", format!("bytes={resume_from}-"));
+    if total_size > 0 {
+        req = req.header("Range", format!("bytes={range_start}-{range_end}"));
+    } else if range_start > 0 {
+        req = req.header("Range", format!("bytes={range_start}-"));
     }
     let resp = req
         .send()
         .await
         .with_context(|| format!("HTTP GET {url} failed"))?;
+
     let status = resp.status();
-    if !status.is_success() && status.as_u16() != 206 {
+    let is_partial = status.as_u16() == 206;
+    let is_full_ok = status.as_u16() == 200;
+    if !is_partial && !is_full_ok {
         anyhow::bail!("HTTP {status} for {url}");
     }
+
+    // 服务端忽略了 Range 返回 200 + 全文件：会污染 .partial，需要先截断从头来。
+    if is_full_ok && range_start > 0 {
+        log::warn!(
+            "[local-asr] server ignored Range (got 200 not 206) for {url}; truncating partial and restarting"
+        );
+        let _ = std::fs::remove_file(partial);
+    }
+
+    let effective_start = if is_full_ok { 0 } else { range_start };
 
     let mut file = tokio::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(&partial)
+        .open(partial)
         .await
         .with_context(|| format!("open partial failed: {}", partial.display()))?;
 
     let mut stream = resp.bytes_stream();
-    let mut total_written = resume_from;
+    let mut written: u64 = 0;
     while let Some(chunk) = stream.next().await {
         if cancel.load(Ordering::SeqCst) {
+            file.flush().await.ok();
             anyhow::bail!("cancelled");
         }
         let bytes = chunk.context("read stream chunk failed")?;
         file.write_all(&bytes).await.context("write chunk failed")?;
-        total_written += bytes.len() as u64;
-        on_chunk(total_written);
+        written += bytes.len() as u64;
+        on_progress(effective_start + written);
     }
     file.flush().await.ok();
-    drop(file);
-
-    tokio::fs::rename(&partial, dest)
-        .await
-        .with_context(|| format!("rename partial → final failed: {}", dest.display()))?;
     Ok(())
 }
 

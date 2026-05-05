@@ -19,9 +19,11 @@ import {
   listLocalAsrModels,
   setLocalAsrActiveModel,
   setLocalAsrMirror,
+  testLocalAsrModel,
   type LocalAsrDownloadProgress,
   type LocalAsrModelStatus,
   type LocalAsrSettings,
+  type LocalAsrTestResult,
 } from '../lib/localAsr';
 import { Btn, Card, PageHeader, Pill } from './_atoms';
 
@@ -40,6 +42,8 @@ export function LocalAsr() {
   const [remoteSizes, setRemoteSizes] = useState<Record<string, RemoteSize>>({});
   const [error, setError] = useState<string | null>(null);
   const [busyModelId, setBusyModelId] = useState<string | null>(null);
+  const [testingModelId, setTestingModelId] = useState<string | null>(null);
+  const [testResults, setTestResults] = useState<Record<string, LocalAsrTestResult | { error: string }>>({});
   const refreshTimer = useRef<number | null>(null);
 
   const refresh = async () => {
@@ -190,6 +194,24 @@ export function LocalAsr() {
     }
   };
 
+  const handleTest = async (modelId: string) => {
+    setTestingModelId(modelId);
+    setTestResults(prev => {
+      const next = { ...prev };
+      delete next[modelId];
+      return next;
+    });
+    try {
+      const result = await testLocalAsrModel(modelId);
+      setTestResults(prev => ({ ...prev, [modelId]: result }));
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      setTestResults(prev => ({ ...prev, [modelId]: { error: message } }));
+    } finally {
+      setTestingModelId(null);
+    }
+  };
+
   const handleMirrorChange = async (mirror: string) => {
     try {
       await setLocalAsrMirror(mirror);
@@ -268,10 +290,13 @@ export function LocalAsr() {
             isActive={settings?.activeModel === model.id}
             engineAvailable={engineAvailable}
             disabled={busyModelId !== null && busyModelId !== model.id}
+            testing={testingModelId === model.id}
+            testResult={testResults[model.id]}
             onDownload={() => void handleDownload(model.id)}
             onCancel={() => void handleCancel(model.id)}
             onDelete={() => void handleDelete(model.id)}
             onSetActive={() => void handleSetActiveModel(model.id)}
+            onTest={() => void handleTest(model.id)}
           />
         ))}
       </div>
@@ -286,10 +311,13 @@ interface ModelRowProps {
   isActive: boolean;
   engineAvailable: boolean;
   disabled: boolean;
+  testing: boolean;
+  testResult?: LocalAsrTestResult | { error: string };
   onDownload: () => void;
   onCancel: () => void;
   onDelete: () => void;
   onSetActive: () => void;
+  onTest: () => void;
 }
 
 function ModelRow({
@@ -299,10 +327,13 @@ function ModelRow({
   isActive,
   engineAvailable,
   disabled,
+  testing,
+  testResult,
   onDownload,
   onCancel,
   onDelete,
   onSetActive,
+  onTest,
 }: ModelRowProps) {
   const { t } = useTranslation();
   const isDownloading = useMemo(
@@ -368,7 +399,7 @@ function ModelRow({
             </div>
           )}
         </div>
-        <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+        <div style={{ display: 'flex', gap: 8, flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end', maxWidth: 360 }}>
           {model.isDownloaded ? (
             <>
               {!isActive && (
@@ -380,7 +411,14 @@ function ModelRow({
                   {t('localAsr.setActive')}
                 </Btn>
               )}
-              <Btn variant="ghost" size="sm" disabled={disabled} onClick={onDelete}>
+              <Btn
+                variant="primary"
+                size="sm"
+                disabled={disabled || testing || !engineAvailable}
+                onClick={onTest}>
+                {testing ? t('localAsr.testRunning') : t('localAsr.test')}
+              </Btn>
+              <Btn variant="ghost" size="sm" disabled={disabled || testing} onClick={onDelete}>
                 {t('localAsr.delete')}
               </Btn>
             </>
@@ -399,7 +437,53 @@ function ModelRow({
           )}
         </div>
       </div>
+      {testResult && <TestResultBlock result={testResult} />}
     </Card>
+  );
+}
+
+function TestResultBlock({ result }: { result: LocalAsrTestResult | { error: string } }) {
+  const { t } = useTranslation();
+  const hasError = 'error' in result;
+  return (
+    <div
+      style={{
+        marginTop: 12,
+        padding: '10px 12px',
+        background: hasError ? 'rgba(255, 220, 220, 0.5)' : 'rgba(0, 0, 0, 0.04)',
+        borderRadius: 8,
+        fontSize: 12.5,
+        color: hasError ? '#9b2c2c' : 'var(--ol-ink-2)',
+        lineHeight: 1.6,
+      }}>
+      {hasError ? (
+        <div>
+          <strong>{t('localAsr.testFailed')}: </strong>{result.error}
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <div style={{ fontSize: 11, color: 'var(--ol-ink-4)', letterSpacing: '.04em', textTransform: 'uppercase' }}>
+            {t('localAsr.testHeading')}
+          </div>
+          <div>
+            <span style={{ color: 'var(--ol-ink-4)' }}>{t('localAsr.testExpected')}: </span>
+            {result.expectedText}
+          </div>
+          <div>
+            <span style={{ color: 'var(--ol-ink-4)' }}>{t('localAsr.testActual')}: </span>
+            <strong>{result.transcribedText || '(空)'}</strong>
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--ol-ink-4)' }}>
+            {t('localAsr.testStats', {
+              audio: (result.audioMs / 1000).toFixed(1),
+              load: (result.loadMs / 1000).toFixed(1),
+              transcribe: (result.transcribeMs / 1000).toFixed(1),
+              backend: result.backend,
+            })}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 

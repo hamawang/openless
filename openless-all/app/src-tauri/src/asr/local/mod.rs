@@ -6,6 +6,7 @@
 pub mod download;
 mod local_provider;
 pub mod models;
+pub mod test_run;
 
 #[cfg(target_os = "macos")]
 mod qwen_engine;

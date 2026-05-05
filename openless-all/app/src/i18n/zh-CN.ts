@@ -540,5 +540,12 @@ export const zhCN = {
     sizeLoading: '正在查询尺寸…',
     sizeUnknown: '尺寸未知',
     performanceWarning: '本地推理跑在 CPU + Apple Silicon Accelerate 上，**首次转写需要加载模型（数秒）**，之后单次转写也会比云端 ASR 慢若干秒；中文识别准确率与方言/口音表现通常不如火山引擎 / Whisper turbo。适用场景：离线 / 隐私敏感 / 不愿付费云 API。',
+    test: '加载并测试',
+    testRunning: '测试中…',
+    testHeading: '内置音频测试',
+    testExpected: '原文',
+    testActual: '识别',
+    testStats: '音频时长 {{audio}}s · 加载 {{load}}s · 推理 {{transcribe}}s · 后端 {{backend}}',
+    testFailed: '测试失败',
   },
 };

@@ -780,6 +780,16 @@ pub fn local_asr_delete_model(model_id: String) -> Result<(), String> {
     crate::asr::local::models::delete_model(id).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub async fn local_asr_test_model(
+    model_id: String,
+) -> Result<crate::asr::local::test_run::TestResult, String> {
+    let id = ModelId::from_str(&model_id).ok_or_else(|| format!("unknown model id: {model_id}"))?;
+    crate::asr::local::test_run::run_test(id)
+        .await
+        .map_err(|e| format!("{e:#}"))
+}
+
 // ─────────────────────────── unused but exported (silences dead_code) ───────────────────────────
 
 #[allow(dead_code)]

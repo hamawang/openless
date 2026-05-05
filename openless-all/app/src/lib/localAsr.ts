@@ -123,3 +123,29 @@ export function cancelLocalAsrDownload(modelId: string): Promise<void> {
 export function deleteLocalAsrModel(modelId: string): Promise<void> {
   return invokeOrMock('local_asr_delete_model', { modelId }, () => undefined);
 }
+
+export interface LocalAsrTestResult {
+  backend: string;
+  modelId: string;
+  expectedText: string;
+  transcribedText: string;
+  audioMs: number;
+  loadMs: number;
+  transcribeMs: number;
+}
+
+export function testLocalAsrModel(modelId: string): Promise<LocalAsrTestResult> {
+  return invokeOrMock(
+    'local_asr_test_model',
+    { modelId },
+    () => ({
+      backend: 'mock',
+      modelId,
+      expectedText: 'Hello. This is a test of the Voxtrail speech-to-text system.',
+      transcribedText: '(浏览器 dev mock，实际推理需要在 Tauri 应用内)',
+      audioMs: 3000,
+      loadMs: 0,
+      transcribeMs: 0,
+    }),
+  );
+}

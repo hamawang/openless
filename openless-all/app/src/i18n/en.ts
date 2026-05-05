@@ -542,5 +542,12 @@ export const en: typeof zhCN = {
     sizeLoading: 'Fetching size…',
     sizeUnknown: 'Size unknown',
     performanceWarning: 'Local inference runs on CPU + Apple Silicon Accelerate. **First transcription loads the model (a few seconds)**, and each subsequent one is several seconds slower than cloud ASR. Chinese / dialect accuracy is typically lower than Volcengine / Whisper turbo. Best for offline, privacy-sensitive, or no-cloud-API scenarios.',
+    test: 'Load & Test',
+    testRunning: 'Testing…',
+    testHeading: 'Built-in audio test',
+    testExpected: 'Expected',
+    testActual: 'Got',
+    testStats: 'Audio {{audio}}s · Load {{load}}s · Transcribe {{transcribe}}s · Backend {{backend}}',
+    testFailed: 'Test failed',
   },
 };
