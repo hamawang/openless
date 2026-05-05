@@ -67,7 +67,10 @@ impl LocalAsrCache {
                 slot.take();
             }
         }
-        log::info!("[local-asr cache] loading {model_id} from {}", model_dir.display());
+        log::info!(
+            "[local-asr cache] loading {model_id} from {}",
+            model_dir.display()
+        );
         let engine = Arc::new(QwenAsrEngine::load(model_dir)?);
         let mut slot = self.inner.lock();
         *slot = Some(CachedEngine {
@@ -116,7 +119,10 @@ impl LocalAsrCache {
         #[cfg(target_os = "macos")]
         {
             if let Some(cached) = self.inner.lock().take() {
-                log::info!("[local-asr cache] release engine {} on demand", cached.model_id);
+                log::info!(
+                    "[local-asr cache] release engine {} on demand",
+                    cached.model_id
+                );
             }
         }
     }

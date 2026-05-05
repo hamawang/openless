@@ -74,10 +74,13 @@ impl ComboHotkeyMonitor {
             .register(hotkey)
             .map_err(|e| ComboHotkeyError::RegisterFailed(e.to_string()))?;
 
+        // runtime 已按 hotkey id 分发；这里保留 id 检查作为防线，
+        // 避免未来误接回进程级事件流后串到其他快捷键。
+        let hotkey_id = registered.hotkey().id();
         let tx_for_thread = tx.clone();
         std::thread::Builder::new()
             .name("openless-combo-hotkey-forward".into())
-            .spawn(move || forward_loop(rx, tx_for_thread))
+            .spawn(move || forward_loop(hotkey_id, rx, tx_for_thread))
             .map_err(|e| ComboHotkeyError::RegisterFailed(format!("spawn forward thread: {e}")))?;
 
         Ok(Self {
@@ -102,11 +105,12 @@ impl ComboHotkeyMonitor {
         let (registered, rx) = runtime
             .register(next)
             .map_err(|e| ComboHotkeyError::RegisterFailed(e.to_string()))?;
+        let hotkey_id = registered.hotkey().id();
         std::thread::Builder::new()
             .name("openless-combo-hotkey-forward".into())
             .spawn({
                 let tx = self.inner.tx.clone();
-                move || forward_loop(rx, tx)
+                move || forward_loop(hotkey_id, rx, tx)
             })
             .map_err(|e| ComboHotkeyError::RegisterFailed(format!("spawn forward thread: {e}")))?;
         *current = Some(registered);
@@ -120,8 +124,11 @@ impl Drop for ComboHotkeyMonitor {
     }
 }
 
-fn forward_loop(rx: Receiver<GlobalHotKeyEvent>, tx: Sender<ComboHotkeyEvent>) {
+fn forward_loop(hotkey_id: u32, rx: Receiver<GlobalHotKeyEvent>, tx: Sender<ComboHotkeyEvent>) {
     while let Ok(event) = rx.recv() {
+        if event.id() != hotkey_id {
+            continue;
+        }
         let combo_event = match event.state() {
             HotKeyState::Pressed => ComboHotkeyEvent::Pressed,
             HotKeyState::Released => ComboHotkeyEvent::Released,
@@ -224,5 +231,37 @@ mod tests {
             validate_binding(&binding),
             Err(ComboHotkeyError::UnsupportedKey(_))
         ));
+    }
+
+    #[test]
+    fn forward_loop_ignores_unrelated_hotkey_ids() {
+        let (event_tx, event_rx) = std::sync::mpsc::channel();
+        let (out_tx, out_rx) = std::sync::mpsc::channel();
+
+        event_tx
+            .send(GlobalHotKeyEvent {
+                id: 7,
+                state: HotKeyState::Pressed,
+            })
+            .unwrap();
+        event_tx
+            .send(GlobalHotKeyEvent {
+                id: 8,
+                state: HotKeyState::Released,
+            })
+            .unwrap();
+        event_tx
+            .send(GlobalHotKeyEvent {
+                id: 8,
+                state: HotKeyState::Pressed,
+            })
+            .unwrap();
+        drop(event_tx);
+
+        forward_loop(8, event_rx, out_tx);
+
+        assert!(matches!(out_rx.recv().unwrap(), ComboHotkeyEvent::Released));
+        assert!(matches!(out_rx.recv().unwrap(), ComboHotkeyEvent::Pressed));
+        assert!(out_rx.try_recv().is_err());
     }
 }

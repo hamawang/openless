@@ -78,12 +78,13 @@ impl QaHotkeyMonitor {
             .register(hotkey)
             .map_err(|e| QaHotkeyError::RegisterFailed(e.to_string()))?;
 
-        // 启动转发线程：消费 global-hotkey 的进程级 channel，filter id 后投递到上层 tx。
-        // global-hotkey 用 crossbeam_channel，自带超时 recv，便于优雅退出。
+        // 启动转发线程：runtime 已按 hotkey id 分发；这里保留 id 检查作为防线，
+        // 避免未来误接回进程级事件流后串到其他快捷键。
+        let hotkey_id = registered.hotkey().id();
         let tx_for_thread = tx.clone();
         std::thread::Builder::new()
             .name("openless-qa-hotkey-forward".into())
-            .spawn(move || forward_loop(rx, tx_for_thread))
+            .spawn(move || forward_loop(hotkey_id, rx, tx_for_thread))
             .map_err(|e| QaHotkeyError::RegisterFailed(format!("spawn forward thread: {e}")))?;
 
         Ok(Self {
@@ -108,12 +109,13 @@ impl QaHotkeyMonitor {
         let (registered, rx) = runtime
             .register(next)
             .map_err(|e| QaHotkeyError::RegisterFailed(e.to_string()))?;
+        let hotkey_id = registered.hotkey().id();
         // Keep event forwarding alive for the replacement registration.
         std::thread::Builder::new()
             .name("openless-qa-hotkey-forward".into())
             .spawn({
                 let tx = self.inner.tx.clone();
-                move || forward_loop(rx, tx)
+                move || forward_loop(hotkey_id, rx, tx)
             })
             .map_err(|e| QaHotkeyError::RegisterFailed(format!("spawn forward thread: {e}")))?;
         *current = Some(registered);
@@ -127,8 +129,11 @@ impl Drop for QaHotkeyMonitor {
     }
 }
 
-fn forward_loop(rx: Receiver<GlobalHotKeyEvent>, tx: Sender<QaHotkeyEvent>) {
+fn forward_loop(hotkey_id: u32, rx: Receiver<GlobalHotKeyEvent>, tx: Sender<QaHotkeyEvent>) {
     while let Ok(event) = rx.recv() {
+        if event.id() != hotkey_id {
+            continue;
+        }
         if !matches!(event.state(), HotKeyState::Pressed) {
             continue;
         }
@@ -216,5 +221,36 @@ mod tests {
         {
             assert!(parsed.mods.contains(Modifiers::SUPER));
         }
+    }
+
+    #[test]
+    fn forward_loop_ignores_unrelated_hotkey_ids() {
+        let (event_tx, event_rx) = std::sync::mpsc::channel();
+        let (out_tx, out_rx) = std::sync::mpsc::channel();
+
+        event_tx
+            .send(GlobalHotKeyEvent {
+                id: 41,
+                state: HotKeyState::Pressed,
+            })
+            .unwrap();
+        event_tx
+            .send(GlobalHotKeyEvent {
+                id: 42,
+                state: HotKeyState::Released,
+            })
+            .unwrap();
+        event_tx
+            .send(GlobalHotKeyEvent {
+                id: 42,
+                state: HotKeyState::Pressed,
+            })
+            .unwrap();
+        drop(event_tx);
+
+        forward_loop(42, event_rx, out_tx);
+
+        assert!(matches!(out_rx.recv().unwrap(), QaHotkeyEvent::Pressed));
+        assert!(out_rx.try_recv().is_err());
     }
 }

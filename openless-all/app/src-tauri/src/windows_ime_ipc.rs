@@ -392,10 +392,7 @@ mod tests {
 
     #[test]
     fn submit_timeout_covers_native_async_commit_path() {
-        assert!(
-            IME_SUBMIT_TIMEOUT
-                > Duration::from_millis(IME_NATIVE_ASYNC_COMMIT_TIMEOUT_MS)
-        );
+        assert!(IME_SUBMIT_TIMEOUT > Duration::from_millis(IME_NATIVE_ASYNC_COMMIT_TIMEOUT_MS));
     }
 
     #[test]

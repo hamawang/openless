@@ -95,7 +95,15 @@ impl SettingsWriter for Arc<Coordinator> {
     }
 }
 
-fn persist_settings<T: SettingsWriter>(coord: &T, prefs: UserPreferences) -> Result<(), String> {
+fn persist_settings<T: SettingsWriter>(
+    coord: &T,
+    mut prefs: UserPreferences,
+) -> Result<(), String> {
+    sync_dictation_hotkey_legacy_fields(&mut prefs);
+    reject_dictation_translation_hotkey_overlap(
+        &prefs.dictation_hotkey,
+        &prefs.translation_hotkey,
+    )?;
     coord.write_settings(prefs)?;
     coord.refresh_dictation_hotkey();
     coord.refresh_qa_hotkey();
@@ -166,7 +174,10 @@ pub fn set_credential(account: String, value: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn set_active_asr_provider(coord: CoordinatorState<'_>, provider: String) -> Result<(), String> {
+pub fn set_active_asr_provider(
+    coord: CoordinatorState<'_>,
+    provider: String,
+) -> Result<(), String> {
     CredentialsVault::set_active_asr_provider(&provider).map_err(|e| e.to_string())?;
     // 切到本地 ASR → 后台预加载模型，下次按 hotkey 时不必等数秒。
     if provider == crate::asr::local::PROVIDER_ID {
@@ -769,7 +780,9 @@ pub fn set_dictation_hotkey(
     if let Some(qa_hotkey) = prefs.qa_hotkey.as_ref() {
         reject_dictation_qa_hotkey_overlap(&binding, qa_hotkey)?;
     }
+    reject_dictation_translation_hotkey_overlap(&binding, &prefs.translation_hotkey)?;
     prefs.dictation_hotkey = binding;
+    sync_dictation_hotkey_legacy_fields(&mut prefs);
     coord.prefs().set(prefs).map_err(|e| e.to_string())?;
     coord.update_hotkey_binding();
     coord.update_combo_hotkey_binding();
@@ -782,10 +795,18 @@ pub fn set_translation_hotkey(
     binding: ShortcutBinding,
 ) -> Result<(), String> {
     crate::shortcut_binding::validate_binding(&binding).map_err(|e| e.to_string())?;
-    let mut prefs = coord.prefs().get();
+    let previous = coord.prefs().get();
+    reject_dictation_translation_hotkey_overlap(&previous.dictation_hotkey, &binding)?;
+    let mut prefs = previous.clone();
     prefs.translation_hotkey = binding;
     coord.prefs().set(prefs).map_err(|e| e.to_string())?;
-    coord.update_translation_hotkey_binding();
+    if let Err(e) = coord.try_update_translation_hotkey_binding() {
+        if let Err(rollback_err) = coord.prefs().set(previous) {
+            log::warn!("[commands] 回滚翻译快捷键失败: {rollback_err}");
+        }
+        coord.update_translation_hotkey_binding();
+        return Err(e);
+    }
     Ok(())
 }
 
@@ -850,9 +871,10 @@ pub fn set_combo_hotkey(coord: CoordinatorState<'_>, binding: ComboBinding) -> R
     if let Some(qa_hotkey) = prefs.qa_hotkey.as_ref() {
         reject_dictation_qa_hotkey_overlap(&shortcut, qa_hotkey)?;
     }
+    reject_dictation_translation_hotkey_overlap(&shortcut, &prefs.translation_hotkey)?;
     prefs.custom_combo_hotkey = Some(binding);
     prefs.dictation_hotkey = shortcut;
-    prefs.hotkey.trigger = crate::types::HotkeyTrigger::Custom;
+    sync_dictation_hotkey_legacy_fields(&mut prefs);
     coord.prefs().set(prefs).map_err(|e| e.to_string())?;
     coord.update_hotkey_binding();
     coord.update_combo_hotkey_binding();
@@ -866,12 +888,40 @@ fn reject_bare_shift_dictation_shortcut(binding: &ShortcutBinding) -> Result<(),
     Ok(())
 }
 
+fn sync_dictation_hotkey_legacy_fields(prefs: &mut UserPreferences) {
+    if let Some(trigger) = crate::shortcut_binding::legacy_modifier_trigger(&prefs.dictation_hotkey)
+    {
+        prefs.hotkey.trigger = trigger;
+        prefs.custom_combo_hotkey = None;
+        return;
+    }
+    prefs.hotkey.trigger = crate::types::HotkeyTrigger::Custom;
+    prefs.custom_combo_hotkey = if prefs.dictation_hotkey.primary.trim().is_empty() {
+        None
+    } else {
+        Some(ComboBinding {
+            primary: prefs.dictation_hotkey.primary.clone(),
+            modifiers: prefs.dictation_hotkey.modifiers.clone(),
+        })
+    };
+}
+
 fn reject_dictation_qa_hotkey_overlap(
     dictation: &ShortcutBinding,
     qa: &ShortcutBinding,
 ) -> Result<(), String> {
     if shortcut_bindings_overlap(dictation, qa) {
         return Err("QA 快捷键不能和听写快捷键相同".into());
+    }
+    Ok(())
+}
+
+fn reject_dictation_translation_hotkey_overlap(
+    dictation: &ShortcutBinding,
+    translation: &ShortcutBinding,
+) -> Result<(), String> {
+    if shortcut_bindings_overlap(dictation, translation) {
+        return Err("翻译快捷键不能和听写快捷键相同".into());
     }
     Ok(())
 }
@@ -923,7 +973,10 @@ pub fn local_asr_get_settings(coord: CoordinatorState<'_>) -> LocalAsrSettings {
 }
 
 #[tauri::command]
-pub fn local_asr_set_active_model(coord: CoordinatorState<'_>, model_id: String) -> Result<(), String> {
+pub fn local_asr_set_active_model(
+    coord: CoordinatorState<'_>,
+    model_id: String,
+) -> Result<(), String> {
     if ModelId::from_str(&model_id).is_none() {
         return Err(format!("unknown model id: {model_id}"));
     }
@@ -1151,7 +1204,7 @@ mod tests {
             .unwrap()
             .clone()
             .expect("settings saved");
-        assert_eq!(saved.hotkey.trigger, prefs.hotkey.trigger);
+        assert_eq!(saved.hotkey.trigger, HotkeyTrigger::RightOption);
         assert_eq!(saved.hotkey.mode, prefs.hotkey.mode);
         assert_eq!(
             saved.qa_hotkey.unwrap().primary,
@@ -1160,6 +1213,79 @@ mod tests {
         assert_eq!(*writer.dictation_refreshes.lock().unwrap(), 1);
         assert_eq!(*writer.qa_refreshes.lock().unwrap(), 1);
         assert_eq!(*writer.combo_refreshes.lock().unwrap(), 1);
+    }
+
+    #[test]
+    fn sync_dictation_hotkey_sets_modifier_trigger_and_clears_combo() {
+        let mut prefs = UserPreferences {
+            hotkey: HotkeyBinding {
+                trigger: HotkeyTrigger::Custom,
+                mode: HotkeyMode::Toggle,
+            },
+            custom_combo_hotkey: Some(ComboBinding {
+                primary: "D".into(),
+                modifiers: vec!["cmd".into(), "shift".into()],
+            }),
+            dictation_hotkey: ShortcutBinding {
+                primary: "RightControl".into(),
+                modifiers: vec![],
+            },
+            ..Default::default()
+        };
+
+        super::sync_dictation_hotkey_legacy_fields(&mut prefs);
+
+        assert_eq!(prefs.hotkey.trigger, HotkeyTrigger::RightControl);
+        assert!(prefs.custom_combo_hotkey.is_none());
+    }
+
+    #[test]
+    fn sync_dictation_hotkey_sets_custom_trigger_and_combo_binding() {
+        let mut prefs = UserPreferences {
+            hotkey: HotkeyBinding {
+                trigger: HotkeyTrigger::RightControl,
+                mode: HotkeyMode::Toggle,
+            },
+            dictation_hotkey: ShortcutBinding {
+                primary: "D".into(),
+                modifiers: vec!["cmd".into(), "shift".into()],
+            },
+            ..Default::default()
+        };
+
+        super::sync_dictation_hotkey_legacy_fields(&mut prefs);
+
+        assert_eq!(prefs.hotkey.trigger, HotkeyTrigger::Custom);
+        let combo = prefs.custom_combo_hotkey.expect("combo binding saved");
+        assert_eq!(combo.primary, "D");
+        assert_eq!(
+            combo.modifiers,
+            vec!["cmd".to_string(), "shift".to_string()]
+        );
+    }
+
+    #[test]
+    fn sync_dictation_hotkey_clears_empty_custom_binding() {
+        let mut prefs = UserPreferences {
+            hotkey: HotkeyBinding {
+                trigger: HotkeyTrigger::RightControl,
+                mode: HotkeyMode::Toggle,
+            },
+            custom_combo_hotkey: Some(ComboBinding {
+                primary: "D".into(),
+                modifiers: vec!["cmd".into(), "shift".into()],
+            }),
+            dictation_hotkey: ShortcutBinding {
+                primary: " ".into(),
+                modifiers: vec!["cmd".into()],
+            },
+            ..Default::default()
+        };
+
+        super::sync_dictation_hotkey_legacy_fields(&mut prefs);
+
+        assert_eq!(prefs.hotkey.trigger, HotkeyTrigger::Custom);
+        assert!(prefs.custom_combo_hotkey.is_none());
     }
 
     #[test]
@@ -1227,6 +1353,72 @@ mod tests {
         };
 
         assert!(super::reject_dictation_qa_hotkey_overlap(&dictation, &qa).is_ok());
+    }
+
+    #[test]
+    fn dictation_translation_overlap_rejects_same_modifier_only_binding() {
+        let binding = ShortcutBinding {
+            primary: "RightControl".into(),
+            modifiers: vec![],
+        };
+
+        assert_eq!(
+            super::reject_dictation_translation_hotkey_overlap(&binding, &binding),
+            Err("翻译快捷键不能和听写快捷键相同".into())
+        );
+    }
+
+    #[test]
+    fn dictation_translation_overlap_rejects_same_combo_binding() {
+        let dictation = ShortcutBinding {
+            primary: "T".into(),
+            modifiers: vec!["ctrl".into(), "shift".into()],
+        };
+        let translation = ShortcutBinding {
+            primary: "T".into(),
+            modifiers: vec!["control".into(), "shift".into()],
+        };
+
+        assert_eq!(
+            super::reject_dictation_translation_hotkey_overlap(&dictation, &translation),
+            Err("翻译快捷键不能和听写快捷键相同".into())
+        );
+    }
+
+    #[test]
+    fn dictation_translation_overlap_allows_distinct_bindings() {
+        let dictation = ShortcutBinding {
+            primary: "RightControl".into(),
+            modifiers: vec![],
+        };
+        let translation = ShortcutBinding {
+            primary: "Shift".into(),
+            modifiers: vec![],
+        };
+
+        assert!(
+            super::reject_dictation_translation_hotkey_overlap(&dictation, &translation).is_ok()
+        );
+    }
+
+    #[test]
+    fn persist_settings_rejects_dictation_translation_overlap() {
+        let writer = FakeSettingsWriter::default();
+        let binding = ShortcutBinding {
+            primary: "RightControl".into(),
+            modifiers: vec![],
+        };
+        let prefs = UserPreferences {
+            dictation_hotkey: binding.clone(),
+            translation_hotkey: binding,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            persist_settings(&writer, prefs),
+            Err("翻译快捷键不能和听写快捷键相同".into())
+        );
+        assert!(writer.saved.lock().unwrap().is_none());
     }
 
     #[tokio::test]

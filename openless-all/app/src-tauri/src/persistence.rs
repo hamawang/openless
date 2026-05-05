@@ -451,7 +451,11 @@ impl PreferencesStore {
         let path = dir.join(PREFERENCES_FILE);
         let prefs = if path.exists() {
             read_or_default::<UserPreferences>(&path).unwrap_or_else(|e| {
-                log::warn!("[prefs] load {} failed, using defaults: {}", path.display(), e);
+                log::warn!(
+                    "[prefs] load {} failed, using defaults: {}",
+                    path.display(),
+                    e
+                );
                 UserPreferences::default()
             })
         } else {
@@ -756,7 +760,8 @@ mod tests {
 
     #[test]
     fn vocab_presets_roundtrip_json_file() {
-        let tmp: PathBuf = std::env::temp_dir().join(format!("openless-test-{}", uuid::Uuid::new_v4()));
+        let tmp: PathBuf =
+            std::env::temp_dir().join(format!("openless-test-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&tmp).expect("create temp dir");
         // Linux path helper uses XDG_DATA_HOME first.
         unsafe {
@@ -775,7 +780,10 @@ mod tests {
         let loaded = list_vocab_presets().expect("list presets");
         assert_eq!(loaded.custom.len(), 1);
         assert_eq!(loaded.custom[0].id, "test");
-        assert_eq!(loaded.custom[0].phrases, vec!["PR".to_string(), "CI".to_string()]);
+        assert_eq!(
+            loaded.custom[0].phrases,
+            vec!["PR".to_string(), "CI".to_string()]
+        );
         assert_eq!(loaded.disabled_builtin_preset_ids, vec!["chef".to_string()]);
         let _ = fs::remove_dir_all(&tmp);
     }
