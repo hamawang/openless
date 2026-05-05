@@ -83,7 +83,9 @@ function CenterText({ os, kind, text, color = 'var(--ol-ink-3)' }: CenterTextPro
         fontSize: 11,
         fontWeight: 500,
         color,
-        width: metrics.textWidth,
+        width: '100%',
+        maxWidth: metrics.textWidth,
+        minWidth: 0,
         textAlign: 'center',
         lineHeight: layout.allowWrap ? 1.2 : 1,
         whiteSpace: layout.allowWrap ? 'normal' : 'nowrap',
@@ -176,7 +178,9 @@ function Pill({ os, state, level, insertedChars, message, onCancel, onConfirm }:
             flexDirection: os === 'win' ? 'column' : 'row',
             alignItems: 'center',
             gap: os === 'win' ? 4 : 6,
-            width: metrics.textWidth,
+            width: '100%',
+            maxWidth: metrics.textWidth,
+            minWidth: 0,
             justifyContent: 'center',
           }}
         >
@@ -186,6 +190,7 @@ function Pill({ os, state, level, insertedChars, message, onCancel, onConfirm }:
               fontSize: 10.5,
               fontWeight: 500,
               color: 'var(--ol-ink-2)',
+              minWidth: 0,
               textAlign: 'center',
               lineHeight: processingLayout.allowWrap ? 1.15 : 1,
               whiteSpace: processingLayout.allowWrap ? 'normal' : 'nowrap',
@@ -249,7 +254,7 @@ function Pill({ os, state, level, insertedChars, message, onCancel, onConfirm }:
       }}
     >
       <CircleButton variant="cancel" enabled={enabled} onClick={onCancel} />
-      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         {center}
       </div>
       <CircleButton variant="confirm" enabled={enabled} onClick={onConfirm} />
