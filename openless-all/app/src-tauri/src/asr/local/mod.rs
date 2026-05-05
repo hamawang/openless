@@ -14,7 +14,7 @@ mod qwen_ffi;
 #[cfg(target_os = "macos")]
 pub use qwen_engine::QwenAsrEngine;
 
-pub use download::{DownloadManager, DownloadPhase, Mirror};
+pub use download::{DownloadManager, Mirror};
 pub use models::{ModelId, ModelStatus};
 
 /// 本地 Qwen3-ASR 在 active_asr 字段里的标识；与前端 ASR_PRESETS 的 id 对齐。

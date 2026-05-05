@@ -123,6 +123,21 @@ pub struct UserPreferences {
     /// 详见 issue #118。
     #[serde(default)]
     pub qa_save_history: bool,
+    /// 本地 Qwen3-ASR 当前激活的模型 id（"qwen3-asr-0.6b" / "qwen3-asr-1.7b"）。
+    /// 仅在 active_asr_provider == "local-qwen3" 时有意义。
+    #[serde(default = "default_local_asr_model")]
+    pub local_asr_active_model: String,
+    /// 本地模型下载源镜像（"huggingface" / "hf-mirror"）。
+    #[serde(default = "default_local_asr_mirror")]
+    pub local_asr_mirror: String,
+}
+
+fn default_local_asr_model() -> String {
+    "qwen3-asr-0.6b".into()
+}
+
+fn default_local_asr_mirror() -> String {
+    "huggingface".into()
 }
 
 fn default_qa_hotkey() -> Option<QaHotkeyBinding> {
@@ -154,6 +169,8 @@ impl Default for UserPreferences {
             translation_target_language: String::new(),
             qa_hotkey: default_qa_hotkey(),
             qa_save_history: false,
+            local_asr_active_model: default_local_asr_model(),
+            local_asr_mirror: default_local_asr_mirror(),
         }
     }
 }

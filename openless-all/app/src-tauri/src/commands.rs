@@ -688,6 +688,85 @@ pub fn qa_window_pin(coord: CoordinatorState<'_>, pinned: bool) {
     coord.qa_window_pin(pinned);
 }
 
+// ─────────────────────────── local ASR (Qwen3-ASR) ───────────────────────────
+
+use crate::asr::local::{
+    DownloadManager, Mirror, ModelId, ModelStatus, PROVIDER_ID as LOCAL_PROVIDER_ID,
+};
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalAsrSettings {
+    pub provider_id: String,
+    pub active_model: String,
+    pub mirror: String,
+    /// macOS 才编入引擎；Windows 端 UI 需要据此把"开始下载"按钮灰掉。
+    pub engine_available: bool,
+}
+
+#[tauri::command]
+pub fn local_asr_get_settings(coord: CoordinatorState<'_>) -> LocalAsrSettings {
+    let prefs = coord.prefs().get();
+    LocalAsrSettings {
+        provider_id: LOCAL_PROVIDER_ID.into(),
+        active_model: prefs.local_asr_active_model,
+        mirror: prefs.local_asr_mirror,
+        engine_available: cfg!(target_os = "macos"),
+    }
+}
+
+#[tauri::command]
+pub fn local_asr_set_active_model(coord: CoordinatorState<'_>, model_id: String) -> Result<(), String> {
+    if ModelId::from_str(&model_id).is_none() {
+        return Err(format!("unknown model id: {model_id}"));
+    }
+    let mut prefs = coord.prefs().get();
+    prefs.local_asr_active_model = model_id;
+    coord.prefs().set(prefs).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn local_asr_set_mirror(coord: CoordinatorState<'_>, mirror: String) -> Result<(), String> {
+    let _normalized = Mirror::from_str(&mirror);
+    let mut prefs = coord.prefs().get();
+    prefs.local_asr_mirror = mirror;
+    coord.prefs().set(prefs).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn local_asr_list_models() -> Vec<ModelStatus> {
+    crate::asr::local::models::list_status()
+}
+
+#[tauri::command]
+pub fn local_asr_download_model(
+    app: AppHandle,
+    manager: State<'_, Arc<DownloadManager>>,
+    model_id: String,
+    mirror: Option<String>,
+) -> Result<(), String> {
+    let id = ModelId::from_str(&model_id).ok_or_else(|| format!("unknown model id: {model_id}"))?;
+    let m = mirror.as_deref().map(Mirror::from_str).unwrap_or_default();
+    manager.start(app, id, m);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn local_asr_cancel_download(
+    manager: State<'_, Arc<DownloadManager>>,
+    model_id: String,
+) -> Result<(), String> {
+    let id = ModelId::from_str(&model_id).ok_or_else(|| format!("unknown model id: {model_id}"))?;
+    manager.cancel(id);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn local_asr_delete_model(model_id: String) -> Result<(), String> {
+    let id = ModelId::from_str(&model_id).ok_or_else(|| format!("unknown model id: {model_id}"))?;
+    crate::asr::local::models::delete_model(id).map_err(|e| e.to_string())
+}
+
 // ─────────────────────────── unused but exported (silences dead_code) ───────────────────────────
 
 #[allow(dead_code)]
