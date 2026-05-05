@@ -782,7 +782,7 @@ mod platform {
 
         let trigger = ctx.shared.binding.read().trigger;
         if trigger == HotkeyTrigger::Custom {
-            return;
+            return false;
         }
         if vk_code != trigger_to_vk_code(trigger) {
             return false;
