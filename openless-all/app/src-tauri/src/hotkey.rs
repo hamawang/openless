@@ -716,7 +716,9 @@ mod platform {
             if let Some(ctx) = callback_context() {
                 let keyboard = *(lparam.0 as *const KBDLLHOOKSTRUCT);
                 if keyboard.flags.0 & LLKHF_INJECTED == 0 || accept_injected_events() {
-                    dispatch_keyboard_event(ctx, keyboard.vkCode, wparam.0);
+                    if dispatch_keyboard_event(ctx, keyboard.vkCode, wparam.0) {
+                        return LRESULT(1);
+                    }
                 }
             }
         }
@@ -733,10 +735,10 @@ mod platform {
         }
     }
 
-    fn dispatch_keyboard_event(ctx: &CallbackContext, vk_code: u32, message: usize) {
+    fn dispatch_keyboard_event(ctx: &CallbackContext, vk_code: u32, message: usize) -> bool {
         if vk_code == VK_ESCAPE && (message == WM_KEYDOWN || message == WM_SYSKEYDOWN) {
             send_or_log(&ctx.tx, HotkeyEvent::Cancelled);
-            return;
+            return false;
         }
 
         // Shift（任一侧）= 翻译模式修饰键。在录音过程中任意时刻按下都生效。详见 issue #4。
@@ -758,7 +760,7 @@ mod platform {
                 }
                 _ => {}
             }
-            return;
+            return false;
         }
 
         handle_optional_modifier_trigger(
@@ -783,7 +785,7 @@ mod platform {
             return;
         }
         if vk_code != trigger_to_vk_code(trigger) {
-            return;
+            return false;
         }
 
         match message {
@@ -803,6 +805,7 @@ mod platform {
             }
             _ => {}
         }
+        true
     }
 
     fn handle_optional_modifier_trigger(

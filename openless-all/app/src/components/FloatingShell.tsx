@@ -16,6 +16,7 @@ import { Vocab } from '../pages/Vocab';
 import { Style } from '../pages/Style';
 import { Translation } from '../pages/Translation';
 import { SelectionAsk } from '../pages/SelectionAsk';
+import { LocalAsr } from '../pages/LocalAsr';
 import { APP_VERSION_LABEL } from '../lib/appVersion';
 import {
   HOTKEY_MODE_MIGRATION_ACK_KEY,
@@ -29,7 +30,7 @@ import {
   PROVIDER_SETUP_PROMPT_DEFERRED_KEY,
   shouldShowProviderSetupPrompt,
 } from '../lib/providerSetup';
-import type { SettingsSectionId } from '../pages/Settings';
+import { NAVIGATE_LOCAL_ASR_EVENT, type SettingsSectionId } from '../pages/Settings';
 import { useHotkeySettings } from '../state/HotkeySettingsContext';
 import { useAppState, type AppTab } from '../state/useAppState';
 
@@ -47,6 +48,7 @@ const NAV_BASE: Array<Omit<NavItem, 'name'>> = [
   { id: 'style', icon: 'style', cmp: Style },
   { id: 'translation', icon: 'translate', cmp: Translation },
   { id: 'selectionAsk', icon: 'selectionAsk', cmp: SelectionAsk },
+  { id: 'localAsr', icon: 'archive', cmp: LocalAsr },
 ];
 
 const RELEASE_NOTES_URL = 'https://github.com/appergb/openless/releases';
@@ -136,6 +138,16 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
       setHotkeyModePromptOpen(true);
     }
   }, []);
+
+  // Settings → ASR 选 local-qwen3 时的"前往模型设置"事件 → 关 modal + 切 tab。
+  useEffect(() => {
+    const onNavigate = () => {
+      setSettingsOpen(false);
+      setCurrentTab('localAsr');
+    };
+    window.addEventListener(NAVIGATE_LOCAL_ASR_EVENT, onNavigate);
+    return () => window.removeEventListener(NAVIGATE_LOCAL_ASR_EVENT, onNavigate);
+  }, [setCurrentTab, setSettingsOpen]);
 
   const rememberProviderPrompt = () => {
     window.sessionStorage.setItem(PROVIDER_SETUP_PROMPT_DEFERRED_KEY, '1');
@@ -290,6 +302,14 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
                     两列内部各自的 overflow:auto 才能独立滚动 */}
             <div
               key={displayTab}
+              // issue #243：所有 tab 都允许 overflow:auto，让窗口被压缩 / 文案
+              //   变长时仍可触达底部内容（Codex P1：之前 overview 用 hidden
+              //   会让缩窗后 Recent 卡彻底不可见）。
+              //   - Overview 借 Overview.tsx 内部 flex 把底部行 grow 到撑满，
+              //     正常尺寸下内容刚好占满 → 浏览器自动不显示 scrollbar；
+              //     真挤不下了才 fallback 出细滚动条。
+              //   - 其他 tab 同样走细滚动条。
+              className="ol-thinscroll"
               style={{
                 flex: 1, minHeight: 0,
                 overflow: 'auto',

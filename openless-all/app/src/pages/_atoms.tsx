@@ -32,11 +32,13 @@ interface CardProps {
   style?: CSSProperties;
   padding?: number;
   glassy?: boolean;
+  className?: string;
 }
 
-export function Card({ children, style, padding = 18, glassy = false }: CardProps) {
+export function Card({ children, style, padding = 18, glassy = false, className }: CardProps) {
   return (
     <div
+      className={className}
       style={{
         background: glassy ? 'rgba(255,255,255,0.55)' : 'var(--ol-surface)',
         backdropFilter: glassy ? 'blur(20px) saturate(160%)' : undefined,

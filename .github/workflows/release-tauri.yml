@@ -187,7 +187,36 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: bash scripts/build-mac.sh
 
-      # ── Windows：仅 Windows 跑通用 tauri build（Linux 用下方专用 step，避免重复构建）──
+      # ── Windows：先 build OpenLessIme.dll(x64+x86)，再跑 tauri bundle。
+      #    openless-ime.wxs 用 $(env.OPENLESS_IME_DLL_X64) / _X86 拿绝对路径，
+      #    跨 candle/light cwd 都能 resolve（Tauri wix bundler cwd 不固定）。
+      - name: Build Windows IME native DLLs
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        working-directory: 'openless-all/app'
+        run: |
+          $appRoot = (Resolve-Path .).Path
+          foreach ($t in @(
+            @{ Platform = 'x64';   Folder = 'x64'; EnvName = 'OPENLESS_IME_DLL_X64' },
+            @{ Platform = 'Win32'; Folder = 'x86'; EnvName = 'OPENLESS_IME_DLL_X86' }
+          )) {
+            $out = Join-Path $appRoot "src-tauri\target\windows-ime-msvc\$($t.Folder)\Release"
+            $obj = Join-Path $appRoot "src-tauri\target\windows-ime-msvc\obj\$($t.Folder)\Release"
+            ./scripts/windows-ime-build.ps1 -Configuration Release -Platform $t.Platform -OutputDirectory $out -IntermediateDirectory $obj
+            if ($LASTEXITCODE -ne 0) {
+              throw "OpenLessIme $($t.Platform) build failed with exit $LASTEXITCODE"
+            }
+            $dll = (Resolve-Path (Join-Path $out 'OpenLessIme.dll')).Path
+            if (-not (Test-Path $dll)) {
+              throw "OpenLessIme.dll not produced at $dll"
+            }
+            "$($t.EnvName)=$dll" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+            Write-Host "[ok] built $dll (exported $($t.EnvName))"
+          }
+
+      # ── Windows tauri build：保持 bash shell，因为 PowerShell 调外部命令
+      #    会把 '{"bundle":...}' 的内部双引号吃掉、让 tauri 收到无效 JSON。
+      #    用 set +e + GITHUB_ENV 把 exit code 传到下一步给 Repair 判断。
       - name: Build (Windows)
         if: matrix.platform == 'windows-latest'
         shell: bash
@@ -196,11 +225,78 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
+          set +e
+          # 拆两轮跑：Tauri 的签名 / updater artifact 阶段是 post-bundle 钩子，
+          # 任意 bundler 失败会让 *所有* bundle 的 .sig 跳过。MSI 必踩 ICE80，
+          # 所以单一 `tauri build` 永远拿不到 NSIS 的 .exe.sig。
+          # Pass 1：NSIS 独立跑——必须成功，产出 *_x64-setup.exe(.sig) 给 updater。
+          # Pass 2：MSI 独立跑——允许失败，Repair 步骤兜底 light.exe 重链。
           if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
-            npm run tauri -- build --config '{"bundle":{"createUpdaterArtifacts":true}}'
+            npm run tauri -- build --bundles nsis --config '{"bundle":{"createUpdaterArtifacts":true}}'
+            nsis_exit=$?
+            npm run tauri -- build --bundles msi --config '{"bundle":{"createUpdaterArtifacts":true}}'
+            msi_exit=$?
           else
-            npm run tauri build
+            npm run tauri -- build --bundles nsis
+            nsis_exit=$?
+            npm run tauri -- build --bundles msi
+            msi_exit=$?
           fi
+          echo "TAURI_BUILD_EXIT=$msi_exit" >> "$GITHUB_ENV"
+          # NSIS 是 updater 的硬依赖，挂了就直接 fail step。
+          if [ "$nsis_exit" -ne 0 ]; then
+            echo "::error::NSIS bundle failed (exit $nsis_exit) — updater artifact unavailable."
+            exit 1
+          fi
+          # MSI 失败不挡——下一步 Repair 用 light.exe 重链（带 -sice:ICE80）。
+          exit 0
+
+      # ── 如果 tauri 在 wix link 阶段失败（candle 出了 wixobj，但 light 因 cwd
+      #    解析 wxs Source 找不到 IME DLL），从 appRoot 手动跑 light 兜底重链。
+      #    这是本地 windows-package-msvc.ps1::Repair-TauriMsiBundle 的同款手术。
+      - name: Repair Windows MSI if Tauri failed at WiX link
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        working-directory: 'openless-all/app'
+        run: |
+          $exitCode = $env:TAURI_BUILD_EXIT
+          $appRoot = (Resolve-Path .).Path
+          $msi = Get-ChildItem "src-tauri\target\release\bundle\msi\*.msi" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($msi) {
+            Write-Host "[ok] MSI already produced by tauri: $($msi.FullName); no repair needed."
+            return
+          }
+          if (-not $exitCode -or $exitCode -eq '0') {
+            throw "Tauri exited 0 but no MSI found at src-tauri\target\release\bundle\msi\"
+          }
+          Write-Warning "Tauri MSI failed (exit $exitCode). Attempting manual light.exe relink from app root."
+          $wixRoot = Join-Path $appRoot 'src-tauri\target\release\wix\x64'
+          $mainObj = Join-Path $wixRoot 'main.wixobj'
+          $imeObj  = Join-Path $wixRoot 'openless-ime.wixobj'
+          $locale  = Join-Path $wixRoot 'locale.wxl'
+          foreach ($p in @($mainObj, $imeObj, $locale)) {
+            if (-not (Test-Path $p)) {
+              throw "Required WiX object missing: $p — tauri build aborted before candle ran. Check the Build (Windows) step log."
+            }
+          }
+          $light = (Get-ChildItem "$env:LOCALAPPDATA\tauri\WixTools314\light.exe" -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
+          if (-not $light) { throw "WiX light.exe not found in $env:LOCALAPPDATA\tauri\WixTools314" }
+          $version = (Get-Content src-tauri\tauri.conf.json -Raw | ConvertFrom-Json).version
+          $bundleDir = Join-Path $appRoot 'src-tauri\target\release\bundle\msi'
+          New-Item -ItemType Directory -Force -Path $bundleDir | Out-Null
+          $msiPath = Join-Path $bundleDir "OpenLess_${version}_x64_en-US.msi"
+          Push-Location $appRoot
+          try {
+            # -sice:ICE80：x86 IME DLL 与 x64 一同打进 INSTALLDIR\windows-ime\，
+            # 这是 32 位组件落在 64 位 Directory 下的合法场景（DLL 路径绝对指向，
+            # 不依赖 SysWOW64 重定向）。Tauri 自身没有暴露 light 透传参数，所以
+            # 必须在这里抑制，否则 LGHT0204 必失败。
+            & $light -nologo -sice:ICE80 -ext WixUIExtension -ext WixUtilExtension -loc $locale -out $msiPath $mainObj $imeObj
+            if ($LASTEXITCODE -ne 0) { throw "light.exe relink failed with exit $LASTEXITCODE" }
+          } finally {
+            Pop-Location
+          }
+          Write-Host "[ok] MSI rebuilt at $msiPath"
 
       # ── Linux：产 deb / rpm / AppImage ──
       - name: Build (Linux)

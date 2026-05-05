@@ -6,6 +6,7 @@
 //! `volcengine.rs`.
 
 mod frame;
+pub mod local;
 pub mod volcengine;
 pub mod whisper;
 

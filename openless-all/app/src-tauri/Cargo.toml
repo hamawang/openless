@@ -1,6 +1,6 @@
 [package]
 name = "openless"
-version = "1.2.13"
+version = "1.2.19"
 description = "OpenLess — local voice input that types where your cursor is"
 authors = ["OpenLess"]
 edition = "2021"
@@ -12,6 +12,8 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+# Compile antirez/qwen-asr C sources for the local ASR engine on macOS.
+cc = "1.1"
 
 [dependencies]
 tauri = { version = "2", features = ["macos-private-api", "tray-icon"] }
@@ -24,7 +26,7 @@ serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-native-roots"] }
 futures-util = "0.3"
-reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls", "native-tls", "stream"] }
 thiserror = "1"
 anyhow = "1"
 log = "0.4"
@@ -52,6 +54,8 @@ core-graphics = "0.24"
 objc2 = "0.5"
 objc2-foundation = "0.2"
 objc2-app-kit = "0.2"
+# antirez/qwen-asr 用 malloc 分配返回字符串，必须用 C `free()` 释放。
+libc = "0.2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 raw-window-handle = "0.6"

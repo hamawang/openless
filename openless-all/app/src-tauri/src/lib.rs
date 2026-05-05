@@ -50,6 +50,7 @@ pub fn run() {
     log::info!("=== OpenLess 启动 ===");
 
     let coordinator = Arc::new(coordinator::Coordinator::new());
+    let local_asr_download_manager = Arc::new(asr::local::DownloadManager::new());
 
     tauri::Builder::default()
         // 单实例锁：第二个进程启动时立即退出，激活信号转给已运行实例的主窗口。
@@ -71,6 +72,7 @@ pub fn run() {
             None,
         ))
         .manage(coordinator.clone())
+        .manage(local_asr_download_manager.clone())
         .setup(move |app| {
             // Capsule 启动时定位到屏幕底部居中并隐藏；coordinator 按需显示。
             // 与 Swift `CapsuleWindowController.repositionToBottomCenter` 同语义。
@@ -239,6 +241,19 @@ pub fn run() {
             commands::set_combo_hotkey,
             commands::validate_provider_credentials,
             commands::list_provider_models,
+            commands::local_asr_get_settings,
+            commands::local_asr_set_active_model,
+            commands::local_asr_set_mirror,
+            commands::local_asr_list_models,
+            commands::local_asr_fetch_remote_info,
+            commands::local_asr_download_model,
+            commands::local_asr_cancel_download,
+            commands::local_asr_delete_model,
+            commands::local_asr_test_model,
+            commands::local_asr_engine_status,
+            commands::local_asr_release_engine,
+            commands::local_asr_preload,
+            commands::local_asr_set_keep_loaded_secs,
             restart_app,
         ])
         .build(tauri::generate_context!())

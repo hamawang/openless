@@ -115,7 +115,7 @@ fn run_audio_thread(
     startup_tx: Sender<Result<(), RecorderError>>,
     runtime_error_tx: Sender<RecorderError>,
 ) {
-    let stream = match build_input_stream(consumer, level_handler, runtime_error_tx) {
+    let (stream, state) = match build_input_stream(consumer, level_handler, runtime_error_tx.clone()) {
         Ok(s) => s,
         Err(err) => {
             // 启动失败：通知主线程后即退出。
@@ -132,6 +132,59 @@ fn run_audio_thread(
     // 启动成功。
     let _ = startup_tx.send(Ok(()));
 
+    // 启动 liveness watchdog 线程：检测录音回调是否静默停止
+    const WATCHDOG_CHECK_INTERVAL_MS: u64 = 1000;  // 每秒检查一次
+    const CALLBACK_TIMEOUT_SECS: u64 = 3;  // 3 秒没有回调视为异常
+    const FIRST_CALLBACK_DEADLINE_SECS: u64 = 5;  // 5 秒内必须收到首次回调
+
+    let stop_flag_for_watchdog = Arc::clone(&stop_flag);
+    let state_for_watchdog = Arc::clone(&state);
+    let runtime_error_tx_for_watchdog = runtime_error_tx.clone();
+
+    let watchdog_handle = thread::Builder::new()
+        .name("openless-recorder-watchdog".into())
+        .spawn(move || {
+            // 记录 watchdog 启动时间，确保首次回调截止时间从播放真正开始时计时
+            let watchdog_start_time = std::time::Instant::now();
+
+            while !stop_flag_for_watchdog.load(Ordering::SeqCst) {
+                thread::sleep(std::time::Duration::from_millis(WATCHDOG_CHECK_INTERVAL_MS));
+
+                let last_callback = *state_for_watchdog.last_callback_time.lock();
+                match last_callback {
+                    Some(last_time) => {
+                        // 已收到首次回调，检查是否停止
+                        let elapsed = last_time.elapsed();
+                        if elapsed.as_secs() > CALLBACK_TIMEOUT_SECS {
+                            log::error!(
+                                "[recorder] watchdog: 录音回调已停止 {} 秒，触发错误恢复",
+                                elapsed.as_secs()
+                            );
+                            let _ = runtime_error_tx_for_watchdog.send(RecorderError::EngineFailed(
+                                format!("录音回调静默停止 {} 秒", elapsed.as_secs())
+                            ));
+                            break;  // 只报告一次
+                        }
+                    }
+                    None => {
+                        // 尚未收到首次回调，检查是否超过截止时间
+                        let elapsed = watchdog_start_time.elapsed();
+                        if elapsed.as_secs() > FIRST_CALLBACK_DEADLINE_SECS {
+                            log::error!(
+                                "[recorder] watchdog: {} 秒内未收到首次回调，触发错误恢复",
+                                elapsed.as_secs()
+                            );
+                            let _ = runtime_error_tx_for_watchdog.send(RecorderError::EngineFailed(
+                                format!("录音启动后 {} 秒内未收到回调", elapsed.as_secs())
+                            ));
+                            break;  // 只报告一次
+                        }
+                    }
+                }
+            }
+        })
+        .ok();
+
     // 自旋等待停止信号——cpal 自身没有 wait API，sleep 50ms 完全够用。
     while !stop_flag.load(Ordering::SeqCst) {
         thread::sleep(std::time::Duration::from_millis(50));
@@ -139,6 +192,11 @@ fn run_audio_thread(
 
     // Stream 在 drop 时自动停止。
     drop(stream);
+
+    // 等待 watchdog 线程退出
+    if let Some(handle) = watchdog_handle {
+        let _ = handle.join();
+    }
 }
 
 /// 选默认输入设备 + 默认配置 + 构造 Stream。
@@ -146,7 +204,7 @@ fn build_input_stream(
     consumer: Arc<dyn AudioConsumer>,
     level_handler: Arc<dyn Fn(f32) + Send + Sync>,
     runtime_error_tx: Sender<RecorderError>,
-) -> Result<cpal::Stream, RecorderError> {
+) -> Result<(cpal::Stream, Arc<StreamState>), RecorderError> {
     let host = cpal::default_host();
     let device = host
         .default_input_device()
@@ -169,17 +227,18 @@ fn build_input_stream(
     );
 
     let state = Arc::new(StreamState::new());
-    build_stream_for_format(
+    let stream = build_stream_for_format(
         &device,
         &config,
         sample_format,
         consumer,
         level_handler,
-        state,
+        Arc::clone(&state),
         input_sr,
         channels,
         runtime_error_tx,
-    )
+    )?;
+    Ok((stream, state))
 }
 
 /// 启动期 default_input_config 失败：依靠错误字符串关键字粗判权限问题。
@@ -281,6 +340,8 @@ struct StreamState {
     callback_count: AtomicUsize,
     peak_input_rms_milli: AtomicUsize,
     peak_output_rms_milli: AtomicUsize,
+    /// 最后一次成功调用 consumer 的时间戳（用于 liveness 检测）
+    last_callback_time: Mutex<Option<std::time::Instant>>,
 }
 
 impl StreamState {
@@ -291,6 +352,8 @@ impl StreamState {
             callback_count: AtomicUsize::new(0),
             peak_input_rms_milli: AtomicUsize::new(0),
             peak_output_rms_milli: AtomicUsize::new(0),
+            // 初始化为 None，只有在第一次回调后才开始计时，避免误报慢启动设备
+            last_callback_time: Mutex::new(None),
         }
     }
 }
@@ -321,6 +384,9 @@ fn process_callback(
 
     consumer.consume_pcm_chunk(&pcm_bytes);
     level_handler(level);
+
+    // 更新最后一次成功调用的时间戳（用于 liveness 检测）
+    *state.last_callback_time.lock() = Some(std::time::Instant::now());
 
     // 诊断：峰值 + 周期性日志。
     let count = state.callback_count.fetch_add(1, Ordering::Relaxed) + 1;

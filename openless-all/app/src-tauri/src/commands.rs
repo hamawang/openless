@@ -166,8 +166,13 @@ pub fn set_credential(account: String, value: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn set_active_asr_provider(provider: String) -> Result<(), String> {
-    CredentialsVault::set_active_asr_provider(&provider).map_err(|e| e.to_string())
+pub fn set_active_asr_provider(coord: CoordinatorState<'_>, provider: String) -> Result<(), String> {
+    CredentialsVault::set_active_asr_provider(&provider).map_err(|e| e.to_string())?;
+    // 切到本地 ASR → 后台预加载模型，下次按 hotkey 时不必等数秒。
+    if provider == crate::asr::local::PROVIDER_ID {
+        coord.preload_local_asr_in_background();
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -200,12 +205,9 @@ pub async fn validate_provider_credentials(kind: String) -> Result<ProviderCheck
         "llm" => validate_llm_provider()
             .await
             .map(|()| ProviderCheckResult { ok: true }),
-        "asr" => {
-            let config = read_openai_provider_config(&kind)?;
-            fetch_provider_models(&config)
-                .await
-                .map(|_| ProviderCheckResult { ok: true })
-        }
+        "asr" => validate_asr_provider()
+            .await
+            .map(|()| ProviderCheckResult { ok: true }),
         _ => Err(format!("unknown provider kind: {kind}")),
     }
 }
@@ -275,6 +277,123 @@ async fn validate_llm_provider() -> Result<(), String> {
             }
             other => other.to_string(),
         })
+}
+
+async fn validate_asr_provider() -> Result<(), String> {
+    let config = read_openai_provider_config("asr")?;
+    let model = CredentialsVault::get(CredentialAccount::AsrModel)
+        .map_err(|e| e.to_string())?
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| "asrModelMissing".to_string())?;
+    validate_asr_transcription(&config, model.trim()).await
+}
+
+async fn validate_asr_transcription(config: &ProviderConfig, model: &str) -> Result<(), String> {
+    const MAX_ASR_VALIDATE_BODY_BYTES: usize = 1024 * 1024;
+    let url = asr_transcriptions_url(&config.base_url)?;
+    let wav = encode_wav_16k_mono_silence(250);
+    let wav_part = reqwest::multipart::Part::bytes(wav)
+        .file_name("openless-asr-check.wav")
+        .mime_str("audio/wav")
+        .map_err(|e| format!("请求体构建失败: {e}"))?;
+    let form = reqwest::multipart::Form::new()
+        .part("file", wav_part)
+        .text("model", model.to_string());
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .build()
+        .map_err(|_| "providerClientInitFailed".to_string())?;
+    let response = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", config.api_key))
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| {
+            if e.is_timeout() {
+                "providerRequestTimeout".to_string()
+            } else {
+                "providerNetworkError".to_string()
+            }
+        })?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("providerHttpStatus:{}", status.as_u16()));
+    }
+    if let Some(len) = response.content_length() {
+        if len as usize > MAX_ASR_VALIDATE_BODY_BYTES {
+            return Err("providerResponseTooLarge".to_string());
+        }
+    }
+    use futures_util::StreamExt;
+    let mut body = Vec::<u8>::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|_| "providerReadResponseFailed".to_string())?;
+        if body.len().saturating_add(chunk.len()) > MAX_ASR_VALIDATE_BODY_BYTES {
+            return Err("providerResponseTooLarge".to_string());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    let json: Value = serde_json::from_slice(&body).map_err(|_| "asrInvalidJson".to_string())?;
+    if !json.is_object() || json.get("text").is_none() {
+        return Err("asrMissingTextField".to_string());
+    }
+    Ok(())
+}
+
+fn asr_transcriptions_url(base_url: &str) -> Result<String, String> {
+    let parsed = reqwest::Url::parse(base_url.trim()).map_err(|_| "endpointInvalid".to_string())?;
+    let host = parsed.host_str().unwrap_or_default();
+    let localhost = host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1";
+    if parsed.scheme() != "https" && !localhost {
+        return Err("endpointMustUseHttps".to_string());
+    }
+
+    // Work on the URL path only so we don't corrupt query parameters.
+    let mut url = parsed.clone();
+    let path = parsed.path().trim_end_matches('/');
+    let next_path = if path.ends_with("/audio/transcriptions") {
+        path.to_string()
+    } else if path.ends_with("/audio") {
+        format!("{path}/transcriptions")
+    } else if let Some(prefix) = path.strip_suffix("/chat/completions") {
+        format!("{prefix}/audio/transcriptions")
+    } else {
+        format!("{path}/audio/transcriptions")
+    };
+    url.set_path(&next_path);
+    Ok(url.to_string())
+}
+
+fn encode_wav_16k_mono_silence(duration_ms: u32) -> Vec<u8> {
+    let sample_rate: u32 = 16_000;
+    let num_channels: u16 = 1;
+    let bits_per_sample: u16 = 16;
+    let bytes_per_sample = (bits_per_sample / 8) as usize;
+    let samples = (sample_rate as usize * duration_ms as usize) / 1000;
+    let pcm_len = samples * bytes_per_sample;
+    let data_size = pcm_len as u32;
+    let byte_rate = sample_rate * num_channels as u32 * bits_per_sample as u32 / 8;
+    let block_align = num_channels * bits_per_sample / 8;
+    let chunk_size = 36 + data_size;
+
+    let mut wav = Vec::with_capacity(44 + pcm_len);
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&chunk_size.to_le_bytes());
+    wav.extend_from_slice(b"WAVE");
+    wav.extend_from_slice(b"fmt ");
+    wav.extend_from_slice(&16u32.to_le_bytes());
+    wav.extend_from_slice(&1u16.to_le_bytes());
+    wav.extend_from_slice(&num_channels.to_le_bytes());
+    wav.extend_from_slice(&sample_rate.to_le_bytes());
+    wav.extend_from_slice(&byte_rate.to_le_bytes());
+    wav.extend_from_slice(&block_align.to_le_bytes());
+    wav.extend_from_slice(&bits_per_sample.to_le_bytes());
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&data_size.to_le_bytes());
+    wav.resize(44 + pcm_len, 0);
+    wav
 }
 
 async fn fetch_provider_models(config: &ProviderConfig) -> Result<Vec<String>, String> {
@@ -775,6 +894,146 @@ fn shortcut_bindings_overlap(left: &ShortcutBinding, right: &ShortcutBinding) ->
     }
 }
 
+// ─────────────────────────── local ASR (Qwen3-ASR) ───────────────────────────
+
+use crate::asr::local::{
+    download::{fetch_remote_info, RemoteInfo},
+    DownloadManager, Mirror, ModelId, ModelStatus, PROVIDER_ID as LOCAL_PROVIDER_ID,
+};
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalAsrSettings {
+    pub provider_id: String,
+    pub active_model: String,
+    pub mirror: String,
+    /// macOS 才编入引擎；Windows 端 UI 需要据此把"开始下载"按钮灰掉。
+    pub engine_available: bool,
+}
+
+#[tauri::command]
+pub fn local_asr_get_settings(coord: CoordinatorState<'_>) -> LocalAsrSettings {
+    let prefs = coord.prefs().get();
+    LocalAsrSettings {
+        provider_id: LOCAL_PROVIDER_ID.into(),
+        active_model: prefs.local_asr_active_model,
+        mirror: prefs.local_asr_mirror,
+        engine_available: cfg!(target_os = "macos"),
+    }
+}
+
+#[tauri::command]
+pub fn local_asr_set_active_model(coord: CoordinatorState<'_>, model_id: String) -> Result<(), String> {
+    if ModelId::from_str(&model_id).is_none() {
+        return Err(format!("unknown model id: {model_id}"));
+    }
+    let mut prefs = coord.prefs().get();
+    prefs.local_asr_active_model = model_id;
+    coord.prefs().set(prefs).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn local_asr_set_mirror(coord: CoordinatorState<'_>, mirror: String) -> Result<(), String> {
+    let _normalized = Mirror::from_str(&mirror);
+    let mut prefs = coord.prefs().get();
+    prefs.local_asr_mirror = mirror;
+    coord.prefs().set(prefs).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn local_asr_list_models() -> Vec<ModelStatus> {
+    crate::asr::local::models::list_status()
+}
+
+/// 实时去 HuggingFace API 拉某个模型的真实文件清单 + 总尺寸；
+/// 前端在显示模型卡时调一次，避免硬编码尺寸过期。
+#[tauri::command]
+pub async fn local_asr_fetch_remote_info(
+    model_id: String,
+    mirror: Option<String>,
+) -> Result<RemoteInfo, String> {
+    let id = ModelId::from_str(&model_id).ok_or_else(|| format!("unknown model id: {model_id}"))?;
+    let m = mirror.as_deref().map(Mirror::from_str).unwrap_or_default();
+    fetch_remote_info(id, m).await.map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+pub fn local_asr_download_model(
+    app: AppHandle,
+    manager: State<'_, Arc<DownloadManager>>,
+    model_id: String,
+    mirror: Option<String>,
+) -> Result<(), String> {
+    let id = ModelId::from_str(&model_id).ok_or_else(|| format!("unknown model id: {model_id}"))?;
+    let m = mirror.as_deref().map(Mirror::from_str).unwrap_or_default();
+    manager.start(app, id, m);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn local_asr_cancel_download(
+    manager: State<'_, Arc<DownloadManager>>,
+    model_id: String,
+) -> Result<(), String> {
+    let id = ModelId::from_str(&model_id).ok_or_else(|| format!("unknown model id: {model_id}"))?;
+    manager.cancel(id);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn local_asr_delete_model(model_id: String) -> Result<(), String> {
+    let id = ModelId::from_str(&model_id).ok_or_else(|| format!("unknown model id: {model_id}"))?;
+    crate::asr::local::models::delete_model(id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn local_asr_test_model(
+    model_id: String,
+) -> Result<crate::asr::local::test_run::TestResult, String> {
+    let id = ModelId::from_str(&model_id).ok_or_else(|| format!("unknown model id: {model_id}"))?;
+    crate::asr::local::test_run::run_test(id)
+        .await
+        .map_err(|e| format!("{e:#}"))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalAsrEngineStatus {
+    pub loaded: bool,
+    pub model_id: Option<String>,
+    pub keep_loaded_secs: u32,
+}
+
+#[tauri::command]
+pub fn local_asr_engine_status(coord: CoordinatorState<'_>) -> LocalAsrEngineStatus {
+    let prefs = coord.prefs().get();
+    LocalAsrEngineStatus {
+        loaded: coord.local_asr_loaded_model().is_some(),
+        model_id: coord.local_asr_loaded_model(),
+        keep_loaded_secs: prefs.local_asr_keep_loaded_secs,
+    }
+}
+
+#[tauri::command]
+pub fn local_asr_release_engine(coord: CoordinatorState<'_>) {
+    coord.release_local_asr_engine();
+}
+
+#[tauri::command]
+pub fn local_asr_preload(coord: tauri::State<'_, std::sync::Arc<crate::coordinator::Coordinator>>) {
+    coord.preload_local_asr_in_background();
+}
+
+#[tauri::command]
+pub fn local_asr_set_keep_loaded_secs(
+    coord: CoordinatorState<'_>,
+    seconds: u32,
+) -> Result<(), String> {
+    let mut prefs = coord.prefs().get();
+    prefs.local_asr_keep_loaded_secs = seconds;
+    coord.prefs().set(prefs).map_err(|e| e.to_string())
+}
+
 // ─────────────────────────── unused but exported (silences dead_code) ───────────────────────────
 
 #[allow(dead_code)]
@@ -783,8 +1042,8 @@ fn _ensure_snapshot_used(_: CredentialsSnapshot) {}
 #[cfg(test)]
 mod tests {
     use super::{
-        fetch_provider_models, models_url, parse_model_ids, persist_settings, ProviderConfig,
-        SettingsWriter,
+        asr_transcriptions_url, fetch_provider_models, models_url, parse_model_ids,
+        persist_settings, ProviderConfig, SettingsWriter,
     };
     use crate::types::{
         ComboBinding, HotkeyBinding, HotkeyMode, HotkeyTrigger, ShortcutBinding, UserPreferences,
@@ -834,6 +1093,30 @@ mod tests {
         assert_eq!(
             models_url("https://api.openai.com/v1/chat/completions"),
             "https://api.openai.com/v1/models"
+        );
+    }
+
+    #[test]
+    fn asr_transcriptions_url_accepts_base_or_transcriptions_endpoint() {
+        assert_eq!(
+            asr_transcriptions_url("https://api.openai.com/v1").unwrap(),
+            "https://api.openai.com/v1/audio/transcriptions"
+        );
+        assert_eq!(
+            asr_transcriptions_url("https://api.openai.com/v1/chat/completions").unwrap(),
+            "https://api.openai.com/v1/audio/transcriptions"
+        );
+        assert_eq!(
+            asr_transcriptions_url("https://api.openai.com/v1/audio").unwrap(),
+            "https://api.openai.com/v1/audio/transcriptions"
+        );
+        assert_eq!(
+            asr_transcriptions_url("https://api.openai.com/v1/audio/transcriptions").unwrap(),
+            "https://api.openai.com/v1/audio/transcriptions"
+        );
+        assert_eq!(
+            asr_transcriptions_url("https://api.openai.com/v1?api-version=2024-12-01").unwrap(),
+            "https://api.openai.com/v1/audio/transcriptions?api-version=2024-12-01"
         );
     }
 

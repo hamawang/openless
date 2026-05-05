@@ -61,6 +61,9 @@ const mockSettings: UserPreferences = {
   translationHotkey: { primary: 'Shift', modifiers: [] },
   switchStyleHotkey: { primary: 'S', modifiers: defaultAppShortcutModifiers() },
   openAppHotkey: { primary: 'O', modifiers: defaultAppShortcutModifiers() },
+  localAsrActiveModel: 'qwen3-asr-0.6b',
+  localAsrMirror: 'huggingface',
+  localAsrKeepLoadedSecs: 300,
 };
 
 const mockHotkeyCapability: HotkeyCapability = {

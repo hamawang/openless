@@ -135,6 +135,30 @@ pub struct UserPreferences {
     pub switch_style_hotkey: ShortcutBinding,
     #[serde(default = "default_open_app_hotkey")]
     pub open_app_hotkey: ShortcutBinding,
+    /// 本地 Qwen3-ASR 当前激活的模型 id（"qwen3-asr-0.6b" / "qwen3-asr-1.7b"）。
+    /// 仅在 active_asr_provider == "local-qwen3" 时有意义。
+    #[serde(default = "default_local_asr_model")]
+    pub local_asr_active_model: String,
+    /// 本地模型下载源镜像（"huggingface" / "hf-mirror"）。
+    #[serde(default = "default_local_asr_mirror")]
+    pub local_asr_mirror: String,
+    /// 本地 ASR 引擎在内存中的保留时长（秒）。0 = 说完话即释放；
+    /// 较大值 = 上次使用后驻留 N 秒再释放；86400 = 一天 ≈ 永不释放。
+    /// 默认 300（5 分钟）：兼顾连续听写不重加载、长时间不用释放 1.2GB+ RAM。
+    #[serde(default = "default_local_asr_keep_loaded_secs")]
+    pub local_asr_keep_loaded_secs: u32,
+}
+
+fn default_local_asr_model() -> String {
+    "qwen3-asr-0.6b".into()
+}
+
+fn default_local_asr_mirror() -> String {
+    "huggingface".into()
+}
+
+fn default_local_asr_keep_loaded_secs() -> u32 {
+    300
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -158,6 +182,12 @@ struct UserPreferencesWire {
     translation_hotkey: Option<ShortcutBinding>,
     switch_style_hotkey: Option<ShortcutBinding>,
     open_app_hotkey: Option<ShortcutBinding>,
+    #[serde(default = "default_local_asr_model")]
+    local_asr_active_model: String,
+    #[serde(default = "default_local_asr_mirror")]
+    local_asr_mirror: String,
+    #[serde(default = "default_local_asr_keep_loaded_secs")]
+    local_asr_keep_loaded_secs: u32,
 }
 
 impl Default for UserPreferencesWire {
@@ -182,6 +212,9 @@ impl Default for UserPreferencesWire {
             translation_hotkey: None,
             switch_style_hotkey: None,
             open_app_hotkey: None,
+            local_asr_active_model: prefs.local_asr_active_model,
+            local_asr_mirror: prefs.local_asr_mirror,
+            local_asr_keep_loaded_secs: prefs.local_asr_keep_loaded_secs,
         }
     }
 }
@@ -220,6 +253,9 @@ impl<'de> Deserialize<'de> for UserPreferences {
                 .switch_style_hotkey
                 .unwrap_or_else(default_switch_style_hotkey),
             open_app_hotkey: wire.open_app_hotkey.unwrap_or_else(default_open_app_hotkey),
+            local_asr_active_model: wire.local_asr_active_model,
+            local_asr_mirror: wire.local_asr_mirror,
+            local_asr_keep_loaded_secs: wire.local_asr_keep_loaded_secs,
         })
     }
 }
@@ -314,6 +350,9 @@ impl Default for UserPreferences {
             translation_hotkey: default_translation_hotkey(),
             switch_style_hotkey: default_switch_style_hotkey(),
             open_app_hotkey: default_open_app_hotkey(),
+            local_asr_active_model: default_local_asr_model(),
+            local_asr_mirror: default_local_asr_mirror(),
+            local_asr_keep_loaded_secs: default_local_asr_keep_loaded_secs(),
         }
     }
 }

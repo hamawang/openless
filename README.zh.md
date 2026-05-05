@@ -281,6 +281,16 @@ commands.rs      Tauri IPC 接口
 - 在干净 macOS 机器上验证：权限引导、快捷键、录音、ASR、润色、插入、剪贴板兜底。
 - 推送 `v<version>-tauri` tag → CI 构建并签名 updater artifact + macOS `.dmg` + Windows `.msi`。需要 repo secret `TAURI_SIGNING_PRIVATE_KEY`（对应 `tauri.conf.json` 中的 pubkey）才能签名 updater 包。
 
+## 致谢
+
+OpenLess 在此真诚感谢三类群体：赞助者、开发者/贡献者，以及 LinuxDo 社区。
+
+感谢赞助者对项目持续推进的支持；感谢开发者和贡献者在开发、评审与改进中的长期投入。
+
+OpenLess 也认可并感谢 LinuxDo 社区开放、务实、对开发者友好的氛围。OpenLess 的许多想法、讨论和早期反馈，都受到了 LinuxDo 所代表的开源交流精神的启发。
+
+此致谢不代表官方背书或隶属关系。
+
 ## 许可
 
 MIT

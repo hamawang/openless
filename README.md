@@ -274,6 +274,16 @@ Planned but not yet shipped:
 - Verify on a clean macOS box: permission flow, hotkey, recording, ASR, polish, insertion, clipboard fallback.
 - Push a `v<version>-tauri` tag — CI builds + signs the updater artifacts and the macOS `.dmg` + Windows `.msi`. The updater needs `TAURI_SIGNING_PRIVATE_KEY` repo secret (matching the pubkey in `tauri.conf.json`).
 
+## Acknowledgements
+
+OpenLess sincerely thanks our sponsors, developers/contributors, and the broader LinuxDo community.
+
+We appreciate sponsors for making sustained project work possible, and we thank developers and contributors for building, reviewing, and improving OpenLess.
+
+OpenLess also recognizes and appreciates the LinuxDo community for its open, practical, and developer-friendly atmosphere. Many ideas, discussions, and early feedback around OpenLess were inspired by the broader open-source spirit represented by LinuxDo.
+
+This acknowledgement does not imply official endorsement or affiliation.
+
 ## License
 
 MIT

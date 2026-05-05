@@ -164,7 +164,7 @@ export function SettingsModal({ os: _os, onClose, initialSettingsSection }: Sett
             </div>
           ) : (
             // personalize / about 短内容：单一 scroll wrapper，超出时本块滚动。
-            <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '10px 28px 28px' }}>
+            <div className="ol-thinscroll" style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '10px 28px 28px' }}>
               {section === 'personalize' && <PersonalizeSection />}
               {section === 'about' && <AboutMini />}
             </div>
@@ -333,6 +333,7 @@ function LanguagePicker() {
     >
       <option value={FOLLOW_SYSTEM}>{t('settings.language.followSystem')}</option>
       <option value="zh-CN">{t('settings.language.zh')}</option>
+      <option value="zh-TW">{t('settings.language.zhTW')}</option>
       <option value="en">{t('settings.language.en')}</option>
     </select>
   );

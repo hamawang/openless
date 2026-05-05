@@ -47,6 +47,17 @@ import i18n, {
   type SupportedLocale,
 } from '../i18n';
 import { Btn, Card, PageHeader, Pill } from './_atoms';
+import {
+  deleteLocalAsrModel,
+  getLocalAsrSettings,
+  listLocalAsrModels,
+  type LocalAsrModelStatus,
+  type LocalAsrSettings,
+} from '../lib/localAsr';
+
+/// Settings → ASR 选了 local-qwen3 时触发跳到「模型设置」页 + 关 Settings modal。
+/// FloatingShell 监听同名事件做 setCurrentTab('localAsr') + setSettingsOpen(false)。
+export const NAVIGATE_LOCAL_ASR_EVENT = 'openless:navigate-local-asr';
 
 interface SettingsProps {
   embedded?: boolean;
@@ -120,6 +131,7 @@ export function Settings({ embedded = false, initialSection = 'recording' }: Set
           ))}
         </div>
         <div
+          className={embedded ? 'ol-thinscroll' : undefined}
           style={{
             display: 'flex',
             flexDirection: 'column',
@@ -378,6 +390,8 @@ const ASR_PRESETS = [
   { id: 'zhipu',        nameKey: 'asrZhipu',        baseUrl: 'https://open.bigmodel.cn/api/paas/v4',           model: 'glm-asr-2512'                },
   { id: 'groq',         nameKey: 'asrGroq',         baseUrl: 'https://api.groq.com/openai/v1',                 model: 'whisper-large-v3-turbo'      },
   { id: 'whisper',      nameKey: 'asrWhisper',      baseUrl: 'https://api.openai.com/v1',                      model: 'whisper-1'                   },
+  // 本地 Qwen3-ASR：无 baseUrl/model 配置，模型在「模型设置」页下载与切换。
+  { id: 'local-qwen3',  nameKey: 'asrLocalQwen3',   baseUrl: '',                                              model: ''                              },
 ] as const;
 
 type AsrPresetId = typeof ASR_PRESETS[number]['id'];
@@ -550,6 +564,8 @@ function ProvidersSection() {
               {t('settings.providers.volcengineMappingNote')}
             </div>
           </>
+        ) : committedAsrProvider === 'local-qwen3' ? (
+          <LocalAsrProviderHint />
         ) : (
           <>
             <CredentialField key={`${committedAsrProvider}:api_key`} label={t('settings.providers.apiKeyLabel')} account="asr.api_key" mono mask />
@@ -589,8 +605,12 @@ function ProviderTools({ kind, modelAccount, onModelSelected }: { kind: 'llm' | 
       setResult(result.ok ? 'success' : 'error', t('settings.providers.validateSuccess'));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (kind === 'llm' && message === 'llmModelMissing') {
+      if ((kind === 'llm' && message === 'llmModelMissing') || (kind === 'asr' && message === 'asrModelMissing')) {
         setResult('empty', t('settings.providers.modelMissing'));
+        return;
+      }
+      if (message === 'modelsEmpty') {
+        setResult('empty', t('settings.providers.modelsEmpty'));
         return;
       }
       setResult('error', providerErrorMessage(error, t));
@@ -660,6 +680,14 @@ function providerErrorMessage(error: unknown, t: ReturnType<typeof useTranslatio
   if (message.startsWith('providerHttpStatus:')) {
     return t('settings.providers.providerHttpStatus', { status: message.split(':')[1] || '?' });
   }
+  if (message === 'endpointMustUseHttps') return t('settings.providers.endpointMustUseHttps');
+  if (message === 'endpointInvalid') return t('settings.providers.endpointInvalid');
+  if (message === 'providerResponseTooLarge') return t('settings.providers.responseTooLarge');
+  if (message === 'asrInvalidJson') return t('settings.providers.asrInvalidJson');
+  if (message === 'asrMissingTextField') return t('settings.providers.asrMissingTextField');
+  if (message === 'providerNetworkError') return t('common.networkError');
+  if (message === 'providerReadResponseFailed' || message === 'providerClientInitFailed') return t('common.operationFailed');
+  if (message === 'providerRequestTimeout') return t('settings.providers.requestTimeout');
   if (message.includes('API Key')) return t('settings.providers.apiKeyMissing');
   if (message.includes('Endpoint')) return t('settings.providers.endpointMissing');
   if (message.includes('timeout') || message.includes('超时')) return t('settings.providers.requestTimeout');
@@ -1144,6 +1172,7 @@ function LanguageSection() {
         >
           <option value={FOLLOW_SYSTEM}>{t('settings.language.followSystem')}</option>
           <option value="zh-CN">{t('settings.language.zh')}</option>
+          <option value="zh-TW">{t('settings.language.zhTW')}</option>
           <option value="en">{t('settings.language.en')}</option>
         </select>
       </SettingRow>
@@ -1273,4 +1302,138 @@ function adapterDisplayName(adapter: HotkeyCapability['adapter'] | HotkeyStatus[
   if (adapter === 'macEventTap') return i18n.t('hotkey.adapter.macEventTap');
   if (adapter === 'windowsLowLevel') return i18n.t('hotkey.adapter.windowsLowLevel');
   return i18n.t('hotkey.adapter.rdev');
+}
+
+/// 本地 Qwen3-ASR 在 Settings → 服务商区里**不**让用户填空——展示当前激活模型
+/// 是否已下载、列出所有已下载模型 + 删除按钮，并提示性能/质量预期，引导跳到
+/// 「模型设置」页做下载。
+function LocalAsrProviderHint() {
+  const { t } = useTranslation();
+  const [settings, setSettings] = useState<LocalAsrSettings | null>(null);
+  const [models, setModels] = useState<LocalAsrModelStatus[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  const refresh = async () => {
+    try {
+      const [s, list] = await Promise.all([getLocalAsrSettings(), listLocalAsrModels()]);
+      setSettings(s);
+      setModels(list);
+    } catch (err) {
+      console.warn('[settings] load local asr status failed', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void refresh();
+  }, []);
+
+  const goToLocalAsr = () => {
+    window.dispatchEvent(new CustomEvent(NAVIGATE_LOCAL_ASR_EVENT));
+  };
+
+  const handleDelete = async (modelId: string) => {
+    setDeletingId(modelId);
+    try {
+      await deleteLocalAsrModel(modelId);
+      await refresh();
+    } catch (err) {
+      console.warn('[settings] delete local model failed', err);
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div style={{ padding: '12px 0', fontSize: 12.5, color: 'var(--ol-ink-4)' }}>
+        {t('common.loading')}
+      </div>
+    );
+  }
+
+  const active = models.find(m => m.id === settings?.activeModel);
+  const isReady = active?.isDownloaded ?? false;
+  const downloaded = models.filter(m => m.isDownloaded);
+
+  return (
+    <div style={{ padding: '8px 0 4px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {/* 性能/质量预期警告 —— 用户硬要求要写清楚 */}
+      <div
+        style={{
+          padding: '10px 12px',
+          background: 'rgba(255, 215, 130, 0.18)',
+          borderRadius: 8,
+          fontSize: 12.5,
+          color: 'var(--ol-ink-2)',
+          lineHeight: 1.6,
+        }}>
+        ⚠️ {t('settings.providers.localAsrPerformanceWarning')}
+      </div>
+
+      <div style={{ fontSize: 12.5, color: 'var(--ol-ink-3)', lineHeight: 1.6 }}>
+        {t('settings.providers.localAsrHint')}
+      </div>
+
+      {/* 当前激活模型状态 + 跳转按钮 */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <Pill tone={isReady ? 'ok' : 'outline'} size="sm">
+          {isReady
+            ? t('settings.providers.localAsrReady', { model: active?.id ?? '' })
+            : t('settings.providers.localAsrNotReady', { model: settings?.activeModel ?? '' })}
+        </Pill>
+        <Btn variant={isReady ? 'ghost' : 'primary'} size="sm" onClick={goToLocalAsr}>
+          {isReady
+            ? t('settings.providers.localAsrManage')
+            : t('settings.providers.localAsrGoDownload')}
+        </Btn>
+      </div>
+
+      {/* 已下载模型列表 + 删除按钮（用户：已下载的项目要在旁边显示 + 提供删除） */}
+      {downloaded.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--ol-ink-4)', letterSpacing: '.04em', textTransform: 'uppercase' }}>
+            {t('settings.providers.localAsrDownloadedTitle')}
+          </div>
+          {downloaded.map(m => (
+            <div
+              key={m.id}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '6px 10px',
+                borderRadius: 6,
+                background: 'rgba(0,0,0,0.03)',
+                fontSize: 12.5,
+                color: 'var(--ol-ink-2)',
+              }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                <span style={{ fontWeight: 500 }}>{m.id}</span>
+                <span style={{ fontSize: 11, color: 'var(--ol-ink-4)' }}>
+                  {formatBytes(m.downloadedBytes)}
+                </span>
+              </div>
+              <Btn
+                variant="ghost"
+                size="sm"
+                disabled={deletingId === m.id}
+                onClick={() => void handleDelete(m.id)}>
+                {t('settings.providers.localAsrDelete')}
+              </Btn>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(0)} MB`;
+  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }

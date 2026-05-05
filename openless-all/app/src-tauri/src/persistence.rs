@@ -82,6 +82,15 @@ fn ensure_dir(dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// 本地 ASR 模型根目录：`<data_dir>/models/qwen3-asr/`。
+/// 子目录 = 模型 id（如 `qwen3-asr-0.6b`），存 antirez `download_model.sh`
+/// 列出的 5–7 个文件。
+pub fn local_models_root() -> Result<PathBuf> {
+    let dir = data_dir()?.join("models").join("qwen3-asr");
+    ensure_dir(&dir)?;
+    Ok(dir)
+}
+
 /// Atomic write: write to `*.tmp` first, then rename onto the target path.
 fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
     if let Some(parent) = path.parent() {

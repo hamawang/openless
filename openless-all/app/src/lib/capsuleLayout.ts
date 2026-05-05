@@ -22,7 +22,7 @@ export interface CapsuleMessageLayout {
 
 export function getCapsulePillMetrics(os: OS): CapsulePillMetrics {
   if (os === 'win') {
-    return { width: 196, height: 52, textWidth: 118 };
+    return { width: 196, height: 52, textWidth: 104 };
   }
 
   return { width: 176, height: 42, textWidth: 84 };
