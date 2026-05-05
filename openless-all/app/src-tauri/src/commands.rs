@@ -121,8 +121,13 @@ pub fn set_credential(account: String, value: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn set_active_asr_provider(provider: String) -> Result<(), String> {
-    CredentialsVault::set_active_asr_provider(&provider).map_err(|e| e.to_string())
+pub fn set_active_asr_provider(coord: CoordinatorState<'_>, provider: String) -> Result<(), String> {
+    CredentialsVault::set_active_asr_provider(&provider).map_err(|e| e.to_string())?;
+    // 切到本地 ASR → 后台预加载模型，下次按 hotkey 时不必等数秒。
+    if provider == crate::asr::local::PROVIDER_ID {
+        coord.preload_local_asr_in_background();
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -788,6 +793,44 @@ pub async fn local_asr_test_model(
     crate::asr::local::test_run::run_test(id)
         .await
         .map_err(|e| format!("{e:#}"))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalAsrEngineStatus {
+    pub loaded: bool,
+    pub model_id: Option<String>,
+    pub keep_loaded_secs: u32,
+}
+
+#[tauri::command]
+pub fn local_asr_engine_status(coord: CoordinatorState<'_>) -> LocalAsrEngineStatus {
+    let prefs = coord.prefs().get();
+    LocalAsrEngineStatus {
+        loaded: coord.local_asr_loaded_model().is_some(),
+        model_id: coord.local_asr_loaded_model(),
+        keep_loaded_secs: prefs.local_asr_keep_loaded_secs,
+    }
+}
+
+#[tauri::command]
+pub fn local_asr_release_engine(coord: CoordinatorState<'_>) {
+    coord.release_local_asr_engine();
+}
+
+#[tauri::command]
+pub fn local_asr_preload(coord: tauri::State<'_, std::sync::Arc<crate::coordinator::Coordinator>>) {
+    coord.preload_local_asr_in_background();
+}
+
+#[tauri::command]
+pub fn local_asr_set_keep_loaded_secs(
+    coord: CoordinatorState<'_>,
+    seconds: u32,
+) -> Result<(), String> {
+    let mut prefs = coord.prefs().get();
+    prefs.local_asr_keep_loaded_secs = seconds;
+    coord.prefs().set(prefs).map_err(|e| e.to_string())
 }
 
 // ─────────────────────────── unused but exported (silences dead_code) ───────────────────────────

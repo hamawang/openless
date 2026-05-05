@@ -149,3 +149,29 @@ export function testLocalAsrModel(modelId: string): Promise<LocalAsrTestResult> 
     }),
   );
 }
+
+export interface LocalAsrEngineStatus {
+  loaded: boolean;
+  modelId: string | null;
+  keepLoadedSecs: number;
+}
+
+export function getLocalAsrEngineStatus(): Promise<LocalAsrEngineStatus> {
+  return invokeOrMock('local_asr_engine_status', undefined, () => ({
+    loaded: false,
+    modelId: null,
+    keepLoadedSecs: 300,
+  }));
+}
+
+export function releaseLocalAsrEngine(): Promise<void> {
+  return invokeOrMock('local_asr_release_engine', undefined, () => undefined);
+}
+
+export function preloadLocalAsr(): Promise<void> {
+  return invokeOrMock('local_asr_preload', undefined, () => undefined);
+}
+
+export function setLocalAsrKeepLoadedSecs(seconds: number): Promise<void> {
+  return invokeOrMock('local_asr_set_keep_loaded_secs', { seconds }, () => undefined);
+}

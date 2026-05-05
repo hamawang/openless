@@ -15,12 +15,17 @@ import {
   deleteLocalAsrModel,
   downloadLocalAsrModel,
   fetchLocalAsrRemoteInfo,
+  getLocalAsrEngineStatus,
   getLocalAsrSettings,
   listLocalAsrModels,
+  preloadLocalAsr,
+  releaseLocalAsrEngine,
   setLocalAsrActiveModel,
+  setLocalAsrKeepLoadedSecs,
   setLocalAsrMirror,
   testLocalAsrModel,
   type LocalAsrDownloadProgress,
+  type LocalAsrEngineStatus,
   type LocalAsrModelStatus,
   type LocalAsrSettings,
   type LocalAsrTestResult,
@@ -44,7 +49,18 @@ export function LocalAsr() {
   const [busyModelId, setBusyModelId] = useState<string | null>(null);
   const [testingModelId, setTestingModelId] = useState<string | null>(null);
   const [testResults, setTestResults] = useState<Record<string, LocalAsrTestResult | { error: string }>>({});
+  const [engineStatus, setEngineStatus] = useState<LocalAsrEngineStatus | null>(null);
   const refreshTimer = useRef<number | null>(null);
+  const engineStatusTimer = useRef<number | null>(null);
+
+  const refreshEngineStatus = async () => {
+    try {
+      const status = await getLocalAsrEngineStatus();
+      setEngineStatus(status);
+    } catch (err) {
+      console.warn('[localAsr] engine status query failed', err);
+    }
+  };
 
   const refresh = async () => {
     try {
@@ -52,6 +68,7 @@ export function LocalAsr() {
       const [s, list] = await Promise.all([getLocalAsrSettings(), listLocalAsrModels()]);
       setSettings(s);
       setModels(list);
+      void refreshEngineStatus();
       // 拉远端真实尺寸（每个模型一次，结果留缓存）
       void Promise.all(
         list.map(async m => {
@@ -94,7 +111,15 @@ export function LocalAsr() {
 
   useEffect(() => {
     void refresh();
-    // refresh 内部已 fan-out 拉远端尺寸，不需要额外 effect
+    // 引擎状态每 5s 轮询一次，让 UI 能看到 release 计时器到点后的状态变化
+    engineStatusTimer.current = window.setInterval(() => {
+      void refreshEngineStatus();
+    }, 5000);
+    return () => {
+      if (engineStatusTimer.current !== null) {
+        window.clearInterval(engineStatusTimer.current);
+      }
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -194,6 +219,34 @@ export function LocalAsr() {
     }
   };
 
+  const handleKeepLoadedChange = async (seconds: number) => {
+    try {
+      await setLocalAsrKeepLoadedSecs(seconds);
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const handleReleaseEngine = async () => {
+    try {
+      await releaseLocalAsrEngine();
+      await refreshEngineStatus();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const handlePreload = async () => {
+    try {
+      await preloadLocalAsr();
+      // 触发预加载后给后端几秒，再查状态
+      window.setTimeout(() => void refreshEngineStatus(), 1500);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
   const handleTest = async (modelId: string) => {
     setTestingModelId(modelId);
     setTestResults(prev => {
@@ -273,6 +326,65 @@ export function LocalAsr() {
           </select>
         </div>
       </Card>
+
+      {/* 运行时设置卡：内存中的引擎状态 + 多久释放 + 立即释放 */}
+      {engineAvailable && (
+        <Card style={{ marginBottom: 16 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ol-ink-4)', marginBottom: 4 }}>
+                  {t('localAsr.engineStatusLabel')}
+                </div>
+                <div style={{ fontSize: 13, color: 'var(--ol-ink-3)' }}>
+                  {engineStatus?.loaded
+                    ? t('localAsr.engineLoaded', { model: engineStatus.modelId ?? '' })
+                    : t('localAsr.engineUnloaded')}
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                {engineStatus?.loaded ? (
+                  <Btn variant="ghost" size="sm" onClick={() => void handleReleaseEngine()}>
+                    {t('localAsr.releaseNow')}
+                  </Btn>
+                ) : (
+                  <Btn variant="ghost" size="sm" onClick={() => void handlePreload()}>
+                    {t('localAsr.loadNow')}
+                  </Btn>
+                )}
+              </div>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ol-ink-4)', marginBottom: 4 }}>
+                  {t('localAsr.keepLoadedLabel')}
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--ol-ink-3)', lineHeight: 1.5 }}>
+                  {t('localAsr.keepLoadedDesc')}
+                </div>
+              </div>
+              <select
+                value={engineStatus?.keepLoadedSecs ?? 300}
+                onChange={e => void handleKeepLoadedChange(Number(e.target.value))}
+                style={{
+                  fontSize: 13,
+                  padding: '6px 10px',
+                  borderRadius: 8,
+                  border: '0.5px solid rgba(0,0,0,0.12)',
+                  background: 'var(--ol-surface)',
+                  color: 'var(--ol-ink)',
+                  minWidth: 200,
+                }}>
+                <option value={0}>{t('localAsr.keepImmediate')}</option>
+                <option value={60}>{t('localAsr.keep1min')}</option>
+                <option value={300}>{t('localAsr.keep5min')}</option>
+                <option value={1800}>{t('localAsr.keep30min')}</option>
+                <option value={86400}>{t('localAsr.keepForever')}</option>
+              </select>
+            </div>
+          </div>
+        </Card>
+      )}
 
       {error && (
         <Card style={{ marginBottom: 16, background: 'rgba(255, 220, 220, 0.5)' }}>

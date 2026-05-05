@@ -55,6 +55,7 @@ const mockSettings: UserPreferences = {
   qaSaveHistory: false,
   localAsrActiveModel: 'qwen3-asr-0.6b',
   localAsrMirror: 'huggingface',
+  localAsrKeepLoadedSecs: 300,
 };
 
 const mockHotkeyCapability: HotkeyCapability = {

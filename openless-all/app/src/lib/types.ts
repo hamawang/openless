@@ -128,6 +128,9 @@ export interface UserPreferences {
   localAsrActiveModel: string;
   /** 本地模型下载源镜像（'huggingface' / 'hf-mirror'）。 */
   localAsrMirror: string;
+  /** 本地 ASR 引擎在内存中的保留时长（秒）。0 = 说完话即释放；
+   *  300 = 默认 5 分钟；86400 ≈ 不释放（保持加载）。 */
+  localAsrKeepLoadedSecs: number;
 }
 
 /** Rust 通过 `qa:state` 事件下发的 payload。

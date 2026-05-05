@@ -3,9 +3,10 @@
 //! 与 `WhisperBatchASR` 形状对齐：实现 `AudioConsumer` 缓冲 PCM，stop 时
 //! 调 `transcribe_stream`，期间每个稳定 token 通过 Tauri 事件
 //! `local-asr-token` 推到前端胶囊做实时显示。
+//!
+//! engine 现在由 `LocalAsrCache` 提供——Coordinator 在 build_local_qwen3 里
+//! 取已缓存的引擎再传进来，避免每次会话都重加载 1.2GB+ 模型。
 
-#[cfg(target_os = "macos")]
-use std::path::PathBuf;
 #[cfg(target_os = "macos")]
 use std::sync::Arc;
 
@@ -32,14 +33,12 @@ pub struct LocalQwenAsr {
 
 #[cfg(target_os = "macos")]
 impl LocalQwenAsr {
-    pub fn new(app: AppHandle, model_dir: &PathBuf) -> Result<Self> {
-        let engine = QwenAsrEngine::load(model_dir)
-            .with_context(|| format!("加载本地模型失败：{}", model_dir.display()))?;
-        Ok(Self {
-            engine: Arc::new(engine),
+    pub fn new(app: AppHandle, engine: Arc<QwenAsrEngine>) -> Self {
+        Self {
+            engine,
             buffer: Mutex::new(Vec::new()),
             app,
-        })
+        }
     }
 
     /// stop 时调用：把 buffer 的 i16 PCM 转 f32，跑流式转写，token 实时

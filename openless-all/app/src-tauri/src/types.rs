@@ -130,6 +130,11 @@ pub struct UserPreferences {
     /// 本地模型下载源镜像（"huggingface" / "hf-mirror"）。
     #[serde(default = "default_local_asr_mirror")]
     pub local_asr_mirror: String,
+    /// 本地 ASR 引擎在内存中的保留时长（秒）。0 = 说完话即释放；
+    /// 较大值 = 上次使用后驻留 N 秒再释放；86400 = 一天 ≈ 永不释放。
+    /// 默认 300（5 分钟）：兼顾连续听写不重加载、长时间不用释放 1.2GB+ RAM。
+    #[serde(default = "default_local_asr_keep_loaded_secs")]
+    pub local_asr_keep_loaded_secs: u32,
 }
 
 fn default_local_asr_model() -> String {
@@ -138,6 +143,10 @@ fn default_local_asr_model() -> String {
 
 fn default_local_asr_mirror() -> String {
     "huggingface".into()
+}
+
+fn default_local_asr_keep_loaded_secs() -> u32 {
+    300
 }
 
 fn default_qa_hotkey() -> Option<QaHotkeyBinding> {
@@ -171,6 +180,7 @@ impl Default for UserPreferences {
             qa_save_history: false,
             local_asr_active_model: default_local_asr_model(),
             local_asr_mirror: default_local_asr_mirror(),
+            local_asr_keep_loaded_secs: default_local_asr_keep_loaded_secs(),
         }
     }
 }

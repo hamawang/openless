@@ -3,10 +3,13 @@
 //! 当前只在 macOS 编入 antirez/qwen-asr (纯 C + Accelerate)；Windows 端
 //! 的本地推理路径见 issue #256，本期不实现。
 
+pub mod cache;
 pub mod download;
 mod local_provider;
 pub mod models;
 pub mod test_run;
+
+pub use cache::LocalAsrCache;
 
 #[cfg(target_os = "macos")]
 mod qwen_engine;
