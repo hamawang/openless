@@ -674,6 +674,9 @@ pub struct CredentialsSnapshot {
     pub volcengine_app_key: Option<String>,
     pub volcengine_access_key: Option<String>,
     pub volcengine_resource_id: Option<String>,
+    pub asr_api_key: Option<String>,
+    pub asr_endpoint: Option<String>,
+    pub asr_model: Option<String>,
     pub ark_api_key: Option<String>,
     pub ark_model_id: Option<String>,
     pub ark_endpoint: Option<String>,
@@ -730,6 +733,11 @@ impl CredentialsVault {
         save_credentials(&root)
     }
 
+    pub fn get_active_llm() -> String {
+        let _guard = credentials_lock().lock();
+        load_credentials().active.llm
+    }
+
     pub fn snapshot() -> CredentialsSnapshot {
         let _guard = credentials_lock().lock();
         let root = load_credentials();
@@ -737,6 +745,9 @@ impl CredentialsVault {
             volcengine_app_key: lookup_account(&root, CredentialAccount::VolcengineAppKey),
             volcengine_access_key: lookup_account(&root, CredentialAccount::VolcengineAccessKey),
             volcengine_resource_id: lookup_account(&root, CredentialAccount::VolcengineResourceId),
+            asr_api_key: lookup_account(&root, CredentialAccount::AsrApiKey),
+            asr_endpoint: lookup_account(&root, CredentialAccount::AsrEndpoint),
+            asr_model: lookup_account(&root, CredentialAccount::AsrModel),
             ark_api_key: lookup_account(&root, CredentialAccount::ArkApiKey),
             ark_model_id: lookup_account(&root, CredentialAccount::ArkModelId),
             ark_endpoint: lookup_account(&root, CredentialAccount::ArkEndpoint),

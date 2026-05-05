@@ -72,6 +72,10 @@ const mockHotkeyCapability: HotkeyCapability = {
 };
 
 const mockCredentialsStatus: CredentialsStatus = {
+  activeAsrProvider: 'volcengine',
+  activeLlmProvider: 'ark',
+  asrConfigured: true,
+  llmConfigured: true,
   volcengineConfigured: true,
   arkConfigured: true,
 };

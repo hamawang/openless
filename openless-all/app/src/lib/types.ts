@@ -208,6 +208,11 @@ export interface CapsulePayload {
 }
 
 export interface CredentialsStatus {
+  activeAsrProvider: string;
+  activeLlmProvider: string;
+  asrConfigured: boolean;
+  llmConfigured: boolean;
+  /** 兼容旧字段（过渡期保留）。 */
   volcengineConfigured: boolean;
   arkConfigured: boolean;
 }

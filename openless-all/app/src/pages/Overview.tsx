@@ -23,11 +23,32 @@ interface OverviewProps {
   onOpenHistory?: () => void;
 }
 
+const ASR_NAME_KEY_BY_ID: Record<string, string> = {
+  volcengine: 'asrVolcengine',
+  siliconflow: 'asrSiliconflow',
+  zhipu: 'asrZhipu',
+  groq: 'asrGroq',
+  whisper: 'asrWhisper',
+  'local-qwen3': 'asrLocalQwen3',
+};
+
+const LLM_NAME_KEY_BY_ID: Record<string, string> = {
+  ark: 'ark',
+  deepseek: 'deepseek',
+  siliconflow: 'siliconflow',
+  openai: 'openai',
+  custom: 'custom',
+};
+
 export function Overview({ onOpenHistory }: OverviewProps) {
   const { t } = useTranslation();
   const modeLabel = useModeLabels();
   const [history, setHistory] = useState<DictationSession[]>([]);
   const [creds, setCreds] = useState<CredentialsStatus>({
+    activeAsrProvider: 'volcengine',
+    activeLlmProvider: 'ark',
+    asrConfigured: false,
+    llmConfigured: false,
     volcengineConfigured: false,
     arkConfigured: false,
   });
@@ -64,6 +85,17 @@ export function Overview({ onOpenHistory }: OverviewProps) {
     return buckets;
   }, [history]);
 
+  const asrProviderId = creds.activeAsrProvider || 'volcengine';
+  const llmProviderId = creds.activeLlmProvider || 'ark';
+  const asrNameKey = ASR_NAME_KEY_BY_ID[asrProviderId];
+  const llmNameKey = LLM_NAME_KEY_BY_ID[llmProviderId];
+  const asrProviderName = asrNameKey
+    ? t(`settings.providers.presets.${asrNameKey}`)
+    : asrProviderId;
+  const llmProviderName = llmNameKey
+    ? t(`settings.providers.presets.${llmNameKey}`)
+    : llmProviderId;
+
   return (
     <>
       <PageHeader
@@ -75,15 +107,15 @@ export function Overview({ onOpenHistory }: OverviewProps) {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 18 }}>
         <ProviderCard
           kind={t('overview.asrKind')}
-          name={t('overview.asrName')}
-          subname={t('overview.asrSubname')}
-          configured={creds.volcengineConfigured}
+          name={asrProviderName}
+          subname={asrProviderId}
+          configured={creds.asrConfigured}
         />
         <ProviderCard
           kind={t('overview.llmKind')}
-          name={t('overview.llmName')}
-          subname={creds.arkConfigured ? t('overview.llmConfigured') : t('overview.llmNotConfigured')}
-          configured={creds.arkConfigured}
+          name={llmProviderName}
+          subname={llmProviderId}
+          configured={creds.llmConfigured}
         />
       </div>
 

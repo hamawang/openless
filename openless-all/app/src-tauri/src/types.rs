@@ -552,6 +552,11 @@ pub struct CapsulePayload {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct CredentialsStatus {
+    pub active_asr_provider: String,
+    pub active_llm_provider: String,
+    pub asr_configured: bool,
+    pub llm_configured: bool,
+    // 兼容旧前端字段（逐步迁移中）
     pub volcengine_configured: bool,
     pub ark_configured: bool,
 }
