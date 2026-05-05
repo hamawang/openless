@@ -382,6 +382,8 @@ const ASR_PRESETS = [
   { id: 'zhipu',        nameKey: 'asrZhipu',        baseUrl: 'https://open.bigmodel.cn/api/paas/v4',           model: 'glm-asr-2512'                },
   { id: 'groq',         nameKey: 'asrGroq',         baseUrl: 'https://api.groq.com/openai/v1',                 model: 'whisper-large-v3-turbo'      },
   { id: 'whisper',      nameKey: 'asrWhisper',      baseUrl: 'https://api.openai.com/v1',                      model: 'whisper-1'                   },
+  // 本地 Qwen3-ASR：无 baseUrl/model 配置，模型在「模型设置」页下载与切换。
+  { id: 'local-qwen3',  nameKey: 'asrLocalQwen3',   baseUrl: '',                                              model: ''                              },
 ] as const;
 
 type AsrPresetId = typeof ASR_PRESETS[number]['id'];

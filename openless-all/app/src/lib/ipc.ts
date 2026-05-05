@@ -53,6 +53,8 @@ const mockSettings: UserPreferences = {
   translationTargetLanguage: '',
   qaHotkey: { primary: ';', modifiers: ['cmd', 'shift'] },
   qaSaveHistory: false,
+  localAsrActiveModel: 'qwen3-asr-0.6b',
+  localAsrMirror: 'huggingface',
 };
 
 const mockHotkeyCapability: HotkeyCapability = {

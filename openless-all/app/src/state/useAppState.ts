@@ -2,7 +2,14 @@
 
 import { useState } from 'react';
 
-export type AppTab = 'overview' | 'history' | 'vocab' | 'style' | 'translation' | 'selectionAsk';
+export type AppTab =
+  | 'overview'
+  | 'history'
+  | 'vocab'
+  | 'style'
+  | 'translation'
+  | 'selectionAsk'
+  | 'localAsr';
 
 export interface AppState {
   currentTab: AppTab;

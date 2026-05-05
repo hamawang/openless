@@ -16,6 +16,7 @@ import { Vocab } from '../pages/Vocab';
 import { Style } from '../pages/Style';
 import { Translation } from '../pages/Translation';
 import { SelectionAsk } from '../pages/SelectionAsk';
+import { LocalAsr } from '../pages/LocalAsr';
 import { APP_VERSION_LABEL } from '../lib/appVersion';
 import {
   HOTKEY_MODE_MIGRATION_ACK_KEY,
@@ -45,6 +46,7 @@ const NAV_BASE: Array<Omit<NavItem, 'name'>> = [
   { id: 'style', icon: 'style', cmp: Style },
   { id: 'translation', icon: 'translate', cmp: Translation },
   { id: 'selectionAsk', icon: 'selectionAsk', cmp: SelectionAsk },
+  { id: 'localAsr', icon: 'archive', cmp: LocalAsr },
 ];
 
 const RELEASE_NOTES_URL = 'https://github.com/appergb/openless/releases';

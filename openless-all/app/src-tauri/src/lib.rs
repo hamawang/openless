@@ -234,6 +234,7 @@ pub fn run() {
             commands::local_asr_set_active_model,
             commands::local_asr_set_mirror,
             commands::local_asr_list_models,
+            commands::local_asr_fetch_remote_info,
             commands::local_asr_download_model,
             commands::local_asr_cancel_download,
             commands::local_asr_delete_model,

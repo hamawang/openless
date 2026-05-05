@@ -691,6 +691,7 @@ pub fn qa_window_pin(coord: CoordinatorState<'_>, pinned: bool) {
 // ─────────────────────────── local ASR (Qwen3-ASR) ───────────────────────────
 
 use crate::asr::local::{
+    download::{fetch_remote_info, RemoteInfo},
     DownloadManager, Mirror, ModelId, ModelStatus, PROVIDER_ID as LOCAL_PROVIDER_ID,
 };
 
@@ -736,6 +737,18 @@ pub fn local_asr_set_mirror(coord: CoordinatorState<'_>, mirror: String) -> Resu
 #[tauri::command]
 pub fn local_asr_list_models() -> Vec<ModelStatus> {
     crate::asr::local::models::list_status()
+}
+
+/// 实时去 HuggingFace API 拉某个模型的真实文件清单 + 总尺寸；
+/// 前端在显示模型卡时调一次，避免硬编码尺寸过期。
+#[tauri::command]
+pub async fn local_asr_fetch_remote_info(
+    model_id: String,
+    mirror: Option<String>,
+) -> Result<RemoteInfo, String> {
+    let id = ModelId::from_str(&model_id).ok_or_else(|| format!("unknown model id: {model_id}"))?;
+    let m = mirror.as_deref().map(Mirror::from_str).unwrap_or_default();
+    fetch_remote_info(id, m).await.map_err(|e| format!("{e:#}"))
 }
 
 #[tauri::command]

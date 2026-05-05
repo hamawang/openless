@@ -1,7 +1,8 @@
-//! 本地 Qwen3-ASR 模型注册表。
+//! 本地 Qwen3-ASR 模型注册表（仅 id / 仓库名 / 显示名）。
 //!
-//! 文件清单复刻 antirez `download_model.sh` —— 不能漏，否则 `qwen_load`
-//! 会失败。增加新模型时这里加一条 + 前端 i18n 加文案即可。
+//! **文件清单与尺寸不再硬编码** —— 由 `download.rs` 在下载时从
+//! `huggingface.co/api/models/<repo>/tree/main` 拉真实清单和大小。
+//! 增加新模型 = 这里加一条枚举 + 仓库名。
 
 use std::path::PathBuf;
 
@@ -9,6 +10,9 @@ use anyhow::Result;
 use serde::Serialize;
 
 use crate::persistence;
+
+/// 下载完成后落在模型目录里的哨兵文件名；存在 = 完整、可加载。
+pub(super) const READY_SENTINEL: &str = ".openless-asr-ready";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelId {
@@ -36,42 +40,11 @@ impl ModelId {
         &[ModelId::Small06b, ModelId::Large17b]
     }
 
-    /// HuggingFace repo id（用于拼下载 URL）。
+    /// HuggingFace repo id（用于拼 API + 下载 URL）。
     pub fn hf_repo(self) -> &'static str {
         match self {
             ModelId::Small06b => "Qwen/Qwen3-ASR-0.6B",
             ModelId::Large17b => "Qwen/Qwen3-ASR-1.7B",
-        }
-    }
-
-    /// 该模型在 HF 仓库下需要拉的所有文件（顺序无所谓）。
-    pub fn files(self) -> &'static [&'static str] {
-        match self {
-            ModelId::Small06b => &[
-                "config.json",
-                "generation_config.json",
-                "model.safetensors",
-                "vocab.json",
-                "merges.txt",
-            ],
-            ModelId::Large17b => &[
-                "config.json",
-                "generation_config.json",
-                "model.safetensors.index.json",
-                "model-00001-of-00002.safetensors",
-                "model-00002-of-00002.safetensors",
-                "vocab.json",
-                "merges.txt",
-            ],
-        }
-    }
-
-    /// 大致体积（字节），用于前端进度条占位 + UI 显示。
-    /// 数字来自 HF 仓库实测；不是精确校验，只用来估总和。
-    pub fn approx_bytes(self) -> u64 {
-        match self {
-            ModelId::Small06b => 1_200 * 1024 * 1024,
-            ModelId::Large17b => 3_400 * 1024 * 1024,
         }
     }
 }
@@ -81,26 +54,49 @@ pub fn model_dir(id: ModelId) -> Result<PathBuf> {
     Ok(persistence::local_models_root()?.join(id.as_str()))
 }
 
-/// 检查所有必需文件是否齐全。
+/// 完整且可加载？= 哨兵存在。
+/// 比"枚举所有应有文件"稳：HF 仓库改文件名 / 加新文件时不会误报缺失。
 pub fn is_downloaded(id: ModelId) -> bool {
     let dir = match model_dir(id) {
         Ok(d) => d,
         Err(_) => return false,
     };
-    id.files().iter().all(|f| dir.join(f).exists())
+    dir.join(READY_SENTINEL).exists()
 }
 
-/// 已下载文件的总字节数（用于 UI 显示"X / Y MB"）。
+/// 已落盘的字节数（walk_dir 求和）。下载中也能显示真实进度。
 pub fn downloaded_bytes(id: ModelId) -> u64 {
     let dir = match model_dir(id) {
         Ok(d) => d,
         Err(_) => return 0,
     };
-    id.files()
-        .iter()
-        .filter_map(|f| std::fs::metadata(dir.join(f)).ok())
-        .map(|m| m.len())
-        .sum()
+    let mut total: u64 = 0;
+    walk_files(&dir, &mut |size| total += size);
+    total
+}
+
+fn walk_files<F: FnMut(u64)>(dir: &std::path::Path, on_size: &mut F) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name();
+        // 哨兵文件本身体积忽略不计，但路径过滤更直白：保留所有非空文件。
+        if name == READY_SENTINEL {
+            continue;
+        }
+        match entry.file_type() {
+            Ok(ft) if ft.is_dir() => walk_files(&path, on_size),
+            Ok(ft) if ft.is_file() => {
+                if let Ok(meta) = entry.metadata() {
+                    on_size(meta.len());
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -108,7 +104,6 @@ pub fn downloaded_bytes(id: ModelId) -> u64 {
 pub struct ModelStatus {
     pub id: String,
     pub hf_repo: String,
-    pub approx_bytes: u64,
     pub downloaded_bytes: u64,
     pub is_downloaded: bool,
 }
@@ -119,7 +114,6 @@ pub fn list_status() -> Vec<ModelStatus> {
         .map(|&id| ModelStatus {
             id: id.as_str().to_string(),
             hf_repo: id.hf_repo().to_string(),
-            approx_bytes: id.approx_bytes(),
             downloaded_bytes: downloaded_bytes(id),
             is_downloaded: is_downloaded(id),
         })
