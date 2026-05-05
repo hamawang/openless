@@ -101,10 +101,7 @@ fn persist_settings<T: SettingsWriter>(
     mut prefs: UserPreferences,
 ) -> Result<(), String> {
     sync_dictation_hotkey_legacy_fields(&mut prefs);
-    reject_dictation_translation_hotkey_overlap(
-        &prefs.dictation_hotkey,
-        &prefs.translation_hotkey,
-    )?;
+    reject_hotkey_collisions(&prefs)?;
     coord.write_settings(prefs)?;
     coord.refresh_dictation_hotkey();
     coord.refresh_qa_hotkey();
@@ -750,6 +747,9 @@ pub fn set_qa_hotkey(
     let mut prefs = coord.prefs().get();
     if let Some(binding) = binding.as_ref() {
         reject_dictation_qa_hotkey_overlap(&prefs.dictation_hotkey, binding)?;
+        reject_qa_translation_hotkey_overlap(binding, &prefs.translation_hotkey)?;
+        reject_qa_switch_style_hotkey_overlap(binding, &prefs.switch_style_hotkey)?;
+        reject_qa_open_app_hotkey_overlap(binding, &prefs.open_app_hotkey)?;
     }
     prefs.qa_hotkey = binding;
     coord.prefs().set(prefs).map_err(|e| e.to_string())?;
@@ -789,6 +789,8 @@ pub fn set_dictation_hotkey(
         reject_dictation_qa_hotkey_overlap(&binding, qa_hotkey)?;
     }
     reject_dictation_translation_hotkey_overlap(&binding, &prefs.translation_hotkey)?;
+    reject_dictation_switch_style_hotkey_overlap(&binding, &prefs.switch_style_hotkey)?;
+    reject_dictation_open_app_hotkey_overlap(&binding, &prefs.open_app_hotkey)?;
     prefs.dictation_hotkey = binding;
     sync_dictation_hotkey_legacy_fields(&mut prefs);
     coord.prefs().set(prefs).map_err(|e| e.to_string())?;
@@ -805,6 +807,11 @@ pub fn set_translation_hotkey(
     crate::shortcut_binding::validate_binding(&binding).map_err(|e| e.to_string())?;
     let previous = coord.prefs().get();
     reject_dictation_translation_hotkey_overlap(&previous.dictation_hotkey, &binding)?;
+    if let Some(qa_hotkey) = previous.qa_hotkey.as_ref() {
+        reject_qa_translation_hotkey_overlap(qa_hotkey, &binding)?;
+    }
+    reject_translation_switch_style_hotkey_overlap(&binding, &previous.switch_style_hotkey)?;
+    reject_translation_open_app_hotkey_overlap(&binding, &previous.open_app_hotkey)?;
     let mut prefs = previous.clone();
     prefs.translation_hotkey = binding;
     coord.prefs().set(prefs).map_err(|e| e.to_string())?;
@@ -826,6 +833,12 @@ pub fn set_switch_style_hotkey(
     crate::shortcut_binding::validate_binding(&binding).map_err(|e| e.to_string())?;
     reject_modifier_only_action_shortcut(&binding)?;
     let mut prefs = coord.prefs().get();
+    reject_dictation_switch_style_hotkey_overlap(&prefs.dictation_hotkey, &binding)?;
+    reject_translation_switch_style_hotkey_overlap(&prefs.translation_hotkey, &binding)?;
+    if let Some(qa_hotkey) = prefs.qa_hotkey.as_ref() {
+        reject_qa_switch_style_hotkey_overlap(qa_hotkey, &binding)?;
+    }
+    reject_switch_style_open_app_hotkey_overlap(&binding, &prefs.open_app_hotkey)?;
     prefs.switch_style_hotkey = binding;
     coord.prefs().set(prefs).map_err(|e| e.to_string())?;
     coord.update_switch_style_hotkey_binding();
@@ -840,6 +853,12 @@ pub fn set_open_app_hotkey(
     crate::shortcut_binding::validate_binding(&binding).map_err(|e| e.to_string())?;
     reject_modifier_only_action_shortcut(&binding)?;
     let mut prefs = coord.prefs().get();
+    reject_dictation_open_app_hotkey_overlap(&prefs.dictation_hotkey, &binding)?;
+    reject_translation_open_app_hotkey_overlap(&prefs.translation_hotkey, &binding)?;
+    if let Some(qa_hotkey) = prefs.qa_hotkey.as_ref() {
+        reject_qa_open_app_hotkey_overlap(qa_hotkey, &binding)?;
+    }
+    reject_switch_style_open_app_hotkey_overlap(&prefs.switch_style_hotkey, &binding)?;
     prefs.open_app_hotkey = binding;
     coord.prefs().set(prefs).map_err(|e| e.to_string())?;
     coord.update_open_app_hotkey_binding();
@@ -880,6 +899,8 @@ pub fn set_combo_hotkey(coord: CoordinatorState<'_>, binding: ComboBinding) -> R
         reject_dictation_qa_hotkey_overlap(&shortcut, qa_hotkey)?;
     }
     reject_dictation_translation_hotkey_overlap(&shortcut, &prefs.translation_hotkey)?;
+    reject_dictation_switch_style_hotkey_overlap(&shortcut, &prefs.switch_style_hotkey)?;
+    reject_dictation_open_app_hotkey_overlap(&shortcut, &prefs.open_app_hotkey)?;
     prefs.custom_combo_hotkey = Some(binding);
     prefs.dictation_hotkey = shortcut;
     sync_dictation_hotkey_legacy_fields(&mut prefs);
@@ -924,14 +945,97 @@ fn reject_dictation_qa_hotkey_overlap(
     Ok(())
 }
 
+fn reject_hotkey_overlap(
+    left: &ShortcutBinding,
+    right: &ShortcutBinding,
+    message: &'static str,
+) -> Result<(), String> {
+    if shortcut_bindings_overlap(left, right) {
+        return Err(message.into());
+    }
+    Ok(())
+}
+
+fn reject_hotkey_collisions(prefs: &UserPreferences) -> Result<(), String> {
+    if let Some(qa_hotkey) = prefs.qa_hotkey.as_ref() {
+        reject_dictation_qa_hotkey_overlap(&prefs.dictation_hotkey, qa_hotkey)?;
+        reject_qa_translation_hotkey_overlap(qa_hotkey, &prefs.translation_hotkey)?;
+        reject_qa_switch_style_hotkey_overlap(qa_hotkey, &prefs.switch_style_hotkey)?;
+        reject_qa_open_app_hotkey_overlap(qa_hotkey, &prefs.open_app_hotkey)?;
+    }
+    reject_dictation_translation_hotkey_overlap(&prefs.dictation_hotkey, &prefs.translation_hotkey)?;
+    reject_dictation_switch_style_hotkey_overlap(&prefs.dictation_hotkey, &prefs.switch_style_hotkey)?;
+    reject_dictation_open_app_hotkey_overlap(&prefs.dictation_hotkey, &prefs.open_app_hotkey)?;
+    reject_translation_switch_style_hotkey_overlap(
+        &prefs.translation_hotkey,
+        &prefs.switch_style_hotkey,
+    )?;
+    reject_translation_open_app_hotkey_overlap(&prefs.translation_hotkey, &prefs.open_app_hotkey)?;
+    reject_switch_style_open_app_hotkey_overlap(&prefs.switch_style_hotkey, &prefs.open_app_hotkey)?;
+    Ok(())
+}
+
 fn reject_dictation_translation_hotkey_overlap(
     dictation: &ShortcutBinding,
     translation: &ShortcutBinding,
 ) -> Result<(), String> {
-    if shortcut_bindings_overlap(dictation, translation) {
-        return Err("翻译快捷键不能和听写快捷键相同".into());
-    }
-    Ok(())
+    reject_hotkey_overlap(dictation, translation, "翻译快捷键不能和听写快捷键相同")
+}
+
+fn reject_dictation_switch_style_hotkey_overlap(
+    dictation: &ShortcutBinding,
+    switch_style: &ShortcutBinding,
+) -> Result<(), String> {
+    reject_hotkey_overlap(dictation, switch_style, "切换风格快捷键不能和听写快捷键相同")
+}
+
+fn reject_dictation_open_app_hotkey_overlap(
+    dictation: &ShortcutBinding,
+    open_app: &ShortcutBinding,
+) -> Result<(), String> {
+    reject_hotkey_overlap(dictation, open_app, "打开应用快捷键不能和听写快捷键相同")
+}
+
+fn reject_qa_translation_hotkey_overlap(
+    qa: &ShortcutBinding,
+    translation: &ShortcutBinding,
+) -> Result<(), String> {
+    reject_hotkey_overlap(qa, translation, "翻译快捷键不能和 QA 快捷键相同")
+}
+
+fn reject_qa_switch_style_hotkey_overlap(
+    qa: &ShortcutBinding,
+    switch_style: &ShortcutBinding,
+) -> Result<(), String> {
+    reject_hotkey_overlap(qa, switch_style, "切换风格快捷键不能和 QA 快捷键相同")
+}
+
+fn reject_qa_open_app_hotkey_overlap(
+    qa: &ShortcutBinding,
+    open_app: &ShortcutBinding,
+) -> Result<(), String> {
+    reject_hotkey_overlap(qa, open_app, "打开应用快捷键不能和 QA 快捷键相同")
+}
+
+fn reject_translation_switch_style_hotkey_overlap(
+    translation: &ShortcutBinding,
+    switch_style: &ShortcutBinding,
+) -> Result<(), String> {
+    reject_hotkey_overlap(translation, switch_style, "切换风格快捷键不能和翻译快捷键相同")
+}
+
+fn reject_translation_open_app_hotkey_overlap(
+    translation: &ShortcutBinding,
+    open_app: &ShortcutBinding,
+) -> Result<(), String> {
+    reject_hotkey_overlap(translation, open_app, "打开应用快捷键不能和翻译快捷键相同")
+}
+
+fn reject_switch_style_open_app_hotkey_overlap(
+    switch_style: &ShortcutBinding,
+    open_app: &ShortcutBinding,
+) -> Result<(), String> {
+    reject_hotkey_overlap(switch_style, open_app, "打开应用快捷键不能和切换风格快捷键相同")
 }
 
 fn shortcut_bindings_overlap(left: &ShortcutBinding, right: &ShortcutBinding) -> bool {
@@ -1425,6 +1529,46 @@ mod tests {
         assert_eq!(
             persist_settings(&writer, prefs),
             Err("翻译快捷键不能和听写快捷键相同".into())
+        );
+        assert!(writer.saved.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn persist_settings_rejects_translation_switch_style_overlap() {
+        let writer = FakeSettingsWriter::default();
+        let binding = ShortcutBinding {
+            primary: "T".into(),
+            modifiers: vec!["cmd".into(), "shift".into()],
+        };
+        let prefs = UserPreferences {
+            translation_hotkey: binding.clone(),
+            switch_style_hotkey: binding,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            persist_settings(&writer, prefs),
+            Err("切换风格快捷键不能和翻译快捷键相同".into())
+        );
+        assert!(writer.saved.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn persist_settings_rejects_switch_style_open_app_overlap() {
+        let writer = FakeSettingsWriter::default();
+        let binding = ShortcutBinding {
+            primary: "K".into(),
+            modifiers: vec!["cmd".into(), "shift".into()],
+        };
+        let prefs = UserPreferences {
+            switch_style_hotkey: binding.clone(),
+            open_app_hotkey: binding,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            persist_settings(&writer, prefs),
+            Err("打开应用快捷键不能和切换风格快捷键相同".into())
         );
         assert!(writer.saved.lock().unwrap().is_none());
     }

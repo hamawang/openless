@@ -1505,6 +1505,39 @@ fn reset_shortcut_held_state(inner: &Arc<Inner>) {
     if let Some(monitor) = inner.hotkey.lock().as_ref() {
         monitor.reset_held_state();
     }
+    let prefs = inner.prefs.get();
+    if let Some(binding) = prefs.qa_hotkey.as_ref() {
+        if crate::shortcut_binding::legacy_modifier_trigger(binding).is_none() {
+            if let Some(monitor) = inner.qa_hotkey.lock().as_ref() {
+                if let Err(e) = monitor.update_binding(binding.clone()) {
+                    log::warn!("[coord] reset QA hotkey latch failed: {e}");
+                }
+            }
+        }
+    }
+    if !is_builtin_translation_shift(&prefs.translation_hotkey)
+        && crate::shortcut_binding::legacy_modifier_trigger(&prefs.translation_hotkey).is_none()
+    {
+        if let Some(monitor) = inner.translation_hotkey.lock().as_ref() {
+            if let Err(e) = monitor.update_binding(prefs.translation_hotkey.clone()) {
+                log::warn!("[coord] reset translation hotkey latch failed: {e}");
+            }
+        }
+    }
+    if !is_modifier_only_shortcut(&prefs.switch_style_hotkey) {
+        if let Some(monitor) = inner.switch_style_hotkey.lock().as_ref() {
+            if let Err(e) = monitor.update_binding(prefs.switch_style_hotkey.clone()) {
+                log::warn!("[coord] reset switch-style hotkey latch failed: {e}");
+            }
+        }
+    }
+    if !is_modifier_only_shortcut(&prefs.open_app_hotkey) {
+        if let Some(monitor) = inner.open_app_hotkey.lock().as_ref() {
+            if let Err(e) = monitor.update_binding(prefs.open_app_hotkey.clone()) {
+                log::warn!("[coord] reset open-app hotkey latch failed: {e}");
+            }
+        }
+    }
 }
 
 async fn handle_pressed_edge(inner: &Arc<Inner>) {
