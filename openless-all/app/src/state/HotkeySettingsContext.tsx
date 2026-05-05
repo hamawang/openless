@@ -27,7 +27,6 @@ export function HotkeySettingsProvider({ children }: { children: ReactNode }) {
   const [prefs, setPrefs] = useState<UserPreferences | null>(null);
   const [capability, setCapability] = useState<HotkeyCapability | null>(null);
   const [loading, setLoading] = useState(true);
-  const syncSeqRef = useRef(0);
   const persistQueueRef = useRef<Promise<void>>(Promise.resolve());
   const latestPrefsRef = useRef<UserPreferences | null>(null);
 
@@ -38,10 +37,15 @@ export function HotkeySettingsProvider({ children }: { children: ReactNode }) {
     setLoading(false);
   }, []);
 
-  const queueSetSettings = useCallback((next: UserPreferences) => {
+  const queueSetSettings = useCallback((resolveNext: (current: UserPreferences) => UserPreferences) => {
     const task = persistQueueRef.current
       .catch(() => undefined)
-      .then(() => setSettings(next));
+      .then(async () => {
+        const current = latestPrefsRef.current;
+        if (!current) return;
+        const next = resolveNext(current);
+        await setSettings(next);
+      });
     persistQueueRef.current = task;
     return task;
   }, []);
@@ -65,28 +69,20 @@ export function HotkeySettingsProvider({ children }: { children: ReactNode }) {
           ? 'simplified'
           : 'auto';
     if (currentPrefs.chineseScriptPreference === nextScript) return;
-    const previousScript = currentPrefs.chineseScriptPreference;
-    const next = { ...currentPrefs, chineseScriptPreference: nextScript };
-    const seq = ++syncSeqRef.current;
-    void queueSetSettings(next)
-      .then(() => {
-        setPrefs(current => {
-          if (!current || syncSeqRef.current !== seq) return current;
-          if (current.chineseScriptPreference !== previousScript) return current;
-          return { ...current, chineseScriptPreference: nextScript };
-        });
-      })
-      .catch(error => {
-        if (syncSeqRef.current === seq) {
-          console.warn('[settings] sync chineseScriptPreference failed', error);
-        }
-      });
+    const merged = { ...currentPrefs, chineseScriptPreference: nextScript };
+    latestPrefsRef.current = merged;
+    setPrefs(merged);
+    void queueSetSettings(current => ({ ...current, chineseScriptPreference: nextScript })).catch(
+      error => {
+        console.warn('[settings] sync chineseScriptPreference failed', error);
+      },
+    );
   }, [prefs, queueSetSettings]);
 
   const updatePrefs = useCallback(async (next: UserPreferences) => {
     setPrefs(next);
     latestPrefsRef.current = next;
-    await queueSetSettings(next);
+    await queueSetSettings(() => next);
   }, [queueSetSettings]);
 
   const value = useMemo<HotkeySettingsContextValue>(
