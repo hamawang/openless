@@ -276,6 +276,8 @@ export const zhTW: typeof zhCN = {
       migrationNoticeDesc: '如果你之前改過快捷鍵觸發方式，請在這裏手動確認一次。本次更新調整了快捷鍵方式的默認值與讀取邏輯；如果你更習慣按住說話，可以重新切回“按住說話”。',
       capsuleLabel: '錄音膠囊',
       capsuleDesc: '錄音 / 轉寫時在屏幕底部顯示半透明膠囊。',
+      muteDuringRecordingLabel: '錄音時靜音',
+      muteDuringRecordingDesc: '開始語音輸入時臨時靜音系統輸出，停止、取消或出錯後恢復原來的靜音狀態，避免揚聲器聲音被麥克風收進去。',
       restoreClipboardLabel: '插入後恢復剪貼板',
       restoreClipboardDesc: '僅 Windows / Linux：粘貼成功後恢復你原來的剪貼板內容（默認開）。關掉就把聽寫文本留在剪貼板，模擬粘貼沒真正落地時可以手動 Ctrl+V 找回。詳見 issue #111。',
       allowNonTsfFallbackLabel: '允許非 TSF 兜底',

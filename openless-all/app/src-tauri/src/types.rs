@@ -117,6 +117,9 @@ pub struct UserPreferences {
     pub enabled_modes: Vec<PolishMode>,
     pub launch_at_login: bool,
     pub show_capsule: bool,
+    /// 录音期间临时静音系统输出，停止/取消/出错后恢复原静音状态。
+    #[serde(default)]
+    pub mute_during_recording: bool,
     pub active_asr_provider: String, // "volcengine" | "apple-speech" | ...
     pub active_llm_provider: String, // "ark" | "openai" | ...
     /// Windows/Linux 粘贴成功后是否恢复用户原剪贴板。默认 true 跟历史行为一致；
@@ -203,6 +206,7 @@ impl Default for UserPreferences {
             ],
             launch_at_login: false,
             show_capsule: true,
+            mute_during_recording: false,
             active_asr_provider: "volcengine".into(),
             active_llm_provider: "ark".into(),
             restore_clipboard_after_paste: true,

@@ -276,6 +276,8 @@ export const en: typeof zhCN = {
       migrationNoticeDesc: 'If you changed the hotkey trigger mode before, please confirm it here once. This update changes both the default value and the preference-reading path; if you prefer push-to-talk, switch it back manually.',
       capsuleLabel: 'Recording capsule',
       capsuleDesc: 'Show a translucent capsule at the bottom of the screen while recording / transcribing.',
+      muteDuringRecordingLabel: 'Mute while recording',
+      muteDuringRecordingDesc: 'Temporarily mute system output during voice input, then restore the previous mute state when recording stops, is cancelled, or fails.',
       restoreClipboardLabel: 'Restore clipboard after insert',
       restoreClipboardDesc: 'Windows / Linux only: restore your original clipboard after a successful paste (default on). Turn off to keep the dictation text in the clipboard so you can manually Ctrl+V if the simulated paste did not actually land. See issue #111.',
       allowNonTsfFallbackLabel: 'Allow non-TSF fallback',

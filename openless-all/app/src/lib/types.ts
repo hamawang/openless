@@ -110,6 +110,8 @@ export interface UserPreferences {
   enabledModes: PolishMode[];
   launchAtLogin: boolean;
   showCapsule: boolean;
+  /** 录音期间临时静音系统输出，停止/取消/出错后恢复原静音状态。 */
+  muteDuringRecording: boolean;
   activeAsrProvider: string;
   activeLlmProvider: string;
   /** 仅 Windows/Linux：粘贴成功后是否恢复用户原剪贴板。默认 true。详见 issue #111。 */

@@ -45,6 +45,7 @@ const mockSettings: UserPreferences = {
   enabledModes: ['raw', 'light', 'structured', 'formal'],
   launchAtLogin: false,
   showCapsule: true,
+  muteDuringRecording: false,
   activeAsrProvider: 'volcengine',
   activeLlmProvider: 'ark',
   restoreClipboardAfterPaste: true,

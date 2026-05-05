@@ -11,6 +11,7 @@
 //! - commands: Tauri IPC surface
 
 mod asr;
+mod audio_mute;
 mod commands;
 mod coordinator;
 mod hotkey;

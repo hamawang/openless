@@ -274,6 +274,8 @@ export const zhCN = {
       migrationNoticeDesc: '如果你之前改过快捷键触发方式，请在这里手动确认一次。本次更新调整了快捷键方式的默认值与读取逻辑；如果你更习惯按住说话，可以重新切回“按住说话”。',
       capsuleLabel: '录音胶囊',
       capsuleDesc: '录音 / 转写时在屏幕底部显示半透明胶囊。',
+      muteDuringRecordingLabel: '录音时静音',
+      muteDuringRecordingDesc: '开始语音输入时临时静音系统输出，停止、取消或出错后恢复原来的静音状态，避免扬声器声音被麦克风收进去。',
       restoreClipboardLabel: '插入后恢复剪贴板',
       restoreClipboardDesc: '仅 Windows / Linux：粘贴成功后恢复你原来的剪贴板内容（默认开）。关掉就把听写文本留在剪贴板，模拟粘贴没真正落地时可以手动 Ctrl+V 找回。详见 issue #111。',
       allowNonTsfFallbackLabel: '允许非 TSF 兜底',
