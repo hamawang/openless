@@ -15,9 +15,14 @@ interface AudioBarsProps {
 
 function AudioBars({ level }: AudioBarsProps) {
   const envelope = [0.55, 0.85, 1.0, 0.85, 0.55];
-  const base = 4;
-  const max = 18;
+  const base = 2;
+  const max = 24;
   const voice = Math.min(1, Math.max(0, level));
+  const silenceGate = 0.012;
+  const responseCeiling = 0.34;
+  const gatedVoice = Math.min(1, Math.max(0, (voice - silenceGate) / (responseCeiling - silenceGate)));
+  const easedVoice = gatedVoice * gatedVoice * (3 - 2 * gatedVoice);
+  const visualVoice = Math.pow(easedVoice, 0.42);
   return (
     <div
       style={{
@@ -35,10 +40,11 @@ function AudioBars({ level }: AudioBarsProps) {
           style={{
             display: 'inline-block',
             width: 3,
-            height: base + (max - base) * voice * env,
+            height: base + (max - base) * visualVoice * env,
             borderRadius: 999,
             background: 'var(--ol-blue)',
             opacity: 0.82,
+            transformOrigin: 'center',
             transition: 'height 0.08s var(--ol-motion-quick)',
           }}
         />
@@ -108,6 +114,8 @@ interface CircleButtonProps {
 function CircleButton({ variant, enabled, onClick }: CircleButtonProps) {
   const { t } = useTranslation();
   const isCancel = variant === 'cancel';
+  const os = detectOS();
+  const useBackdrop = os !== 'win' && isCancel;
   return (
     <button
       onClick={enabled ? onClick : undefined}
@@ -118,8 +126,8 @@ function CircleButton({ variant, enabled, onClick }: CircleButtonProps) {
         height: 28,
         borderRadius: 999,
         background: isCancel ? 'rgba(255, 255, 255, 0.55)' : 'rgba(255, 255, 255, 0.92)',
-        backdropFilter: isCancel ? 'blur(12px) saturate(160%)' : 'none',
-        WebkitBackdropFilter: isCancel ? 'blur(12px) saturate(160%)' : 'none',
+        backdropFilter: useBackdrop ? 'blur(12px) saturate(160%)' : 'none',
+        WebkitBackdropFilter: useBackdrop ? 'blur(12px) saturate(160%)' : 'none',
         color: 'var(--ol-ink)',
         border: '0.8px solid rgba(0, 0, 0, 0.08)',
         display: 'inline-flex',
@@ -127,6 +135,7 @@ function CircleButton({ variant, enabled, onClick }: CircleButtonProps) {
         justifyContent: 'center',
         cursor: enabled ? 'default' : 'not-allowed',
         opacity: enabled ? 1 : 0.42,
+        visibility: 'visible',
         flexShrink: 0,
         padding: 0,
         boxShadow: '0 1px 2px rgba(0, 0, 0, 0.06)',
@@ -217,9 +226,7 @@ function Pill({ os, state, level, insertedChars, message, onCancel, onConfirm }:
   const ambient = state === 'recording' ? Math.min(1, Math.max(0, level)) : 0;
   const scale = os === 'win' ? 1 : 1 + ambient * 0.018;
   const shadowAlpha = 0.20 + ambient * 0.10;
-  const dropShadow = os === 'win'
-    ? `drop-shadow(0 12px 24px rgba(0, 0, 0, ${(0.15 + ambient * 0.06).toFixed(3)}))`
-    : 'none';
+  const useBackdrop = os !== 'win';
 
   return (
     <div
@@ -233,11 +240,11 @@ function Pill({ os, state, level, insertedChars, message, onCancel, onConfirm }:
         height: metrics.height,
         borderRadius: 999,
         background: 'rgba(255, 255, 255, 0.62)',
-        backdropFilter: 'blur(28px) saturate(180%)',
-        WebkitBackdropFilter: 'blur(28px) saturate(180%)',
+        backdropFilter: useBackdrop ? 'blur(28px) saturate(180%)' : 'none',
+        WebkitBackdropFilter: useBackdrop ? 'blur(28px) saturate(180%)' : 'none',
         border: '1px solid rgba(255, 255, 255, 0.55)',
         boxShadow: os === 'win'
-          ? '0 0 0 0.5px rgba(0, 0, 0, 0.08), inset 0 0.5px 0 rgba(255, 255, 255, 0.55)'
+          ? `0 10px 24px -14px rgba(0, 0, 0, ${(0.24 + ambient * 0.06).toFixed(3)}), 0 0 0 0.5px rgba(0, 0, 0, 0.08), inset 0 0.5px 0 rgba(255, 255, 255, 0.55)`
           : `0 18px 50px -10px rgba(0, 0, 0, ${shadowAlpha.toFixed(3)}), 0 0 0 0.5px rgba(0, 0, 0, 0.08), inset 0 0.5px 0 rgba(255, 255, 255, 0.55)`,
         color: 'var(--ol-ink)',
         fontFamily: 'var(--ol-font-sans)',
@@ -245,11 +252,10 @@ function Pill({ os, state, level, insertedChars, message, onCancel, onConfirm }:
         transformOrigin: 'center',
         transition: 'transform 0.08s var(--ol-motion-quick), box-shadow 0.08s var(--ol-motion-quick)',
         willChange: 'transform, box-shadow',
-        filter: dropShadow,
       }}
     >
       <CircleButton variant="cancel" enabled={enabled} onClick={onCancel} />
-      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         {center}
       </div>
       <CircleButton variant="confirm" enabled={enabled} onClick={onConfirm} />

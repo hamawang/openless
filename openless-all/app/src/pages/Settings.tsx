@@ -1111,6 +1111,7 @@ function LanguageSection() {
         >
           <option value={FOLLOW_SYSTEM}>{t('settings.language.followSystem')}</option>
           <option value="zh-CN">{t('settings.language.zh')}</option>
+          <option value="zh-TW">{t('settings.language.zhTW')}</option>
           <option value="en">{t('settings.language.en')}</option>
         </select>
       </SettingRow>
