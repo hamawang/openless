@@ -298,6 +298,18 @@ jobs:
           }
           Write-Host "[ok] MSI rebuilt at $msiPath"
 
+      - name: Verify Windows installers register TSF IME
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        working-directory: 'openless-all/app'
+        run: |
+          $nsis = Get-ChildItem "src-tauri\target\release\bundle\nsis\*.exe" -ErrorAction Stop | Select-Object -First 1
+          $msi = Get-ChildItem "src-tauri\target\release\bundle\msi\*.msi" -ErrorAction Stop | Select-Object -First 1
+          if (-not $nsis) { throw "NSIS installer not found." }
+          if (-not $msi) { throw "MSI installer not found." }
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows-ime-install-smoke.ps1 -InstallerPath $nsis.FullName -InstallerKind nsis
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows-ime-install-smoke.ps1 -InstallerPath $msi.FullName -InstallerKind msi
+
       # ── Linux：产 deb / rpm / AppImage ──
       - name: Build (Linux)
         if: matrix.platform == 'ubuntu-22.04'

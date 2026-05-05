@@ -5,9 +5,12 @@ import { fileURLToPath } from "node:url";
 
 const scriptsDir = dirname(fileURLToPath(import.meta.url));
 const appRoot = join(scriptsDir, "..");
+const repoRoot = join(appRoot, "..", "..");
 const scriptPath = join(scriptsDir, "windows-package-msvc.ps1");
 const launcherPath = join(scriptsDir, "windows-package-msvc.cmd");
+const ciWorkflowPath = join(repoRoot, ".github", "workflows", "release-tauri.yml");
 const imeBuildPath = join(scriptsDir, "windows-ime-build.ps1");
+const imeInstallSmokePath = join(scriptsDir, "windows-ime-install-smoke.ps1");
 const imeRegisterPath = join(scriptsDir, "windows-ime-register.ps1");
 const imeUnregisterPath = join(scriptsDir, "windows-ime-unregister.ps1");
 const imeSolutionPath = join(appRoot, "windows-ime", "OpenLessIme.sln");
@@ -15,11 +18,14 @@ const imeProjectPath = join(appRoot, "windows-ime", "OpenLessIme.vcxproj");
 const imeEditSessionPath = join(appRoot, "windows-ime", "src", "edit_session.cpp");
 const imeTextServicePath = join(appRoot, "windows-ime", "src", "text_service.cpp");
 const tauriConfigPath = join(appRoot, "src-tauri", "tauri.conf.json");
+const nsisHookPath = join(appRoot, "src-tauri", "nsis", "openless-ime-hooks.nsh");
 const wixFragmentPath = join(appRoot, "src-tauri", "wix", "openless-ime.wxs");
 
 const script = readFileSync(scriptPath, "utf8");
 const launcher = readFileSync(launcherPath, "utf8");
+const ciWorkflow = readFileSync(ciWorkflowPath, "utf8");
 const imeBuild = readFileSync(imeBuildPath, "utf8");
+const imeInstallSmoke = readFileSync(imeInstallSmokePath, "utf8");
 const imeRegister = readFileSync(imeRegisterPath, "utf8");
 const imeUnregister = readFileSync(imeUnregisterPath, "utf8");
 const imeSolution = readFileSync(imeSolutionPath, "utf8");
@@ -27,6 +33,7 @@ const imeProject = readFileSync(imeProjectPath, "utf8");
 const imeEditSession = readFileSync(imeEditSessionPath, "utf8");
 const imeTextService = readFileSync(imeTextServicePath, "utf8");
 const tauriConfig = JSON.parse(readFileSync(tauriConfigPath, "utf8"));
+const nsisHook = readFileSync(nsisHookPath, "utf8");
 const wixFragment = readFileSync(wixFragmentPath, "utf8");
 
 const requiredFragments = [
@@ -84,6 +91,8 @@ assert.deepEqual(tauriConfig.bundle.windows.wix.componentRefs, [
   "OpenLessImeDllX64Component",
   "OpenLessImeDllX86Component",
 ]);
+assert.equal(tauriConfig.bundle.windows.nsis.installMode, "both", "NSIS must request elevation so TSF can register in HKLM");
+assert.equal(tauriConfig.bundle.windows.nsis.installerHooks, "nsis/openless-ime-hooks.nsh", "NSIS must install and register the TSF DLLs");
 
 assert.match(imeSolution, /Release\|Win32/, "IME solution should include a Win32 Release configuration");
 assert.match(imeProject, /Release\|Win32/, "IME project should include a Win32 Release configuration");
@@ -107,6 +116,27 @@ assert.match(wixFragment, /RegisterOpenLessImeX64/, "MSI should register x64 Ope
 assert.match(wixFragment, /RegisterOpenLessImeX86/, "MSI should register x86 OpenLess IME during install");
 assert.match(wixFragment, /UnregisterOpenLessImeX64/, "MSI should unregister x64 OpenLess IME during uninstall");
 assert.match(wixFragment, /UnregisterOpenLessImeX86/, "MSI should unregister x86 OpenLess IME during uninstall");
+
+assert.match(nsisHook, /NSIS_HOOK_PREINSTALL/, "NSIS should copy IME DLLs before install completes");
+assert.match(nsisHook, /NSIS_HOOK_POSTINSTALL/, "NSIS should register IME DLLs after files are installed");
+assert.match(nsisHook, /NSIS_HOOK_PREUNINSTALL/, "NSIS should unregister IME DLLs before uninstall removes them");
+assert.match(nsisHook, /\$%OPENLESS_IME_DLL_X64%/, "NSIS should consume the CI-built x64 IME DLL");
+assert.match(nsisHook, /\$%OPENLESS_IME_DLL_X86%/, "NSIS should consume the CI-built x86 IME DLL");
+assert.match(nsisHook, /SetOutPath "\$INSTDIR\\windows-ime\\x64"/, "NSIS should install the x64 IME DLL beside the app");
+assert.match(nsisHook, /SetOutPath "\$INSTDIR\\windows-ime\\x86"/, "NSIS should install the x86 IME DLL beside the app");
+assert.match(nsisHook, /File \/oname=OpenLessIme\.dll/, "NSIS should embed OpenLessIme.dll in the installer");
+assert.match(nsisHook, /Sysnative\\regsvr32\.exe/, "NSIS should use 64-bit regsvr32 for the x64 IME");
+assert.match(nsisHook, /SysWOW64\\regsvr32\.exe/, "NSIS should use 32-bit regsvr32 for the x86 IME");
+assert.match(nsisHook, /Abort/, "NSIS install should fail if TSF registration fails");
+
+assert.match(imeInstallSmoke, /\[ValidateSet\("nsis", "msi"\)\]/, "install smoke should support both Windows installers");
+assert.match(imeInstallSmoke, /OpenLessImeSubmit/, "install smoke should preserve TSF backend context");
+assert.match(imeInstallSmoke, /Software\\Classes\\CLSID\\\{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D\}\\InprocServer32/, "install smoke should check x64 COM registration");
+assert.match(imeInstallSmoke, /Software\\WOW6432Node\\Classes\\CLSID\\\{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D\}\\InprocServer32/, "install smoke should check x86 COM registration");
+assert.match(imeInstallSmoke, /LanguageProfile\\0x00000804\\\{9B5F5E04-23F6-47DA-9A26-D221F6C3F02E\}/, "install smoke should check the TSF language profile");
+assert.match(imeInstallSmoke, /Category\\Category\\\{34745C63-B2F0-4784-8B67-5E12C8701A31\}/, "install smoke should check the keyboard TSF category");
+assert.match(ciWorkflow, /windows-ime-install-smoke\.ps1[\s\S]*-InstallerKind nsis/, "CI should install and verify the NSIS artifact");
+assert.match(ciWorkflow, /windows-ime-install-smoke\.ps1[\s\S]*-InstallerKind msi/, "CI should install and verify the MSI artifact");
 
 assert.match(launcher, /powershell\.exe/, "launcher should call powershell.exe");
 assert.match(launcher, /-ExecutionPolicy Bypass/, "launcher should bypass execution policy for this process");
