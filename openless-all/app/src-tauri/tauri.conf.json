@@ -85,6 +85,10 @@
       "entitlements": "Entitlements.plist"
     },
     "windows": {
+      "nsis": {
+        "installMode": "perMachine",
+        "installerHooks": "nsis/openless-ime-hooks.nsh"
+      },
       "wix": {
         "fragmentPaths": [
           "wix/openless-ime.wxs"
