@@ -128,8 +128,12 @@ assert.match(nsisHook, /File \/oname=OpenLessIme\.dll/, "NSIS should embed OpenL
 assert.match(nsisHook, /Sysnative\\regsvr32\.exe/, "NSIS should use 64-bit regsvr32 for the x64 IME");
 assert.match(nsisHook, /SysWOW64\\regsvr32\.exe/, "NSIS should use 32-bit regsvr32 for the x86 IME");
 assert.match(nsisHook, /Abort/, "NSIS install should fail if TSF registration fails");
-assert.match(nsisHook, /OPENLESS_IME_ABORT_IF_FAILED \$0 "x64 unregistration"/, "NSIS uninstall should fail if x64 TSF unregistration fails");
-assert.match(nsisHook, /OPENLESS_IME_ABORT_IF_FAILED \$0 "x86 unregistration"/, "NSIS uninstall should fail if x86 TSF unregistration fails");
+assert.match(nsisHook, /OPENLESS_IME_ABORT_IF_FAILED \$0 "x64 registration"/, "NSIS install should fail if x64 TSF registration fails");
+assert.match(nsisHook, /OPENLESS_IME_ABORT_IF_FAILED \$0 "x86 registration"/, "NSIS install should fail if x86 TSF registration fails");
+assert.doesNotMatch(nsisHook, /OPENLESS_IME_ABORT_IF_FAILED \$0 "x64 unregistration"/, "NSIS uninstall should not fail if x64 TSF unregistration fails");
+assert.doesNotMatch(nsisHook, /OPENLESS_IME_ABORT_IF_FAILED \$0 "x86 unregistration"/, "NSIS uninstall should not fail if x86 TSF unregistration fails");
+assert.match(nsisHook, /OpenLess x64 TSF IME unregister exit code \$0/, "NSIS uninstall should log x64 TSF unregistration failures");
+assert.match(nsisHook, /OpenLess x86 TSF IME unregister exit code \$0/, "NSIS uninstall should log x86 TSF unregistration failures");
 
 assert.match(imeInstallSmoke, /\[ValidateSet\("nsis", "msi"\)\]/, "install smoke should support both Windows installers");
 assert.match(imeInstallSmoke, /Join-ProcessArguments/, "install smoke should quote process arguments before Start-Process");
