@@ -54,6 +54,9 @@ enum SessionPhase {
 enum ActiveAsr {
     Volcengine(Arc<VolcengineStreamingASR>),
     Whisper(Arc<WhisperBatchASR>),
+    /// 本地 Qwen3-ASR；只在 macOS + 模型已下载时可达。
+    #[cfg(target_os = "macos")]
+    Local(Arc<crate::asr::local::LocalQwenAsr>),
 }
 
 struct SessionResource<T> {
@@ -798,6 +801,8 @@ fn cancel_active_asr(asr: ActiveAsr) {
     match asr {
         ActiveAsr::Volcengine(v) => v.cancel(),
         ActiveAsr::Whisper(w) => w.cancel(),
+        #[cfg(target_os = "macos")]
+        ActiveAsr::Local(local) => local.cancel(),
     }
 }
 
@@ -1007,6 +1012,37 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
     emit_capsule(inner, CapsuleState::Recording, 0.0, 0, None, None);
 
     let active_asr = CredentialsVault::get_active_asr();
+
+    #[cfg(target_os = "macos")]
+    if crate::asr::local::is_local_qwen3(&active_asr) {
+        let local = match build_local_qwen3(inner) {
+            Ok(l) => l,
+            Err(e) => {
+                log::error!("[coord] 本地 Qwen3-ASR 初始化失败: {e:#}");
+                emit_capsule(
+                    inner,
+                    CapsuleState::Error,
+                    0.0,
+                    0,
+                    Some(format!("本地模型初始化失败: {e}")),
+                    None,
+                );
+                restore_prepared_windows_ime_session(inner, current_session_id);
+                inner.state.lock().phase = SessionPhase::Idle;
+                schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
+                return Err(format!("local ASR init failed: {e}"));
+            }
+        };
+        store_asr_for_session(
+            inner,
+            current_session_id,
+            ActiveAsr::Local(Arc::clone(&local)),
+        );
+        let consumer: Arc<dyn crate::recorder::AudioConsumer> = local;
+        start_recorder_and_enter_listening(inner, current_session_id, &active_asr, consumer)
+            .await?;
+        return Ok(());
+    }
 
     if is_whisper_compatible_provider(&active_asr) {
         let (api_key, base_url, model) = read_whisper_credentials();
@@ -1392,6 +1428,25 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
                     0.0,
                     elapsed,
                     Some(format!("识别失败: {e}")),
+                    None,
+                );
+                restore_prepared_windows_ime_session(inner, current_session_id);
+                inner.state.lock().phase = SessionPhase::Idle;
+                schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
+                return Err(e.to_string());
+            }
+        },
+        #[cfg(target_os = "macos")]
+        ActiveAsr::Local(local) => match local.transcribe().await {
+            Ok(r) => r,
+            Err(e) => {
+                log::error!("[coord] local Qwen3-ASR transcribe failed: {e:#}");
+                emit_capsule(
+                    inner,
+                    CapsuleState::Error,
+                    0.0,
+                    elapsed,
+                    Some(format!("本地识别失败: {e}")),
                     None,
                 );
                 restore_prepared_windows_ime_session(inner, current_session_id);
@@ -1877,6 +1932,19 @@ fn ensure_microphone_permission(_inner: &Arc<Inner>) -> Result<(), String> {
 
 fn ensure_asr_credentials() -> Result<(), String> {
     let active_asr = CredentialsVault::get_active_asr();
+
+    // 本地 Qwen3-ASR 没有"凭据"概念，但需要：(a) macOS 平台 (b) 模型已下载。
+    if crate::asr::local::is_local_qwen3(&active_asr) {
+        #[cfg(not(target_os = "macos"))]
+        {
+            return Err("本地 ASR 当前仅支持 macOS（Windows 见 issue #256）".to_string());
+        }
+        #[cfg(target_os = "macos")]
+        {
+            return ensure_local_qwen3_model_ready();
+        }
+    }
+
     if is_whisper_compatible_provider(&active_asr) {
         let api_key = CredentialsVault::get(CredentialAccount::AsrApiKey)
             .ok()
@@ -1894,6 +1962,39 @@ fn ensure_asr_credentials() -> Result<(), String> {
     } else {
         Ok(())
     }
+}
+
+#[cfg(target_os = "macos")]
+fn ensure_local_qwen3_model_ready() -> Result<(), String> {
+    let prefs = || -> Result<crate::types::UserPreferences, String> {
+        // 这里没法拿到 inner，直接读 preferences.json 即可（Coordinator 写盘后总是同步的）。
+        crate::persistence::PreferencesStore::new()
+            .map_err(|e| e.to_string())
+            .map(|s| s.get())
+    }()?;
+    let model_id = crate::asr::local::ModelId::from_str(&prefs.local_asr_active_model)
+        .ok_or_else(|| format!("未知的本地模型 id: {}", prefs.local_asr_active_model))?;
+    if !crate::asr::local::models::is_downloaded(model_id) {
+        return Err(format!(
+            "本地模型 {} 未下载完整，请到 设置 → 模型设置 中下载",
+            model_id.as_str()
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn build_local_qwen3(inner: &Arc<Inner>) -> anyhow::Result<Arc<crate::asr::local::LocalQwenAsr>> {
+    let prefs = inner.prefs.get();
+    let model_id = crate::asr::local::ModelId::from_str(&prefs.local_asr_active_model)
+        .ok_or_else(|| anyhow::anyhow!("未知本地模型 id: {}", prefs.local_asr_active_model))?;
+    let dir = crate::asr::local::models::model_dir(model_id)?;
+    let app = inner
+        .app
+        .lock()
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("AppHandle 未绑定"))?;
+    Ok(Arc::new(crate::asr::local::LocalQwenAsr::new(app, &dir)?))
 }
 
 /// `whisper` 是 OpenAI 原生；`siliconflow` / `zhipu` / `groq` 都暴露

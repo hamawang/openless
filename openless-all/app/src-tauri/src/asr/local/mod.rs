@@ -4,6 +4,7 @@
 //! 的本地推理路径见 issue #256，本期不实现。
 
 pub mod download;
+mod local_provider;
 pub mod models;
 
 #[cfg(target_os = "macos")]
@@ -13,6 +14,8 @@ mod qwen_ffi;
 
 #[cfg(target_os = "macos")]
 pub use qwen_engine::QwenAsrEngine;
+#[cfg(target_os = "macos")]
+pub use local_provider::LocalQwenAsr;
 
 pub use download::{DownloadManager, Mirror};
 pub use models::{ModelId, ModelStatus};
