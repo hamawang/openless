@@ -10,7 +10,9 @@ use std::time::Duration;
 use serde_json::{json, Value};
 use thiserror::Error;
 
-use crate::types::{ChineseScriptPreference, PolishMode, QaChatMessage};
+use crate::types::{
+    ChineseScriptPreference, OutputLanguagePreference, PolishMode, QaChatMessage,
+};
 
 const DEFAULT_TEMPERATURE: f32 = 0.3;
 const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
@@ -91,11 +93,17 @@ impl OpenAICompatibleLLMProvider {
         hotwords: &[String],
         working_languages: &[String],
         chinese_script_preference: ChineseScriptPreference,
+        output_language_preference: OutputLanguagePreference,
         front_app: Option<&str>,
     ) -> Result<String, LLMError> {
         let mut system_prompt = compose_system_prompt(mode, hotwords);
         if let Some(premise) =
-            context_premise(working_languages, chinese_script_preference, front_app)
+            context_premise(
+                working_languages,
+                chinese_script_preference,
+                output_language_preference,
+                front_app,
+            )
         {
             system_prompt = format!("{}\n\n{}", premise, system_prompt);
         }
@@ -112,6 +120,7 @@ impl OpenAICompatibleLLMProvider {
         messages: &[QaChatMessage],
         working_languages: &[String],
         chinese_script_preference: ChineseScriptPreference,
+        output_language_preference: OutputLanguagePreference,
         front_app: Option<&str>,
         on_delta: F,
         should_cancel: C,
@@ -122,7 +131,12 @@ impl OpenAICompatibleLLMProvider {
     {
         let mut system_prompt = prompts::qa_system_prompt();
         if let Some(premise) =
-            context_premise(working_languages, chinese_script_preference, front_app)
+            context_premise(
+                working_languages,
+                chinese_script_preference,
+                output_language_preference,
+                front_app,
+            )
         {
             system_prompt = format!("{}\n\n{}", premise, system_prompt);
         }
@@ -138,11 +152,19 @@ impl OpenAICompatibleLLMProvider {
         target_language: &str,
         working_languages: &[String],
         chinese_script_preference: ChineseScriptPreference,
+        _output_language_preference: OutputLanguagePreference,
         front_app: Option<&str>,
     ) -> Result<String, LLMError> {
         let mut system_prompt = prompts::translate_system_prompt(target_language);
+        // 翻译模式必须以 target_language 为唯一输出语言约束，避免和 UI 驱动的
+        // output_language_preference 发生冲突（例如 UI=ja, target=en）。
         if let Some(premise) =
-            context_premise(working_languages, chinese_script_preference, front_app)
+            context_premise(
+                working_languages,
+                chinese_script_preference,
+                OutputLanguagePreference::Auto,
+                front_app,
+            )
         {
             system_prompt = format!("{}\n\n{}", premise, system_prompt);
         }
@@ -390,6 +412,7 @@ fn chat_completions_url(base_url: &str) -> String {
 fn context_premise(
     working_languages: &[String],
     chinese_script_preference: ChineseScriptPreference,
+    output_language_preference: OutputLanguagePreference,
     front_app: Option<&str>,
 ) -> Option<String> {
     let langs: Vec<&str> = working_languages
@@ -411,7 +434,27 @@ fn context_premise(
         ChineseScriptPreference::Auto => None,
     };
 
-    if langs.is_empty() && app.is_none() && script_line.is_none() {
+    let output_language_line = match output_language_preference {
+        OutputLanguagePreference::ZhCn => {
+            Some("最终输出语言偏好：简体中文。若回答可用中文表达，请优先使用简体中文。".to_string())
+        }
+        OutputLanguagePreference::ZhTw => {
+            Some("最終輸出語言偏好：繁體中文。若回答可用中文表達，請優先使用繁體中文。".to_string())
+        }
+        OutputLanguagePreference::En => {
+            Some("Output language preference: English. Prefer English when producing the final answer.".to_string())
+        }
+        OutputLanguagePreference::Ja => {
+            Some("出力言語の優先設定：日本語。最終回答は可能な限り日本語で出力してください。".to_string())
+        }
+        OutputLanguagePreference::Ko => {
+            Some("출력 언어 선호: 한국어. 최종 답변은 가능하면 한국어로 작성해 주세요.".to_string())
+        }
+        OutputLanguagePreference::Auto => None,
+    };
+
+    if langs.is_empty() && app.is_none() && script_line.is_none() && output_language_line.is_none()
+    {
         return None;
     }
 
@@ -428,6 +471,9 @@ fn context_premise(
         ));
     }
     if let Some(line) = script_line {
+        lines.push(line);
+    }
+    if let Some(line) = output_language_line {
         lines.push(line);
     }
     Some(lines.join("\n"))
@@ -1016,6 +1062,7 @@ mod tests {
                 &[],
                 &[],
                 ChineseScriptPreference::Auto,
+                OutputLanguagePreference::Auto,
                 None,
             )
             .await

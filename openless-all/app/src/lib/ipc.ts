@@ -57,6 +57,7 @@ const mockSettings: UserPreferences = {
   translationTargetLanguage: '',
   qaHotkey: defaultQaShortcut(),
   chineseScriptPreference: 'auto',
+  outputLanguagePreference: 'auto',
   qaSaveHistory: false,
   customComboHotkey: null,
   translationHotkey: { primary: 'Shift', modifiers: [] },

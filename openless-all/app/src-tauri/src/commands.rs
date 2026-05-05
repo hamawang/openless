@@ -13,7 +13,8 @@ use crate::persistence::{CredentialAccount, CredentialsSnapshot, CredentialsVaul
 use crate::polish::{LLMError, OpenAICompatibleConfig, OpenAICompatibleLLMProvider};
 use crate::types::{
     ChineseScriptPreference, ComboBinding, CredentialsStatus, DictationSession, DictionaryEntry,
-    HotkeyCapability, HotkeyStatus, PolishMode, ShortcutBinding, UserPreferences,
+    HotkeyCapability, HotkeyStatus, OutputLanguagePreference, PolishMode, ShortcutBinding,
+    UserPreferences,
     VocabPresetStore, WindowsImeStatus,
 };
 
@@ -283,6 +284,7 @@ async fn validate_llm_provider() -> Result<(), String> {
             &[],
             &[],
             ChineseScriptPreference::Auto,
+            OutputLanguagePreference::Auto,
             None,
         )
         .await

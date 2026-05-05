@@ -11,10 +11,13 @@
 import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
 import { en } from './en';
+import { ja } from './ja';
+import { ko } from './ko';
 import { zhCN } from './zh-CN';
 import { zhTW } from './zh-TW';
+import type { UserPreferences } from '../lib/types';
 
-export const SUPPORTED_LOCALES = ['zh-CN', 'zh-TW', 'en'] as const;
+export const SUPPORTED_LOCALES = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko'] as const;
 export type SupportedLocale = (typeof SUPPORTED_LOCALES)[number];
 
 export const LOCALE_STORAGE_KEY = 'ol.locale';
@@ -27,6 +30,8 @@ function detectSystemLocale(): SupportedLocale {
     if (nav.includes('hant') || nav.includes('tw') || nav.includes('hk') || nav.includes('mo')) return 'zh-TW';
     return 'zh-CN';
   }
+  if (nav.startsWith('ja')) return 'ja';
+  if (nav.startsWith('ko')) return 'ko';
   return 'en';
 }
 
@@ -38,7 +43,7 @@ function resolveLocalePreference(pref: SupportedLocale | typeof FOLLOW_SYSTEM_VA
 function getStoredLocale(): SupportedLocale | null {
   if (typeof window === 'undefined') return null;
   const raw = window.localStorage.getItem(LOCALE_STORAGE_KEY);
-  return raw === 'zh-CN' || raw === 'zh-TW' || raw === 'en' ? raw : null;
+  return raw === 'zh-CN' || raw === 'zh-TW' || raw === 'en' || raw === 'ja' || raw === 'ko' ? raw : null;
 }
 
 const initialLng: SupportedLocale = getStoredLocale() ?? detectSystemLocale();
@@ -48,6 +53,8 @@ void i18n.use(initReactI18next).init({
     'zh-CN': { translation: zhCN },
     'zh-TW': { translation: zhTW },
     en: { translation: en },
+    ja: { translation: ja },
+    ko: { translation: ko },
   },
   lng: initialLng,
   fallbackLng: 'zh-CN',
@@ -85,3 +92,42 @@ export async function setLocalePreference(
 }
 
 export const FOLLOW_SYSTEM = FOLLOW_SYSTEM_VALUE;
+
+export function outputPrefsForLocale(
+  resolved: SupportedLocale,
+): Pick<UserPreferences, 'chineseScriptPreference' | 'outputLanguagePreference'> {
+  if (resolved === 'zh-CN') {
+    return {
+      chineseScriptPreference: 'simplified',
+      outputLanguagePreference: 'zhCn',
+    };
+  }
+  if (resolved === 'zh-TW') {
+    return {
+      chineseScriptPreference: 'traditional',
+      outputLanguagePreference: 'zhTw',
+    };
+  }
+  if (resolved === 'en') {
+    return {
+      chineseScriptPreference: 'auto',
+      outputLanguagePreference: 'en',
+    };
+  }
+  if (resolved === 'ja') {
+    return {
+      chineseScriptPreference: 'auto',
+      outputLanguagePreference: 'ja',
+    };
+  }
+  if (resolved === 'ko') {
+    return {
+      chineseScriptPreference: 'auto',
+      outputLanguagePreference: 'ko',
+    };
+  }
+  return {
+    chineseScriptPreference: 'auto',
+    outputLanguagePreference: 'auto',
+  };
+}
