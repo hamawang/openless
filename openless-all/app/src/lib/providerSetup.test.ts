@@ -10,26 +10,67 @@ function assertEqual(actual: boolean, expected: boolean, name: string) {
 }
 
 assertEqual(
-  areProvidersConfigured({ volcengineConfigured: true, arkConfigured: true }),
+  areProvidersConfigured({
+    activeAsrProvider: 'volcengine',
+    activeLlmProvider: 'ark',
+    asrConfigured: true,
+    llmConfigured: true,
+    volcengineConfigured: true,
+    arkConfigured: true,
+  }),
   true,
   'configured when ASR and LLM are both ready',
 );
 
 assertEqual(
-  areProvidersConfigured({ volcengineConfigured: false, arkConfigured: true }),
+  areProvidersConfigured({
+    activeAsrProvider: 'volcengine',
+    activeLlmProvider: 'ark',
+    asrConfigured: false,
+    llmConfigured: true,
+    volcengineConfigured: false,
+    arkConfigured: true,
+  }),
   false,
   'not configured when ASR provider is missing',
 );
 
 assertEqual(
-  areProvidersConfigured({ volcengineConfigured: true, arkConfigured: false }),
+  areProvidersConfigured({
+    activeAsrProvider: 'volcengine',
+    activeLlmProvider: 'ark',
+    asrConfigured: true,
+    llmConfigured: false,
+    volcengineConfigured: true,
+    arkConfigured: false,
+  }),
   false,
   'not configured when LLM provider is missing',
 );
 
 assertEqual(
+  areProvidersConfigured({
+    activeAsrProvider: 'whisper',
+    activeLlmProvider: 'ark',
+    asrConfigured: true,
+    llmConfigured: true,
+    volcengineConfigured: false,
+    arkConfigured: true,
+  }),
+  true,
+  'configured when active ASR is non-volcengine but already ready',
+);
+
+assertEqual(
   shouldShowProviderSetupPrompt(
-    { volcengineConfigured: false, arkConfigured: false },
+    {
+      activeAsrProvider: 'whisper',
+      activeLlmProvider: 'ark',
+      asrConfigured: false,
+      llmConfigured: false,
+      volcengineConfigured: false,
+      arkConfigured: false,
+    },
     null,
   ),
   true,
@@ -38,7 +79,14 @@ assertEqual(
 
 assertEqual(
   shouldShowProviderSetupPrompt(
-    { volcengineConfigured: false, arkConfigured: false },
+    {
+      activeAsrProvider: 'whisper',
+      activeLlmProvider: 'ark',
+      asrConfigured: false,
+      llmConfigured: false,
+      volcengineConfigured: false,
+      arkConfigured: false,
+    },
     '1',
   ),
   false,
@@ -47,7 +95,14 @@ assertEqual(
 
 assertEqual(
   shouldShowProviderSetupPrompt(
-    { volcengineConfigured: true, arkConfigured: true },
+    {
+      activeAsrProvider: 'whisper',
+      activeLlmProvider: 'ark',
+      asrConfigured: true,
+      llmConfigured: true,
+      volcengineConfigured: false,
+      arkConfigured: true,
+    },
     null,
   ),
   false,
