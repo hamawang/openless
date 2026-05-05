@@ -86,7 +86,7 @@
     },
     "windows": {
       "nsis": {
-        "installMode": "both",
+        "installMode": "perMachine",
         "installerHooks": "nsis/openless-ime-hooks.nsh"
       },
       "wix": {
