@@ -65,6 +65,14 @@ enum ActiveAsr {
     Local(Arc<crate::asr::local::LocalQwenAsr>),
 }
 
+fn asr_transcribe_uses_global_timeout(asr: &ActiveAsr) -> bool {
+    match asr {
+        #[cfg(target_os = "windows")]
+        ActiveAsr::FoundryLocalWhisper(_) => false,
+        _ => true,
+    }
+}
+
 struct SessionResource<T> {
     session_id: u64,
     resource: T,
@@ -1615,8 +1623,10 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
         }
     };
 
+    let uses_global_timeout = asr_transcribe_uses_global_timeout(&asr);
     let raw = match asr {
         ActiveAsr::Volcengine(asr) => {
+            debug_assert!(uses_global_timeout);
             if let Err(e) = asr.send_last_frame().await {
                 log::error!("[coord] send last frame failed: {e}");
             }
@@ -1663,6 +1673,7 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
             }
         }
         ActiveAsr::Whisper(w) => {
+            debug_assert!(uses_global_timeout);
             // Whisper 也添加类似的超时保护
             let timeout_duration = std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS);
             match tokio::time::timeout(timeout_duration, w.transcribe()).await {
@@ -1704,10 +1715,10 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
         }
         #[cfg(target_os = "windows")]
         ActiveAsr::FoundryLocalWhisper(local) => {
-            let timeout_duration = std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS);
-            match tokio::time::timeout(timeout_duration, local.transcribe()).await {
-                Ok(Ok(r)) => r,
-                Ok(Err(e)) => {
+            debug_assert!(!uses_global_timeout);
+            match local.transcribe().await {
+                Ok(r) => r,
+                Err(e) => {
                     log::error!("[coord] Foundry Local Whisper transcribe failed: {e:#}");
                     emit_capsule(
                         inner,
@@ -1722,28 +1733,11 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
                     schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
                     return Err(e.to_string());
                 }
-                Err(_) => {
-                    log::error!(
-                        "[coord] Foundry Local Whisper 全局超时 {} 秒",
-                        COORDINATOR_GLOBAL_TIMEOUT_SECS
-                    );
-                    emit_capsule(
-                        inner,
-                        CapsuleState::Error,
-                        0.0,
-                        elapsed,
-                        Some("识别超时".to_string()),
-                        None,
-                    );
-                    restore_prepared_windows_ime_session(inner, current_session_id);
-                    inner.state.lock().phase = SessionPhase::Idle;
-                    schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
-                    return Err("foundry local global timeout".to_string());
-                }
             }
         }
         #[cfg(target_os = "macos")]
         ActiveAsr::Local(local) => {
+            debug_assert!(uses_global_timeout);
             // 与 Volcengine/Whisper 一致包一层 global timeout（来自 origin/main）。
             // 注：缓存命中时 transcribe 不含 load 时间；冷启动 load 已在 build_local_qwen3
             // 提前完成，所以 15s 给 transcribe 本身足够。
@@ -3203,6 +3197,19 @@ mod tests {
             &runtime,
             &coordinator.inner.foundry_local_runtime
         ));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn foundry_transcribe_skips_global_timeout_for_first_run_provisioning() {
+        let provider = Arc::new(crate::asr::local::FoundryLocalWhisperAsr::new(
+            Arc::new(crate::asr::local::FoundryLocalRuntime::new()),
+            crate::asr::local::foundry::DEFAULT_MODEL_ALIAS.to_string(),
+            None,
+        ));
+        let active_asr = ActiveAsr::FoundryLocalWhisper(provider);
+
+        assert!(!asr_transcribe_uses_global_timeout(&active_asr));
     }
 
     #[test]
