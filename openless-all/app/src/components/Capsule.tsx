@@ -45,7 +45,10 @@ function AudioBars({ level }: AudioBarsProps) {
             background: 'var(--ol-blue)',
             opacity: 0.82,
             transformOrigin: 'center',
-            transition: 'height 0.08s var(--ol-motion-quick)',
+            // 0.08s 在 60Hz audio-level 更新下太快，每次 re-render 都重启 transition，
+            // 视觉上是阶梯式跳变。延长到 0.18s 让多次 update 在曲线内平滑混合，
+            // easeOutExpo-like 缓动让圆点→长条的形变自然顺滑（用户原话"圆形跳成矩形"）。
+            transition: 'height 0.18s cubic-bezier(0.22, 1, 0.36, 1)',
           }}
         />
       ))}
