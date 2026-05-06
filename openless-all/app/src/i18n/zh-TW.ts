@@ -405,8 +405,8 @@ export const zhTW: typeof zhCN = {
       zh: '簡體中文',
       zhTW: '繁體中文',
       en: 'English',
-      ja: '日本語',
-      ko: '한국어',
+      ja: '日本語 (Beta)',
+      ko: '한국어 (Beta)',
       restartHint: '部分原生菜單（系統托盤等）可能需要重啓 App 纔會切換。',
     },
     about: {
