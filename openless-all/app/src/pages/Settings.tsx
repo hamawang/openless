@@ -514,6 +514,9 @@ function ProvidersSection() {
 
   return (
     <>
+      <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.6, marginBottom: 10 }}>
+        {t('settings.providers.credentialStorageNotice')}
+      </div>
       <Card>
         <div style={{ marginBottom: 10 }}>
           <div style={{ fontSize: 13, fontWeight: 600 }}>{t('settings.providers.llmTitle')}</div>

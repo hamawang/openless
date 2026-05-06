@@ -64,7 +64,7 @@ recorder.rs                                   Mic → 16 kHz mono Int16 PCM, RMS
 asr/{mod,frame,volcengine,whisper}.rs         ASR providers: Volcengine streaming WebSocket + Whisper HTTP
 polish.rs                                     OpenAI-compatible chat completions (Ark / DeepSeek / etc.)
 insertion.rs                                  AX focused-element write → clipboard + Cmd+V → copy-only fallback
-persistence.rs                                History/preferences/vocab JSON + Keychain credentials
+persistence.rs                                History/preferences/vocab JSON + platform credential vault
 coordinator.rs + commands.rs + lib.rs         State machine, IPC surface, tray icon, window plumbing
 permissions.rs                                TCC checks (Accessibility / Microphone)
 
@@ -91,9 +91,9 @@ Invariants:
 
 ### Permissions, credentials, on-disk state
 
-- **Bundle ID `com.openless.app`** is hard-coded in `openless-all/app/src-tauri/tauri.conf.json` and `CredentialsVault.serviceName`. Changing it breaks Keychain lookups *and* every existing TCC grant.
+- **Bundle ID `com.openless.app`** is hard-coded in `openless-all/app/src-tauri/tauri.conf.json` and `CredentialsVault.serviceName`. Changing it breaks system credential vault lookups *and* every existing TCC grant.
 - **TCC**: Microphone + Accessibility + AppleEvents. `NSMicrophoneUsageDescription` / `NSAccessibilityUsageDescription` / `NSAppleEventsUsageDescription` live in `openless-all/app/src-tauri/Info.plist`. After a fresh build that resets TCC, the app must be **fully quit and relaunched** after granting Accessibility before the global hotkey tap installs.
-- **Credentials** live in Keychain under accounts in `CredentialAccount` (`volcengine.app_key`, `volcengine.access_key`, `volcengine.resource_id`, `ark.api_key`, `ark.model_id`, `ark.endpoint`). The plaintext fallback at `~/.openless/credentials.json` is read on first launch so legacy users keep their creds without re-entering. Never hard-code keys.
+- **Credentials** live in the OS credential vault (macOS Keychain, Windows Credential Manager, Linux keyring) under service `com.openless.app`. The legacy plaintext JSON (`~/.openless/credentials.json` on macOS/Linux, `%APPDATA%\OpenLess\credentials.json` on Windows) is only a migration source and is removed after a successful vault write. Never hard-code keys or include legacy credential files in logs, exports, build artifacts, or bug reports.
 - **Per-user data**:
   - macOS: `~/Library/Application Support/OpenLess/{history.json, preferences.json, dictionary.json}` — capped at 200 history entries. **Do not rename `dictionary.json` to `vocab.json`** (drops user data).
   - Windows: `%APPDATA%\OpenLess\`

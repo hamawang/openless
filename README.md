@@ -195,9 +195,14 @@ Logs: `~/Library/Logs/OpenLess/openless.log` (macOS) / `%LOCALAPPDATA%\OpenLess\
 
 ## Credentials
 
-Credentials live in the local Keychain (service = `com.openless.app`). A plaintext JSON file at `~/.openless/credentials.json` (mode 0600, dir 0700) is kept as a dev-mode fallback when Keychain is unavailable.
+Credentials live in the OS credential vault (service = `com.openless.app`): macOS Keychain, Windows Credential Manager, or Linux keyring. A legacy plaintext JSON file is read only as a migration source and removed after a successful vault write:
 
-The repository contains no API keys, tokens, or private endpoints.
+```text
+macOS / Linux: ~/.openless/credentials.json
+Windows:       %APPDATA%\OpenLess\credentials.json
+```
+
+New credential writes do not persist plaintext secrets. The repository contains no API keys, tokens, or private endpoints.
 
 You'll need:
 
@@ -247,7 +252,7 @@ recorder.rs      Mic → 16 kHz mono Int16 PCM, RMS callback
 asr/             Volcengine streaming ASR (WebSocket) + Whisper HTTP
 polish.rs        OpenAI-compatible chat-completions (Ark / DeepSeek / etc.)
 insertion.rs     AX focused-element → clipboard + Cmd+V → copy-only fallback
-persistence.rs   History / preferences / vocab JSON + Keychain credentials
+persistence.rs   History / preferences / vocab JSON + platform credential vault
 permissions.rs   TCC checks (Accessibility / Microphone)
 coordinator.rs   State machine: Idle → Starting → Listening → Processing
 commands.rs      Tauri IPC surface

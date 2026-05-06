@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 use serde_json::Value;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, State, Window};
 
 use crate::asr::local::foundry::{
     model_alias_is_known, FoundryCatalogModel, FoundryPrepareProgressPayload, FoundryRuntimeStatus,
@@ -148,7 +148,8 @@ fn configured(field: &Option<String>) -> bool {
 }
 
 #[tauri::command]
-pub fn set_credential(account: String, value: String) -> Result<(), String> {
+pub fn set_credential(window: Window, account: String, value: String) -> Result<(), String> {
+    ensure_main_window(&window)?;
     let acc = parse_account(&account)?;
     if value.is_empty() {
         CredentialsVault::remove(acc).map_err(|e| e.to_string())
@@ -184,11 +185,20 @@ pub fn set_active_llm_provider(provider: String) -> Result<(), String> {
 }
 
 /// 读出某个账号的实际值（用于设置页预填表单）。
-/// 与 Swift `CredentialsVault.get` 同语义，先 Keychain，缺则回落 ~/.openless/credentials.json。
+/// 凭据来自系统凭据库；只允许主设置窗口读取 raw secret，避免胶囊 / QA 等辅助窗口默认暴露。
 #[tauri::command]
-pub fn read_credential(account: String) -> Result<Option<String>, String> {
+pub fn read_credential(window: Window, account: String) -> Result<Option<String>, String> {
+    ensure_main_window(&window)?;
     let acc = parse_account(&account)?;
     CredentialsVault::get(acc).map_err(|e| e.to_string())
+}
+
+fn ensure_main_window(window: &Window) -> Result<(), String> {
+    if window.label() == "main" {
+        Ok(())
+    } else {
+        Err("credential access is only allowed from the main window".to_string())
+    }
 }
 
 #[derive(Serialize)]

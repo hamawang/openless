@@ -291,6 +291,7 @@ export const en: typeof zhCN = {
       llmDesc: 'OpenAI-compatible protocol. Multiple vendors supported.',
       providerLabel: 'Provider',
       llmProviderDesc: 'Selecting a preset auto-fills the default Base URL.',
+      credentialStorageNotice: 'Credentials are stored in the OS credential vault. Legacy local JSON credentials are migrated into the vault and removed after a successful write.',
       asrProviderDesc: 'Switching providers automatically loads the matching credentials.',
       asrTitle: 'ASR (transcription)',
       asrDesc: 'Used to turn speech into text in real time.',

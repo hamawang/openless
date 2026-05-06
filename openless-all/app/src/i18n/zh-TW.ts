@@ -291,6 +291,7 @@ export const zhTW: typeof zhCN = {
       llmDesc: 'OpenAI 兼容協議，支持多家供應商切換。',
       providerLabel: '供應商',
       llmProviderDesc: '選擇後將自動填入 Base URL 默認值。',
+      credentialStorageNotice: '憑據儲存在系統憑據庫中。舊版本機 JSON 憑據會遷移到系統憑據庫，並在成功寫入後刪除。',
       asrProviderDesc: '切換後將自動選用對應憑據。',
       asrTitle: 'ASR 語音（轉寫）',
       asrDesc: '用於將口述實時轉寫爲文本。',

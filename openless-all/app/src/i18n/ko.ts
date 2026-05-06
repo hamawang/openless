@@ -293,6 +293,7 @@ export const ko: typeof zhCN = {
       llmDesc: 'OpenAI 호환 프로토콜, 다양한 공급자 전환 지원.',
       providerLabel: '공급자',
       llmProviderDesc: '선택 시 Base URL 기본값이 자동 입력됩니다.',
+      credentialStorageNotice: '자격 증명은 OS 자격 증명 저장소에 저장됩니다. 이전 로컬 JSON 자격 증명은 저장소로 마이그레이션되고, 쓰기 성공 후 삭제됩니다.',
       asrProviderDesc: '전환 시 해당하는 자격 증명이 자동 선택됩니다.',
       asrTitle: 'ASR 음성(전사)',
       asrDesc: '구술을 실시간으로 텍스트로 전사합니다.',

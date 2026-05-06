@@ -289,6 +289,7 @@ export const zhCN = {
       llmDesc: 'OpenAI 兼容协议，支持多家供应商切换。',
       providerLabel: '供应商',
       llmProviderDesc: '选择后将自动填入 Base URL 默认值。',
+      credentialStorageNotice: '凭据保存在系统凭据库中。旧版本地 JSON 凭据会迁移到系统凭据库，并在成功写入后删除。',
       asrProviderDesc: '切换后将自动选用对应凭据。',
       asrTitle: 'ASR 语音（转写）',
       asrDesc: '用于将口述实时转写为文本。',
