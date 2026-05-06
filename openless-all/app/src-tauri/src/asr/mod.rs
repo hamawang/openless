@@ -8,6 +8,7 @@
 mod frame;
 pub mod local;
 pub mod volcengine;
+pub mod wav;
 pub mod whisper;
 
 pub use volcengine::{VolcengineCredentials, VolcengineStreamingASR};
