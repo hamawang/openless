@@ -293,6 +293,7 @@ export const ja: typeof zhCN = {
       llmDesc: 'OpenAI 互換プロトコル、複数のサプライヤー切り替えに対応。',
       providerLabel: 'サプライヤー',
       llmProviderDesc: '選択するとデフォルトの Base URL が自動入力されます。',
+      credentialStorageNotice: '認証情報は OS の認証情報ストアに保存されます。旧バージョンのローカル JSON 認証情報はストアへ移行され、書き込み成功後に削除されます。',
       asrProviderDesc: '切り替えると対応する認証情報が自動選択されます。',
       asrTitle: 'ASR 音声（転写）',
       asrDesc: '口述をリアルタイムでテキストに転写。',

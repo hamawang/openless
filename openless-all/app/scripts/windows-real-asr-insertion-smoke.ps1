@@ -597,7 +597,7 @@ if ($RequireJsonCredentials -and (-not $credentialStatus.VolcengineConfigured -o
   throw "Real ASR regression requires configured Volcengine ASR and Ark LLM credentials."
 }
 if (-not $credentialStatus.VolcengineConfigured -or -not $credentialStatus.ArkConfigured) {
-  Write-Warning "Legacy credentials.json is incomplete; continuing because the app may use the OS credential vault."
+  Write-Warning "Legacy credentials.json is incomplete; continuing because the app uses the OS credential vault."
 }
 
 $logPath = Join-Path $env:LOCALAPPDATA "OpenLess\Logs\openless.log"

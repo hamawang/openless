@@ -90,7 +90,6 @@ try {
     Invoke-Step "Runtime smoke" {
       Invoke-Script (Join-Path $PSScriptRoot "windows-runtime-smoke.ps1") @{
         ExePath = $ExePath
-        RequireCredentials = $true
       }
     }
   }
