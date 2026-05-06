@@ -402,6 +402,7 @@ const ASR_PRESETS = [
   { id: 'zhipu',        nameKey: 'asrZhipu',        baseUrl: 'https://open.bigmodel.cn/api/paas/v4',           model: 'glm-asr-2512'                },
   { id: 'groq',         nameKey: 'asrGroq',         baseUrl: 'https://api.groq.com/openai/v1',                 model: 'whisper-large-v3-turbo'      },
   { id: 'whisper',      nameKey: 'asrWhisper',      baseUrl: 'https://api.openai.com/v1',                      model: 'whisper-1'                   },
+  { id: 'foundry-local-whisper', nameKey: 'asrFoundryLocalWhisper', baseUrl: '',                              model: ''                              },
   // 本地 Qwen3-ASR：无 baseUrl/model 配置，模型在「模型设置」页下载与切换。
   { id: 'local-qwen3',  nameKey: 'asrLocalQwen3',   baseUrl: '',                                              model: ''                              },
 ] as const;
@@ -576,8 +577,8 @@ function ProvidersSection() {
               {t('settings.providers.volcengineMappingNote')}
             </div>
           </>
-        ) : committedAsrProvider === 'local-qwen3' ? (
-          <LocalAsrProviderHint />
+        ) : committedAsrProvider === 'local-qwen3' || committedAsrProvider === 'foundry-local-whisper' ? (
+          <LocalAsrProviderHint provider={committedAsrProvider} selectedProvider={asrProvider} />
         ) : (
           <>
             <CredentialField key={`${committedAsrProvider}:api_key`} label={t('settings.providers.apiKeyLabel')} account="asr.api_key" mono mask />
@@ -1268,44 +1269,99 @@ function adapterDisplayName(adapter: HotkeyCapability['adapter'] | HotkeyStatus[
 /// 本地 Qwen3-ASR 在 Settings → 服务商区里**不**让用户填空——展示当前激活模型
 /// 是否已下载、列出所有已下载模型 + 删除按钮，并提示性能/质量预期，引导跳到
 /// 「模型设置」页做下载。
-function LocalAsrProviderHint() {
+function LocalAsrProviderHint({
+  provider,
+  selectedProvider,
+}: {
+  provider: 'local-qwen3' | 'foundry-local-whisper';
+  selectedProvider: AsrPresetId;
+}) {
   const { t } = useTranslation();
   const [settings, setSettings] = useState<LocalAsrSettings | null>(null);
   const [models, setModels] = useState<LocalAsrModelStatus[]>([]);
   const [loading, setLoading] = useState(true);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const refreshSeqRef = useRef(0);
+  const providerStateRef = useRef({ provider, selectedProvider });
+  providerStateRef.current = { provider, selectedProvider };
 
-  const refresh = async () => {
+  const qwenReadyForFetch = () => {
+    const state = providerStateRef.current;
+    return state.provider === 'local-qwen3' && state.selectedProvider === 'local-qwen3';
+  };
+
+  const refresh = async (seq: number) => {
     try {
       const [s, list] = await Promise.all([getLocalAsrSettings(), listLocalAsrModels()]);
+      if (seq !== refreshSeqRef.current) {
+        return;
+      }
       setSettings(s);
       setModels(list);
     } catch (err) {
+      if (seq !== refreshSeqRef.current) {
+        return;
+      }
       console.warn('[settings] load local asr status failed', err);
     } finally {
-      setLoading(false);
+      if (seq === refreshSeqRef.current) {
+        setLoading(false);
+      }
     }
   };
 
+  const beginRefresh = () => {
+    const seq = ++refreshSeqRef.current;
+    setSettings(null);
+    setModels([]);
+    setDeletingId(null);
+    if (provider !== selectedProvider) {
+      setLoading(true);
+      return;
+    }
+    if (provider === 'foundry-local-whisper') {
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    void refresh(seq);
+  };
+
   useEffect(() => {
-    void refresh();
-  }, []);
+    beginRefresh();
+    return () => {
+      refreshSeqRef.current += 1;
+    };
+  }, [provider, selectedProvider]);
 
   const goToLocalAsr = () => {
     window.dispatchEvent(new CustomEvent(NAVIGATE_LOCAL_ASR_EVENT));
   };
 
   const handleDelete = async (modelId: string) => {
+    const seq = refreshSeqRef.current;
+    if (!qwenReadyForFetch()) {
+      return;
+    }
     setDeletingId(modelId);
     try {
       await deleteLocalAsrModel(modelId);
-      await refresh();
+      if (seq !== refreshSeqRef.current || !qwenReadyForFetch()) {
+        return;
+      }
+      beginRefresh();
     } catch (err) {
       console.warn('[settings] delete local model failed', err);
     } finally {
-      setDeletingId(null);
+      if (seq === refreshSeqRef.current && provider === 'local-qwen3') {
+        setDeletingId(null);
+      }
     }
   };
+
+  const hintKey = provider === 'foundry-local-whisper'
+    ? 'settings.providers.foundryLocalAsrHint'
+    : 'settings.providers.localAsrHint';
 
   if (loading) {
     return (
@@ -1318,6 +1374,21 @@ function LocalAsrProviderHint() {
   const active = models.find(m => m.id === settings?.activeModel);
   const isReady = active?.isDownloaded ?? false;
   const downloaded = models.filter(m => m.isDownloaded);
+
+  if (provider === 'foundry-local-whisper') {
+    return (
+      <div style={{ padding: '8px 0 4px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={{ fontSize: 12.5, color: 'var(--ol-ink-3)', lineHeight: 1.6 }}>
+          {t(hintKey)}
+        </div>
+        <div>
+          <Btn variant="ghost" size="sm" onClick={goToLocalAsr}>
+            {t('settings.providers.localAsrManage')}
+          </Btn>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={{ padding: '8px 0 4px', display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -1335,7 +1406,7 @@ function LocalAsrProviderHint() {
       </div>
 
       <div style={{ fontSize: 12.5, color: 'var(--ol-ink-3)', lineHeight: 1.6 }}>
-        {t('settings.providers.localAsrHint')}
+        {t(hintKey)}
       </div>
 
       {/* 当前激活模型状态 + 跳转按钮 */}

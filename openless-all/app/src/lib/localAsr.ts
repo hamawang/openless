@@ -55,6 +55,15 @@ export interface LocalAsrDownloadProgress {
   error: string | null;
 }
 
+export interface FoundryLocalAsrStatus {
+  providerId: string;
+  available: boolean;
+  activeModel: string;
+  loadedModelId: string | null;
+  endpoint: string | null;
+  error: string | null;
+}
+
 const MOCK_SETTINGS: LocalAsrSettings = {
   providerId: 'local-qwen3',
   activeModel: 'qwen3-asr-0.6b',
@@ -174,4 +183,31 @@ export function preloadLocalAsr(): Promise<void> {
 
 export function setLocalAsrKeepLoadedSecs(seconds: number): Promise<void> {
   return invokeOrMock('local_asr_set_keep_loaded_secs', { seconds }, () => undefined);
+}
+
+export function getFoundryLocalAsrStatus(): Promise<FoundryLocalAsrStatus> {
+  return invokeOrMock('foundry_local_asr_status', undefined, () => ({
+    providerId: 'foundry-local-whisper',
+    available: true,
+    activeModel: 'whisper-small',
+    loadedModelId: null,
+    endpoint: null,
+    error: null,
+  }));
+}
+
+export function setFoundryLocalAsrModel(modelAlias: string): Promise<void> {
+  return invokeOrMock('foundry_local_asr_set_model', { modelAlias }, () => undefined);
+}
+
+export function setFoundryLocalAsrLanguageHint(languageHint: string): Promise<void> {
+  return invokeOrMock(
+    'foundry_local_asr_set_language_hint',
+    { languageHint },
+    () => undefined,
+  );
+}
+
+export function releaseFoundryLocalAsr(): Promise<void> {
+  return invokeOrMock('foundry_local_asr_release', undefined, () => undefined);
 }
