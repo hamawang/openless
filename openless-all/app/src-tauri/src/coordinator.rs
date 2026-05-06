@@ -2277,6 +2277,10 @@ fn ensure_asr_credentials() -> Result<(), String> {
     }
 
     if crate::asr::local::foundry::is_foundry_local_whisper(&active_asr) {
+        #[cfg(not(target_os = "windows"))]
+        {
+            return Err("Foundry Local Whisper 当前仅支持 Windows".to_string());
+        }
         return Ok(());
     }
 
@@ -2301,8 +2305,18 @@ fn ensure_asr_credentials() -> Result<(), String> {
 
 #[cfg(test)]
 fn is_keyless_local_asr_provider(id: &str) -> bool {
-    crate::asr::local::is_local_qwen3(id)
-        || crate::asr::local::foundry::is_foundry_local_whisper(id)
+    if crate::asr::local::is_local_qwen3(id) {
+        return true;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        crate::asr::local::foundry::is_foundry_local_whisper(id)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = id;
+        false
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -3144,7 +3158,12 @@ mod tests {
 
     #[test]
     fn foundry_local_provider_is_keyless_and_not_whisper_compatible() {
+        #[cfg(target_os = "windows")]
         assert!(is_keyless_local_asr_provider(
+            crate::asr::local::foundry::PROVIDER_ID
+        ));
+        #[cfg(not(target_os = "windows"))]
+        assert!(!is_keyless_local_asr_provider(
             crate::asr::local::foundry::PROVIDER_ID
         ));
         assert!(!is_whisper_compatible_provider(

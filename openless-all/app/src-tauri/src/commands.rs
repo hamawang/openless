@@ -129,7 +129,7 @@ fn asr_configured_for_provider(provider: &str, snap: &CredentialsSnapshot) -> bo
     if provider == "volcengine" {
         return volcengine_configured(snap);
     }
-    if provider == crate::asr::local::PROVIDER_ID || provider == FOUNDRY_LOCAL_PROVIDER_ID {
+    if provider == crate::asr::local::PROVIDER_ID || active_foundry_asr_is_supported(provider) {
         // 本地 ASR 不依赖云端凭据。
         return true;
     }
@@ -162,6 +162,9 @@ pub fn set_active_asr_provider(
     coord: CoordinatorState<'_>,
     provider: String,
 ) -> Result<(), String> {
+    if provider == FOUNDRY_LOCAL_PROVIDER_ID && !active_foundry_asr_is_supported(&provider) {
+        return Err("Foundry Local Whisper is only available on Windows".to_string());
+    }
     CredentialsVault::set_active_asr_provider(&provider).map_err(|e| e.to_string())?;
     if provider == crate::asr::local::PROVIDER_ID {
         // 切到本地 ASR → 后台预加载模型，下次按 hotkey 时不必等数秒。
@@ -302,7 +305,19 @@ async fn validate_asr_provider() -> Result<(), String> {
 }
 
 fn active_asr_is_keyless_for_validation(provider: &str) -> bool {
-    provider == crate::asr::local::PROVIDER_ID || provider == FOUNDRY_LOCAL_PROVIDER_ID
+    provider == crate::asr::local::PROVIDER_ID || active_foundry_asr_is_supported(provider)
+}
+
+fn active_foundry_asr_is_supported(provider: &str) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        provider == FOUNDRY_LOCAL_PROVIDER_ID
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = provider;
+        false
+    }
 }
 
 async fn validate_asr_transcription(config: &ProviderConfig, model: &str) -> Result<(), String> {
@@ -1049,7 +1064,13 @@ mod tests {
             crate::asr::local::PROVIDER_ID,
             &snapshot()
         ));
+        #[cfg(target_os = "windows")]
         assert!(asr_configured_for_provider(
+            crate::asr::local::foundry::PROVIDER_ID,
+            &snapshot()
+        ));
+        #[cfg(not(target_os = "windows"))]
+        assert!(!asr_configured_for_provider(
             crate::asr::local::foundry::PROVIDER_ID,
             &snapshot()
         ));
@@ -1057,10 +1078,20 @@ mod tests {
 
     #[test]
     fn credentials_status_treats_foundry_local_asr_as_configured() {
-        assert!(asr_configured_for_provider(
-            crate::asr::local::foundry::PROVIDER_ID,
-            &CredentialsSnapshot::default()
-        ));
+        #[cfg(target_os = "windows")]
+        {
+            assert!(asr_configured_for_provider(
+                crate::asr::local::foundry::PROVIDER_ID,
+                &CredentialsSnapshot::default()
+            ));
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            assert!(!asr_configured_for_provider(
+                crate::asr::local::foundry::PROVIDER_ID,
+                &CredentialsSnapshot::default()
+            ));
+        }
     }
 
     #[test]
@@ -1068,7 +1099,12 @@ mod tests {
         assert!(active_asr_is_keyless_for_validation(
             crate::asr::local::PROVIDER_ID
         ));
+        #[cfg(target_os = "windows")]
         assert!(active_asr_is_keyless_for_validation(
+            crate::asr::local::foundry::PROVIDER_ID
+        ));
+        #[cfg(not(target_os = "windows"))]
+        assert!(!active_asr_is_keyless_for_validation(
             crate::asr::local::foundry::PROVIDER_ID
         ));
         assert!(!active_asr_is_keyless_for_validation("volcengine"));

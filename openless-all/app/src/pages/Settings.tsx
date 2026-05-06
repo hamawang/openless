@@ -411,7 +411,7 @@ type AsrPresetId = typeof ASR_PRESETS[number]['id'];
 
 function ProvidersSection() {
   const { t } = useTranslation();
-  const { prefs, updatePrefs } = useHotkeySettings();
+  const { prefs, updatePrefs, capability } = useHotkeySettings();
   // `*Provider` 立即跟随 <select> 改动（受控组件必须实时反映用户输入）；
   // `committed*Provider` 才决定 CredentialField 的 key，仅在后端 active
   // 切换 + 默认值写完后再 commit。两者拆开是为了同时满足：
@@ -427,6 +427,9 @@ function ProvidersSection() {
   const asrSwitchSeqRef = useRef(0);
   const [llmModelRevision, setLlmModelRevision] = useState(0);
   const [asrModelRevision, setAsrModelRevision] = useState(0);
+  const visibleAsrPresets = ASR_PRESETS.filter(
+    p => p.id !== 'foundry-local-whisper' || !capability || capability.adapter === 'windowsLowLevel',
+  );
 
   useEffect(() => {
     if (!prefs) return;
@@ -434,11 +437,11 @@ function ProvidersSection() {
     const llmId = knownLlm ? knownLlm.id : 'custom';
     setLlmProvider(llmId);
     setCommittedLlmProvider(llmId);
-    const knownAsr = ASR_PRESETS.find(x => x.id === prefs.activeAsrProvider);
+    const knownAsr = visibleAsrPresets.find(x => x.id === prefs.activeAsrProvider);
     const asrId = knownAsr ? knownAsr.id : 'volcengine';
     setAsrProvider(asrId);
     setCommittedAsrProvider(asrId);
-  }, [prefs]);
+  }, [prefs, capability]);
 
   // issue #219 / #220 P2：
   //   1. 立刻 setLlmProvider —— 受控 <select> 必须反映用户最新选择。
@@ -505,7 +508,7 @@ function ProvidersSection() {
   // 否则受控 <select> 立刻切到新厂商，但凭据字段还在显示旧 entry，placeholder
   // 会先于实际数据切换、视觉上对不上。
   const preset = LLM_PRESETS.find(p => p.id === committedLlmProvider) ?? LLM_PRESETS[LLM_PRESETS.length - 1];
-  const asrPreset = ASR_PRESETS.find(p => p.id === committedAsrProvider);
+  const asrPreset = visibleAsrPresets.find(p => p.id === committedAsrProvider);
 
   return (
     <>
@@ -546,7 +549,7 @@ function ProvidersSection() {
             onChange={e => onAsrProviderChange(e.target.value as AsrPresetId)}
             style={{ ...inputStyle, maxWidth: 200 }}
           >
-            {ASR_PRESETS.map(p => (
+            {visibleAsrPresets.map(p => (
               <option key={p.id} value={p.id}>{t(`settings.providers.presets.${p.nameKey}`)}</option>
             ))}
           </select>
