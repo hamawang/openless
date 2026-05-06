@@ -25,7 +25,9 @@ else
 fi
 
 echo "▶ tauri build"
-TAURI_BUILD_ARGS=(build)
+# bundle.resources 里有 Windows TSF DLL（仅 NSIS/MSI 需要），mac 端用空 map 覆盖避免
+# 把 0 字节占位 OpenLessIme.dll 打进 .app/Contents/Resources。
+TAURI_BUILD_ARGS=(build --config '{"bundle":{"resources":{}}}')
 if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ] || [ -n "${TAURI_SIGNING_PRIVATE_KEY_PATH:-}" ]; then
   TAURI_BUILD_ARGS+=(--config '{"bundle":{"createUpdaterArtifacts":true}}')
 fi

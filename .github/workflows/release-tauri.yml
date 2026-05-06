@@ -214,6 +214,14 @@ jobs:
             Write-Host "[ok] built $dll (exported $($t.EnvName))"
           }
 
+          # bundle.resources 引用的是 src-tauri/openless-ime-payload/x64/OpenLessIme.dll
+          # （仓库里 commit 的是 0 字节占位让 mac 本地 build 也能 resolve）。
+          # Windows CI 这里用真 x64 dll 覆盖占位，让 NSIS / MSI 包装的是真 dll。
+          $payloadDir = Join-Path $appRoot 'src-tauri\openless-ime-payload\x64'
+          New-Item -ItemType Directory -Force -Path $payloadDir | Out-Null
+          Copy-Item -Force -Path $env:OPENLESS_IME_DLL_X64 -Destination (Join-Path $payloadDir 'OpenLessIme.dll')
+          Write-Host "[ok] copied real x64 dll into bundle.resources payload path"
+
       # ── Windows tauri build：保持 bash shell，因为 PowerShell 调外部命令
       #    会把 '{"bundle":...}' 的内部双引号吃掉、让 tauri 收到无效 JSON。
       #    用 set +e + GITHUB_ENV 把 exit code 传到下一步给 Repair 判断。
@@ -299,6 +307,7 @@ jobs:
           Write-Host "[ok] MSI rebuilt at $msiPath"
 
       # ── Linux：产 deb / rpm / AppImage ──
+      # bundle.resources 里的 Windows TSF DLL 占位对 Linux 包没意义，用空 map 覆盖跳过。
       - name: Build (Linux)
         if: matrix.platform == 'ubuntu-22.04'
         shell: bash
@@ -308,9 +317,11 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
-            npm run tauri -- build --bundles deb,rpm,appimage --config '{"bundle":{"createUpdaterArtifacts":true}}'
+            npm run tauri -- build --bundles deb,rpm,appimage \
+              --config '{"bundle":{"resources":{},"createUpdaterArtifacts":true}}'
           else
-            npm run tauri -- build --bundles deb,rpm,appimage
+            npm run tauri -- build --bundles deb,rpm,appimage \
+              --config '{"bundle":{"resources":{}}}'
           fi
 
       - name: Disambiguate macOS updater bundle filename
