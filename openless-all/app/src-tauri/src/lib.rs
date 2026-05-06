@@ -252,9 +252,11 @@ pub fn run() {
             commands::local_asr_preload,
             commands::local_asr_set_keep_loaded_secs,
             commands::foundry_local_asr_status,
+            commands::foundry_local_asr_catalog,
             commands::foundry_local_asr_set_model,
             commands::foundry_local_asr_set_language_hint,
             commands::foundry_local_asr_prepare,
+            commands::foundry_local_asr_cancel_prepare,
             commands::foundry_local_asr_release,
             restart_app,
         ])

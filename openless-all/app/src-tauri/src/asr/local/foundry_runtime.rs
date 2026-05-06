@@ -2,14 +2,23 @@
 #[allow(dead_code)]
 mod imp {
     use std::path::Path;
-    use std::sync::Arc;
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
 
     use anyhow::{Context, Result};
     use foundry_local_sdk::{FoundryLocalConfig, FoundryLocalManager, Model};
     use parking_lot::Mutex;
     use tokio::sync::Mutex as AsyncMutex;
 
-    use crate::asr::local::foundry::{FoundryRuntimeStatus, PROVIDER_ID};
+    use crate::asr::local::foundry::{
+        FoundryCatalogModel, FoundryPrepareProgressPayload, FoundryRuntimeStatus, MODELS,
+        PROVIDER_ID,
+    };
+
+    type FoundryPrepareProgressCallback =
+        Arc<dyn Fn(FoundryPrepareProgressPayload) + Send + Sync + 'static>;
 
     #[derive(Clone)]
     struct LoadedModel {
@@ -26,6 +35,7 @@ mod imp {
 
     pub struct FoundryLocalRuntime {
         lifecycle: AsyncMutex<()>,
+        cancel_prepare: AtomicBool,
         state: Mutex<RuntimeState>,
     }
 
@@ -39,6 +49,7 @@ mod imp {
         pub fn new() -> Self {
             Self {
                 lifecycle: AsyncMutex::new(()),
+                cancel_prepare: AtomicBool::new(false),
                 state: Mutex::new(RuntimeState::default()),
             }
         }
@@ -56,19 +67,69 @@ mod imp {
         }
 
         pub async fn ensure_loaded(&self, alias: &str) -> Result<String> {
+            self.ensure_loaded_with_progress(alias, |_| {}).await
+        }
+
+        pub async fn ensure_loaded_with_progress<F>(
+            &self,
+            alias: &str,
+            progress: F,
+        ) -> Result<String>
+        where
+            F: Fn(FoundryPrepareProgressPayload) + Send + Sync + 'static,
+        {
             let _lifecycle = self.lifecycle.lock().await;
-            Ok(self.ensure_loaded_locked(alias).await?.model_id)
+            self.cancel_prepare.store(false, Ordering::SeqCst);
+            let progress: FoundryPrepareProgressCallback = Arc::new(progress);
+            Ok(self.ensure_loaded_locked(alias, progress).await?.model_id)
+        }
+
+        pub fn request_cancel_prepare(&self) {
+            self.cancel_prepare.store(true, Ordering::SeqCst);
+        }
+
+        pub async fn catalog_snapshot(&self) -> Result<Vec<FoundryCatalogModel>> {
+            let _lifecycle = self.lifecycle.lock().await;
+            let manager = self.manager()?;
+            let mut catalog = Vec::with_capacity(MODELS.len());
+            for known in MODELS {
+                let model = manager
+                    .catalog()
+                    .get_model(known.alias)
+                    .await
+                    .with_context(|| format!("get Foundry catalog model {}", known.alias))?;
+                let info = model.info();
+                let cached = model.is_cached().await.unwrap_or(info.cached);
+                catalog.push(FoundryCatalogModel {
+                    alias: known.alias.to_string(),
+                    display_name: info
+                        .display_name
+                        .clone()
+                        .unwrap_or_else(|| known.display_name.to_string()),
+                    cached,
+                    file_size_mb: info.file_size_mb,
+                });
+            }
+            Ok(catalog)
         }
 
         pub async fn transcribe_audio_file(
             &self,
             alias: &str,
+            language_hint: Option<&str>,
             audio_path: &Path,
         ) -> Result<String> {
             let _lifecycle = self.lifecycle.lock().await;
-            let model = self.ensure_loaded_locked(alias).await?.model;
-            let result = model
-                .create_audio_client()
+            self.cancel_prepare.store(false, Ordering::SeqCst);
+            let model = self
+                .ensure_loaded_locked(alias, Arc::new(|_| {}))
+                .await?
+                .model;
+            let mut client = model.create_audio_client();
+            if let Some(language_hint) = normalized_language_hint(language_hint) {
+                client = client.language(language_hint);
+            }
+            let result = client
                 .transcribe(audio_path)
                 .await
                 .with_context(|| format!("transcribe audio with Foundry model {alias}"))?;
@@ -80,8 +141,16 @@ mod imp {
             self.release_now_locked().await
         }
 
-        async fn ensure_loaded_locked(&self, alias: &str) -> Result<LoadedModel> {
+        async fn ensure_loaded_locked(
+            &self,
+            alias: &str,
+            progress: FoundryPrepareProgressCallback,
+        ) -> Result<LoadedModel> {
             if let Some(loaded) = self.cached_loaded_model(alias) {
+                progress.as_ref()(FoundryPrepareProgressPayload::finished(
+                    alias,
+                    "Foundry model already loaded",
+                ));
                 return Ok(loaded);
             }
 
@@ -90,11 +159,39 @@ mod imp {
                 self.clear_loaded_if_model_id(&previous.model_id);
             }
 
+            self.check_prepare_cancelled()?;
             let manager = self.manager()?;
+            progress.as_ref()(FoundryPrepareProgressPayload::runtime(
+                alias,
+                "Foundry Local runtime components",
+                0.0,
+            ));
+            let runtime_progress = Arc::clone(&progress);
+            let runtime_alias = alias.to_string();
             manager
-                .download_and_register_eps_with_progress(None, |_ep_name: &str, _percent: f64| {})
+                .download_and_register_eps_with_progress(
+                    None,
+                    move |ep_name: &str, percent: f64| {
+                        let label = if ep_name.trim().is_empty() {
+                            "Foundry Local runtime components".to_string()
+                        } else {
+                            format!("Foundry Local runtime component: {ep_name}")
+                        };
+                        runtime_progress.as_ref()(FoundryPrepareProgressPayload::runtime(
+                            runtime_alias.clone(),
+                            label,
+                            percent,
+                        ));
+                    },
+                )
                 .await
                 .context("download/register Foundry execution providers")?;
+            progress.as_ref()(FoundryPrepareProgressPayload::runtime(
+                alias,
+                "Foundry Local runtime components",
+                100.0,
+            ));
+            self.check_prepare_cancelled()?;
 
             let model = manager
                 .catalog()
@@ -102,21 +199,65 @@ mod imp {
                 .await
                 .with_context(|| format!("get Foundry model {alias}"))?;
 
+            let model_label = model_display_label(alias);
             if !model
                 .is_cached()
                 .await
                 .context("check Foundry model cache")?
             {
+                progress.as_ref()(FoundryPrepareProgressPayload::model(
+                    alias,
+                    model_label.clone(),
+                    0.0,
+                ));
+                let model_progress = Arc::clone(&progress);
+                let model_alias = alias.to_string();
+                let model_label_for_progress = model_label.clone();
                 model
-                    .download(Some(|_progress: f64| {}))
+                    .download(Some(move |percent: f64| {
+                        model_progress.as_ref()(FoundryPrepareProgressPayload::model(
+                            model_alias.clone(),
+                            model_label_for_progress.clone(),
+                            percent,
+                        ));
+                    }))
                     .await
                     .with_context(|| format!("download Foundry model {alias}"))?;
+                progress.as_ref()(FoundryPrepareProgressPayload::model(
+                    alias,
+                    model_label.clone(),
+                    100.0,
+                ));
+            } else {
+                progress.as_ref()(FoundryPrepareProgressPayload::model(
+                    alias,
+                    format!("{model_label} already downloaded"),
+                    100.0,
+                ));
             }
 
+            self.check_prepare_cancelled()?;
+            progress.as_ref()(FoundryPrepareProgressPayload::load(
+                alias,
+                model_label.clone(),
+                0.0,
+            ));
             model
                 .load()
                 .await
                 .with_context(|| format!("load Foundry model {alias}"))?;
+            if self.cancel_prepare.load(Ordering::SeqCst) {
+                model
+                    .unload()
+                    .await
+                    .with_context(|| format!("unload cancelled Foundry model {alias}"))?;
+                anyhow::bail!("Foundry Local Whisper prepare cancelled");
+            }
+            progress.as_ref()(FoundryPrepareProgressPayload::load(
+                alias,
+                model_label.clone(),
+                100.0,
+            ));
 
             let loaded = LoadedModel {
                 alias: alias.to_string(),
@@ -127,6 +268,10 @@ mod imp {
                 manager: Some(manager),
                 loaded: Some(loaded.clone()),
             };
+            progress.as_ref()(FoundryPrepareProgressPayload::finished(
+                alias,
+                format!("{model_label} ready"),
+            ));
             Ok(loaded)
         }
 
@@ -191,17 +336,49 @@ mod imp {
                 .with_context(|| format!("unload Foundry model {}", loaded.model_id))?;
             Ok(())
         }
+
+        fn check_prepare_cancelled(&self) -> Result<()> {
+            if self.cancel_prepare.load(Ordering::SeqCst) {
+                anyhow::bail!("Foundry Local Whisper prepare cancelled");
+            }
+            Ok(())
+        }
+    }
+
+    fn model_display_label(alias: &str) -> String {
+        MODELS
+            .iter()
+            .find(|model| model.alias == alias)
+            .map(|model| model.display_name.to_string())
+            .unwrap_or_else(|| alias.to_string())
+    }
+
+    fn normalized_language_hint(language_hint: Option<&str>) -> Option<String> {
+        language_hint
+            .map(str::trim)
+            .filter(|hint| !hint.is_empty())
+            .map(str::to_string)
     }
 
     #[cfg(test)]
     mod lifecycle_tests {
-        use super::FoundryLocalRuntime;
+        use super::{normalized_language_hint, FoundryLocalRuntime};
 
         #[test]
         fn runtime_has_async_lifecycle_gate() {
             let runtime = FoundryLocalRuntime::new();
 
             assert!(runtime.lifecycle.try_lock().is_ok());
+        }
+
+        #[test]
+        fn runtime_normalizes_language_hint_before_audio_client() {
+            assert_eq!(
+                normalized_language_hint(Some(" zh ")),
+                Some("zh".to_string())
+            );
+            assert_eq!(normalized_language_hint(Some("")), None);
+            assert_eq!(normalized_language_hint(None), None);
         }
     }
 }
@@ -236,9 +413,29 @@ impl FoundryLocalRuntime {
         anyhow::bail!("Foundry Local Whisper is only available on Windows: {alias}");
     }
 
+    pub async fn ensure_loaded_with_progress<F>(
+        &self,
+        alias: &str,
+        _progress: F,
+    ) -> anyhow::Result<String>
+    where
+        F: Fn(super::foundry::FoundryPrepareProgressPayload) + Send + Sync + 'static,
+    {
+        anyhow::bail!("Foundry Local Whisper is only available on Windows: {alias}");
+    }
+
+    pub fn request_cancel_prepare(&self) {}
+
+    pub async fn catalog_snapshot(
+        &self,
+    ) -> anyhow::Result<Vec<super::foundry::FoundryCatalogModel>> {
+        Ok(super::foundry::static_catalog_models())
+    }
+
     pub async fn transcribe_audio_file(
         &self,
         alias: &str,
+        _language_hint: Option<&str>,
         _audio_path: &std::path::Path,
     ) -> anyhow::Result<String> {
         anyhow::bail!("Foundry Local Whisper is only available on Windows: {alias}");

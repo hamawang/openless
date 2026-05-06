@@ -8,8 +8,8 @@ use serde_json::Value;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::asr::local::foundry::{
-    model_alias_is_known, FoundryRuntimeStatus, DEFAULT_MODEL_ALIAS,
-    PROVIDER_ID as FOUNDRY_LOCAL_PROVIDER_ID,
+    model_alias_is_known, FoundryCatalogModel, FoundryPrepareProgressPayload, FoundryRuntimeStatus,
+    DEFAULT_MODEL_ALIAS, PROVIDER_ID as FOUNDRY_LOCAL_PROVIDER_ID,
 };
 use crate::asr::local::FoundryLocalRuntime;
 use crate::coordinator::Coordinator;
@@ -960,6 +960,16 @@ pub fn foundry_local_asr_status(
 }
 
 #[tauri::command]
+pub async fn foundry_local_asr_catalog(
+    runtime: State<'_, Arc<FoundryLocalRuntime>>,
+) -> Result<Vec<FoundryCatalogModel>, String> {
+    runtime
+        .catalog_snapshot()
+        .await
+        .map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
 pub fn foundry_local_asr_set_model(
     coord: CoordinatorState<'_>,
     model_alias: String,
@@ -983,14 +993,40 @@ pub fn foundry_local_asr_set_language_hint(
 
 #[tauri::command]
 pub async fn foundry_local_asr_prepare(
+    app: AppHandle,
     runtime: State<'_, Arc<FoundryLocalRuntime>>,
     model_alias: String,
 ) -> Result<String, String> {
     validate_foundry_model_alias(&model_alias)?;
-    runtime
-        .ensure_loaded(&model_alias)
-        .await
-        .map_err(|e| format!("{e:#}"))
+    let progress_app = app.clone();
+    let result = runtime
+        .ensure_loaded_with_progress(&model_alias, move |payload| {
+            emit_foundry_prepare_progress(&progress_app, payload);
+        })
+        .await;
+    match result {
+        Ok(model_id) => Ok(model_id),
+        Err(error) => {
+            let message = format!("{error:#}");
+            emit_foundry_prepare_progress(
+                &app,
+                FoundryPrepareProgressPayload::failed(
+                    model_alias,
+                    "Foundry Local Whisper prepare failed",
+                    message.clone(),
+                ),
+            );
+            Err(message)
+        }
+    }
+}
+
+#[tauri::command]
+pub fn foundry_local_asr_cancel_prepare(
+    runtime: State<'_, Arc<FoundryLocalRuntime>>,
+) -> Result<(), String> {
+    runtime.request_cancel_prepare();
+    Ok(())
 }
 
 #[tauri::command]
@@ -998,6 +1034,12 @@ pub async fn foundry_local_asr_release(
     runtime: State<'_, Arc<FoundryLocalRuntime>>,
 ) -> Result<(), String> {
     runtime.release_now().await.map_err(|e| format!("{e:#}"))
+}
+
+fn emit_foundry_prepare_progress(app: &AppHandle, payload: FoundryPrepareProgressPayload) {
+    if let Err(error) = app.emit("foundry-local-asr-prepare-progress", payload) {
+        log::warn!("[foundry-asr] emit prepare progress failed: {error}");
+    }
 }
 
 // ─────────────────────────── unused but exported (silences dead_code) ───────────────────────────
@@ -1010,9 +1052,8 @@ mod tests {
     use super::{
         active_asr_is_keyless_for_validation, active_foundry_model_from_prefs,
         asr_configured_for_provider, asr_transcriptions_url, fetch_provider_models,
-        llm_configured_for_snapshot, models_url,
-        normalize_foundry_language_hint, parse_model_ids, persist_settings,
-        validate_foundry_model_alias, ProviderConfig, SettingsWriter,
+        llm_configured_for_snapshot, models_url, normalize_foundry_language_hint, parse_model_ids,
+        persist_settings, validate_foundry_model_alias, ProviderConfig, SettingsWriter,
     };
     use crate::persistence::CredentialsSnapshot;
     use crate::types::{

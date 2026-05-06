@@ -65,6 +65,29 @@ export interface FoundryLocalAsrStatus {
 }
 
 export type FoundryLocalAsrModelAlias = 'whisper-small' | 'whisper-base' | 'whisper-tiny';
+export type FoundryLocalAsrLanguageHint = '' | 'zh' | 'en';
+
+export interface FoundryLocalAsrCatalogModel {
+  alias: FoundryLocalAsrModelAlias;
+  displayName: string;
+  cached: boolean;
+  fileSizeMb: number | null;
+}
+
+export type FoundryPreparePhase =
+  | 'runtime'
+  | 'model'
+  | 'load'
+  | 'finished'
+  | 'failed';
+
+export interface FoundryPrepareProgress {
+  phase: FoundryPreparePhase;
+  modelAlias: string;
+  label: string;
+  percent: number | null;
+  error: string | null;
+}
 
 export interface FoundryLocalAsrModelOption {
   alias: FoundryLocalAsrModelAlias;
@@ -87,6 +110,27 @@ export const FOUNDRY_LOCAL_ASR_MODELS: FoundryLocalAsrModelOption[] = [
     alias: 'whisper-tiny',
     labelKey: 'localAsr.foundryModelTiny',
     descKey: 'localAsr.foundryModelTinyDesc',
+  },
+];
+
+const MOCK_FOUNDRY_CATALOG: FoundryLocalAsrCatalogModel[] = [
+  {
+    alias: 'whisper-small',
+    displayName: 'Whisper Small',
+    cached: false,
+    fileSizeMb: 967,
+  },
+  {
+    alias: 'whisper-base',
+    displayName: 'Whisper Base',
+    cached: true,
+    fileSizeMb: 291,
+  },
+  {
+    alias: 'whisper-tiny',
+    displayName: 'Whisper Tiny',
+    cached: false,
+    fileSizeMb: 151,
   },
 ];
 
@@ -222,6 +266,10 @@ export function getFoundryLocalAsrStatus(): Promise<FoundryLocalAsrStatus> {
   }));
 }
 
+export function getFoundryLocalAsrCatalog(): Promise<FoundryLocalAsrCatalogModel[]> {
+  return invokeOrMock('foundry_local_asr_catalog', undefined, () => MOCK_FOUNDRY_CATALOG);
+}
+
 export function setFoundryLocalAsrModel(modelAlias: string): Promise<void> {
   return invokeOrMock('foundry_local_asr_set_model', { modelAlias }, () => undefined);
 }
@@ -236,6 +284,10 @@ export function setFoundryLocalAsrLanguageHint(languageHint: string): Promise<vo
 
 export function prepareFoundryLocalAsr(modelAlias: string): Promise<string> {
   return invokeOrMock('foundry_local_asr_prepare', { modelAlias }, () => `mock-${modelAlias}`);
+}
+
+export function cancelFoundryLocalAsrPrepare(): Promise<void> {
+  return invokeOrMock('foundry_local_asr_cancel_prepare', undefined, () => undefined);
 }
 
 export function releaseFoundryLocalAsr(): Promise<void> {

@@ -95,7 +95,7 @@ impl FoundryLocalWhisperAsr {
             let wav_file = TempWavFile::create(pcm)?;
             let text = self
                 .runtime
-                .transcribe_audio_file(&self.model_alias, wav_file.path())
+                .transcribe_audio_file(&self.model_alias, self.language_hint(), wav_file.path())
                 .await
                 .with_context(|| {
                     format!(
