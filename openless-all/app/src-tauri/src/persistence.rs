@@ -1,16 +1,15 @@
 //! Local persistence: history JSON, user preferences JSON, vocab JSON, and
-//! Keychain-backed credentials vault.
+//! platform-backed credentials vault.
 //!
 //! Storage roots:
 //! - macOS:   `~/Library/Application Support/OpenLess`
 //! - Windows: `%APPDATA%\OpenLess`
 //! - Linux:   `$XDG_DATA_HOME/OpenLess` or `~/.local/share/OpenLess`
 //!
-//! Divergence from Swift: the Swift `CredentialsVault` falls back to a JSON
-//! file (`~/.openless/credentials.json`) when Keychain is unavailable. The
-//! Rust port intentionally does NOT replicate that fallback — we rely solely
-//! on the platform keyring. The macOS service name (`com.openless.app`) is
-//! preserved so existing Keychain entries from the Swift app remain readable.
+//! Credential storage policy: provider credentials are stored in the OS
+//! credential vault (macOS Keychain, Windows Credential Manager, Linux keyring).
+//! A legacy plaintext JSON file is read once as a migration source and removed
+//! after a successful vault write; new writes never persist plaintext secrets.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -32,11 +31,11 @@ const PREFERENCES_FILE: &str = "preferences.json";
 const VOCAB_FILE: &str = "dictionary.json";
 const VOCAB_PRESETS_FILE: &str = "vocab-presets.json";
 
-/// Swift 老 `CredentialsVault` 的 JSON 备用路径。
-/// 升级到 Tauri 版后，先尝试 Keychain；Keychain 没有时回落读这个文件，
-/// 让用户在 Swift 版填过的凭据无需重输。
+/// 旧版 plaintext JSON 凭据路径。仅作为迁移来源；成功写入系统凭据库后会删除。
 const LEGACY_CREDS_DIR: &str = ".openless";
 const LEGACY_CREDS_FILE: &str = "credentials.json";
+
+const KEYRING_CREDENTIALS_ACCOUNT: &str = "credentials.v1";
 
 static CREDENTIALS_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
@@ -115,12 +114,10 @@ fn read_or_default<T: for<'de> Deserialize<'de> + Default>(path: &Path) -> Resul
         .with_context(|| format!("decode failed: {}", path.display()))
 }
 
-// ───────────────────────── credentials JSON store ─────────────────────────
+// ───────────────────────── credentials vault ─────────────────────────
 //
-// 与 Swift `Sources/OpenLessPersistence/CredentialsVault.swift` 同源——纯 JSON 文件，
-// 路径 `~/.openless/credentials.json`，权限 0600。**故意不用 Keychain**：
-// ad-hoc 签名每次构建 hash 都变，Keychain ACL 失效后会触发逐账号弹框；用户已明确
-// 选择"直接写本地文件"。
+// 正常读写走系统凭据库；旧 plaintext JSON 只作为迁移来源。为保持多 provider
+// schema 与 active provider 状态，凭据库里保存一个 v1 JSON payload，而不是逐字段散落。
 //
 // v1 schema：
 //   {
@@ -262,56 +259,87 @@ fn credentials_path() -> Result<PathBuf> {
     }
 }
 
-fn ensure_credentials_dir(path: &Path) -> Result<()> {
-    if let Some(dir) = path.parent() {
-        fs::create_dir_all(dir).with_context(|| format!("create dir {} failed", dir.display()))?;
-        // 0700 on parent so other users can't peek
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = fs::set_permissions(dir, fs::Permissions::from_mode(0o700));
-        }
-    }
-    Ok(())
+fn keyring_entry() -> Result<keyring::Entry> {
+    keyring::Entry::new(CredentialsVault::SERVICE_NAME, KEYRING_CREDENTIALS_ACCOUNT)
+        .context("open system credential vault")
 }
 
-fn load_credentials() -> CredsRoot {
-    let path = match credentials_path() {
-        Ok(p) => p,
-        Err(_) => return CredsRoot::default(),
-    };
-    if !path.exists() {
-        return CredsRoot::default();
-    }
-    let bytes = match fs::read(&path) {
-        Ok(b) => b,
-        Err(e) => {
-            log::warn!("[vault] read {} failed: {}", path.display(), e);
-            return CredsRoot::default();
-        }
-    };
-    serde_json::from_slice::<CredsRoot>(&bytes).unwrap_or_else(|e| {
-        log::warn!("[vault] parse {} failed: {}", path.display(), e);
-        CredsRoot::default()
-    })
-}
-
-fn save_credentials(root: &CredsRoot) -> Result<()> {
-    let path = credentials_path()?;
-    ensure_credentials_dir(&path)?;
-    // 写盘前过滤掉空 entry，保持 JSON 干净（mirrors Swift cleanedSchema）。
+fn clean_credentials(root: &CredsRoot) -> CredsRoot {
     let mut cleaned = root.clone();
     cleaned.providers.asr.retain(|_, v| !v.is_empty());
     cleaned.providers.llm.retain(|_, v| !v.is_empty());
-    let json = serde_json::to_vec_pretty(&cleaned).context("encode credentials failed")?;
-    let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, &json).with_context(|| format!("write {} failed", tmp.display()))?;
-    fs::rename(&tmp, &path).with_context(|| format!("rename to {} failed", path.display()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+    cleaned
+}
+
+fn read_legacy_credentials_file(path: &Path) -> Option<CredsRoot> {
+    if !path.exists() {
+        return None;
     }
+    let bytes = match fs::read(path) {
+        Ok(b) => b,
+        Err(e) => {
+            log::warn!("[vault] read legacy {} failed: {}", path.display(), e);
+            return None;
+        }
+    };
+    match serde_json::from_slice::<CredsRoot>(&bytes) {
+        Ok(root) => Some(root),
+        Err(e) => {
+            log::warn!("[vault] parse legacy {} failed: {}", path.display(), e);
+            None
+        }
+    }
+}
+
+fn remove_legacy_credentials_file() {
+    let Ok(path) = credentials_path() else { return };
+    if path.exists() {
+        if let Err(e) = fs::remove_file(&path) {
+            log::warn!("[vault] remove legacy {} failed: {}", path.display(), e);
+        }
+    }
+}
+
+fn load_keyring_credentials() -> Result<Option<CredsRoot>> {
+    let entry = keyring_entry()?;
+    let json = match entry.get_password() {
+        Ok(json) => json,
+        Err(keyring::Error::NoEntry) => return Ok(None),
+        Err(e) => return Err(anyhow!(e)).context("read system credential vault"),
+    };
+    serde_json::from_str::<CredsRoot>(&json)
+        .map(Some)
+        .context("decode system credential vault payload")
+}
+
+fn load_credentials() -> CredsRoot {
+    match load_keyring_credentials() {
+        Ok(Some(root)) => return root,
+        Ok(None) => {}
+        Err(e) => {
+            log::warn!("[vault] system credential read failed: {e}");
+            return CredsRoot::default();
+        }
+    }
+
+    let Some(legacy) = credentials_path().ok().and_then(|p| read_legacy_credentials_file(&p)) else {
+        return CredsRoot::default();
+    };
+
+    if let Err(e) = save_credentials(&legacy) {
+        log::warn!("[vault] legacy credential migration failed: {e}");
+        return CredsRoot::default();
+    }
+    legacy
+}
+
+fn save_credentials(root: &CredsRoot) -> Result<()> {
+    let cleaned = clean_credentials(root);
+    let json = serde_json::to_string(&cleaned).context("encode credentials failed")?;
+    keyring_entry()?
+        .set_password(&json)
+        .context("write system credential vault")?;
+    remove_legacy_credentials_file();
     Ok(())
 }
 
@@ -682,12 +710,11 @@ pub struct CredentialsSnapshot {
     pub ark_endpoint: Option<String>,
 }
 
-/// 凭据存储——纯 JSON 文件，**不**走 Keychain。详见文件头部注释。
+/// 凭据存储——系统凭据库；旧 JSON 文件只作为迁移来源。
 pub struct CredentialsVault;
 
 impl CredentialsVault {
-    /// 历史保留：Swift 时代以此名作为 Keychain service。Rust 不再使用 Keychain，
-    /// 但暴露此常量给可能仍依赖它的代码点。
+    /// 系统凭据库 service name；macOS 下对应 Keychain service。
     pub const SERVICE_NAME: &'static str = "com.openless.app";
 
     pub fn get(account: CredentialAccount) -> Result<Option<String>> {

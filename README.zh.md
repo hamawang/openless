@@ -198,13 +198,14 @@ npm run build
 
 ## 凭据
 
-凭据保存在本机 Keychain（service = `com.openless.app`）。开发期同时维护一份明文 JSON 兜底，用于在 Keychain 不可用时回退：
+凭据保存在系统凭据库（service = `com.openless.app`）：macOS Keychain、Windows Credential Manager 或 Linux keyring。旧版明文 JSON 只作为迁移来源读取，成功写入系统凭据库后会被删除：
 
 ```text
-~/.openless/credentials.json   # 0600，目录 0700
+macOS / Linux: ~/.openless/credentials.json
+Windows:       %APPDATA%\OpenLess\credentials.json
 ```
 
-仓库本身不包含任何 API Key、Token 或 Endpoint 之外的私有信息。
+新的凭据写入不会继续保存明文 secrets。仓库本身不包含任何 API Key、Token 或 Endpoint 之外的私有信息。
 
 需要配置的字段：
 
@@ -254,7 +255,7 @@ recorder.rs      麦克风 → 16 kHz 单声道 Int16 PCM，RMS 回调
 asr/             火山引擎流式 ASR（WebSocket）+ Whisper HTTP
 polish.rs        OpenAI 兼容 chat-completions（Ark / DeepSeek 等）
 insertion.rs     AX focused-element → 剪贴板 + Cmd+V → 仅复制兜底
-persistence.rs   历史记录 / 偏好设置 / 词典 JSON + Keychain 凭据
+persistence.rs   历史记录 / 偏好设置 / 词典 JSON + 系统凭据库
 permissions.rs   TCC 权限检查（辅助功能 / 麦克风）
 coordinator.rs   状态机：Idle → Starting → Listening → Processing
 commands.rs      Tauri IPC 接口
