@@ -1125,8 +1125,10 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
         return Err(message);
     }
 
-    emit_capsule(inner, CapsuleState::Recording, 0.0, 0, None, None);
-
+    // 不在这里 emit Recording capsule —— 让 start_recorder_for_starting 在
+    // Recorder::start 成功后再发，确保「用户看到录音条」时 mic 已经在 capture。
+    // 之前在这一行就 emit 会让用户看到录音条后立刻开口，但 mic 还在 cpal init
+    // 窗口（50-200ms）内 → 开头几个字物理上录不到。详见 issue 备注。
     let active_asr = CredentialsVault::get_active_asr();
 
     #[cfg(target_os = "macos")]
@@ -1301,6 +1303,11 @@ fn start_recorder_for_starting(
             spawn_recorder_error_monitor(inner, runtime_errors);
             stop_recorder_if_pending_start_stop(inner);
             log::info!("[coord] recorder started (asr={active_asr}, phase=Starting)");
+            // ★ 关键：录音器实际启动后再发 Recording capsule，避免用户「看到录音条但
+            //   mic 还没开」的 50-200ms 窗口里开口讲话被吞。begin_session 把这一行
+            //   挪到这里以后，三条 ASR 路径（Local / Whisper / Volcengine）共享。
+            //   ASR 连接慢的间隙仍由 DeferredAsrBridge 缓存 PCM，按顺序后送，不丢字。
+            emit_capsule(inner, CapsuleState::Recording, 0.0, 0, None, None);
         }
         Err(e) => {
             log::error!("[coord] recorder start failed: {e}");
