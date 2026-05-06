@@ -29,7 +29,7 @@ export function getCapsulePillMetrics(os: OS): CapsulePillMetrics {
     return { width: 196, height: 52, textWidth: 104, boxSizing: 'border-box' };
   }
 
-  return { width: 176, height: 42, textWidth: 84, boxSizing: 'content-box' };
+  return { width: 176, height: 42, textWidth: 84, boxSizing: 'border-box' };
 }
 
 // macOS 走 1.2.11 calc 布局，不依赖 host metrics；Windows 端要更大的 host
@@ -56,7 +56,7 @@ export function getCapsuleHostMetrics(
     horizontalInset: 0,
     bottomInset: 0,
     badgeGap: 8,
-    boxSizing: 'content-box',
+    boxSizing: 'border-box',
   };
 }
 

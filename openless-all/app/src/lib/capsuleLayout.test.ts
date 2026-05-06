@@ -42,7 +42,10 @@ const macMetrics = getCapsulePillMetrics('mac');
 assertEqual(macMetrics.width, 176, 'mac capsule keeps existing pill width');
 assertEqual(macMetrics.height, 42, 'mac capsule keeps existing pill height');
 assertEqual(macMetrics.textWidth, 84, 'mac capsule keeps existing text slot');
-assertEqual(macMetrics.boxSizing, 'content-box', 'mac capsule keeps the existing content-box pill model');
+assertEqual(macMetrics.boxSizing, 'border-box', 'mac capsule keeps the existing border-box pill model');
+
+const macHost = getCapsuleHostMetrics('mac', false);
+assertEqual(macHost.boxSizing, 'border-box', 'mac capsule host keeps the existing border-box box model');
 
 const winErrorLayout = getCapsuleMessageLayout('win', 'error');
 assertEqual(winErrorLayout.lineClamp, 2, 'windows error message allows two lines');
