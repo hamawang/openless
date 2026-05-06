@@ -405,8 +405,8 @@ export const en: typeof zhCN = {
       zh: '简体中文',
       zhTW: '繁體中文',
       en: 'English',
-      ja: '日本語',
-      ko: '한국어',
+      ja: '日本語 (Beta)',
+      ko: '한국어 (Beta)',
       restartHint: 'Some native menus (system tray, etc.) may require an app restart to fully switch.',
     },
     about: {
