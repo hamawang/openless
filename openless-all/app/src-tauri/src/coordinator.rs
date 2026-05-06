@@ -1125,8 +1125,10 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
         return Err(message);
     }
 
-    emit_capsule(inner, CapsuleState::Recording, 0.0, 0, None, None);
-
+    // 不在这里 emit Recording capsule —— 让 start_recorder_for_starting 在
+    // Recorder::start 成功后再发，确保「用户看到录音条」时 mic 已经在 capture。
+    // 之前在这一行就 emit 会让用户看到录音条后立刻开口，但 mic 还在 cpal init
+    // 窗口（50-200ms）内 → 开头几个字物理上录不到。详见 issue 备注。
     let active_asr = CredentialsVault::get_active_asr();
 
     #[cfg(target_os = "macos")]
@@ -1299,6 +1301,26 @@ fn start_recorder_for_starting(
         Ok((rec, runtime_errors)) => {
             store_recorder_for_session(inner, session_id, rec);
             spawn_recorder_error_monitor(inner, runtime_errors);
+            // ★ 录音器实际启动后再发 Recording capsule —— 避免用户「看到录音条但
+            //   mic 还没开」的 50-200ms 窗口里开口讲话被吞（三条 ASR 路径共享）。
+            //   ASR 连接慢的间隙由 DeferredAsrBridge 缓存 PCM，按顺序后送，不丢字。
+            //
+            //   竞态保护：必须在 stop_recorder_if_pending_start_stop 之前 emit，
+            //   并且仅当 recorder 真的会继续运行（phase 仍是 Starting、无待处理的
+            //   stop / cancel）时才 emit。否则用户在 cpal init 期间松开热键时，
+            //   stop / cancel 路径可能已经发出 Transcribing / Cancelled，本行
+            //   再无条件覆盖回 Recording 会让 UI 短暂闪烁错误状态（短按尤其明显）。
+            //   Codex review (PR #289 P2) 指出。
+            let should_emit_recording = {
+                let state = inner.state.lock();
+                state.session_id == session_id
+                    && state.phase == SessionPhase::Starting
+                    && !state.pending_stop
+                    && !state.cancelled
+            };
+            if should_emit_recording {
+                emit_capsule(inner, CapsuleState::Recording, 0.0, 0, None, None);
+            }
             stop_recorder_if_pending_start_stop(inner);
             log::info!("[coord] recorder started (asr={active_asr}, phase=Starting)");
         }
