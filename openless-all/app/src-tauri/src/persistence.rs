@@ -36,6 +36,10 @@ const LEGACY_CREDS_DIR: &str = ".openless";
 const LEGACY_CREDS_FILE: &str = "credentials.json";
 
 const KEYRING_CREDENTIALS_ACCOUNT: &str = "credentials.v1";
+const KEYRING_CREDENTIALS_CHUNK_PREFIX: &str = "credentials.v1.chunk.";
+// Windows Credential Manager caps one credential blob at 2560 bytes. keyring stores
+// passwords as UTF-16 on Windows, so keep each JSON chunk comfortably below that.
+const KEYRING_CHUNK_MAX_UTF16_UNITS: usize = 1000;
 
 static CREDENTIALS_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
@@ -117,7 +121,8 @@ fn read_or_default<T: for<'de> Deserialize<'de> + Default>(path: &Path) -> Resul
 // ───────────────────────── credentials vault ─────────────────────────
 //
 // 正常读写走系统凭据库；旧 plaintext JSON 只作为迁移来源。为保持多 provider
-// schema 与 active provider 状态，凭据库里保存一个 v1 JSON payload，而不是逐字段散落。
+// schema 与 active provider 状态，凭据库里保存一个 v1 JSON payload；payload 会按平台
+// 凭据库限制拆成多个条目，避免 Windows 单条凭据 2560 bytes 限制。
 //
 // v1 schema：
 //   {
@@ -260,7 +265,11 @@ fn credentials_path() -> Result<PathBuf> {
 }
 
 fn keyring_entry() -> Result<keyring::Entry> {
-    keyring::Entry::new(CredentialsVault::SERVICE_NAME, KEYRING_CREDENTIALS_ACCOUNT)
+    keyring_entry_for(KEYRING_CREDENTIALS_ACCOUNT)
+}
+
+fn keyring_entry_for(account: &str) -> Result<keyring::Entry> {
+    keyring::Entry::new(CredentialsVault::SERVICE_NAME, account)
         .context("open system credential vault")
 }
 
@@ -300,13 +309,80 @@ fn remove_legacy_credentials_file() {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct CredsChunkManifest {
+    openless_credentials_storage: String,
+    version: u32,
+    chunks: usize,
+}
+
+fn chunk_account(index: usize) -> String {
+    format!("{KEYRING_CREDENTIALS_CHUNK_PREFIX}{index}")
+}
+
+fn chunk_json_payload(json: &str) -> Vec<String> {
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+    let mut current_units = 0usize;
+    for ch in json.chars() {
+        let units = ch.len_utf16();
+        if !current.is_empty() && current_units + units > KEYRING_CHUNK_MAX_UTF16_UNITS {
+            chunks.push(std::mem::take(&mut current));
+            current_units = 0;
+        }
+        current.push(ch);
+        current_units += units;
+    }
+    if !current.is_empty() || json.is_empty() {
+        chunks.push(current);
+    }
+    chunks
+}
+
+fn read_chunk_manifest(json: &str) -> Option<CredsChunkManifest> {
+    let manifest = serde_json::from_str::<CredsChunkManifest>(json).ok()?;
+    if manifest.openless_credentials_storage == "chunked" && manifest.version == 1 {
+        Some(manifest)
+    } else {
+        None
+    }
+}
+
+fn get_keyring_password(account: &str) -> Result<Option<String>> {
+    match keyring_entry_for(account)?.get_password() {
+        Ok(value) => Ok(Some(value)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(e) => {
+            Err(anyhow!(e)).with_context(|| format!("read system credential vault {account}"))
+        }
+    }
+}
+
+fn delete_keyring_password(account: &str) {
+    match keyring_entry_for(account).and_then(|entry| {
+        entry
+            .delete_credential()
+            .with_context(|| format!("delete system credential vault {account}"))
+    }) {
+        Ok(()) | Err(_) => {}
+    }
+}
+
 fn load_keyring_credentials() -> Result<Option<CredsRoot>> {
-    let entry = keyring_entry()?;
-    let json = match entry.get_password() {
-        Ok(json) => json,
-        Err(keyring::Error::NoEntry) => return Ok(None),
-        Err(e) => return Err(anyhow!(e)).context("read system credential vault"),
+    let Some(json_or_manifest) = get_keyring_password(KEYRING_CREDENTIALS_ACCOUNT)? else {
+        return Ok(None);
     };
+
+    let manifest = read_chunk_manifest(&json_or_manifest)
+        .ok_or_else(|| anyhow!("invalid system credential vault manifest"))?;
+    let mut json = String::new();
+    for index in 0..manifest.chunks {
+        let account = chunk_account(index);
+        let chunk = get_keyring_password(&account)?
+            .ok_or_else(|| anyhow!("missing system credential vault chunk {index}"))?;
+        json.push_str(&chunk);
+    }
+
     serde_json::from_str::<CredsRoot>(&json)
         .map(Some)
         .context("decode system credential vault payload")
@@ -322,7 +398,10 @@ fn load_credentials() -> CredsRoot {
         }
     }
 
-    let Some(legacy) = credentials_path().ok().and_then(|p| read_legacy_credentials_file(&p)) else {
+    let Some(legacy) = credentials_path()
+        .ok()
+        .and_then(|p| read_legacy_credentials_file(&p))
+    else {
         return CredsRoot::default();
     };
 
@@ -336,9 +415,36 @@ fn load_credentials() -> CredsRoot {
 fn save_credentials(root: &CredsRoot) -> Result<()> {
     let cleaned = clean_credentials(root);
     let json = serde_json::to_string(&cleaned).context("encode credentials failed")?;
+    let previous_chunk_count = get_keyring_password(KEYRING_CREDENTIALS_ACCOUNT)
+        .ok()
+        .flatten()
+        .and_then(|value| read_chunk_manifest(&value))
+        .map(|manifest| manifest.chunks)
+        .unwrap_or(0);
+    let chunks = chunk_json_payload(&json);
+
+    for (index, chunk) in chunks.iter().enumerate() {
+        let account = chunk_account(index);
+        keyring_entry_for(&account)?
+            .set_password(chunk)
+            .with_context(|| format!("write system credential vault chunk {index}"))?;
+    }
+
+    let manifest = CredsChunkManifest {
+        openless_credentials_storage: "chunked".to_string(),
+        version: 1,
+        chunks: chunks.len(),
+    };
+    let manifest_json =
+        serde_json::to_string(&manifest).context("encode credential manifest failed")?;
     keyring_entry()?
-        .set_password(&json)
-        .context("write system credential vault")?;
+        .set_password(&manifest_json)
+        .context("write system credential vault manifest")?;
+
+    for index in chunks.len()..previous_chunk_count {
+        delete_keyring_password(&chunk_account(index));
+    }
+
     remove_legacy_credentials_file();
     Ok(())
 }
@@ -784,14 +890,33 @@ impl CredentialsVault {
 
 #[cfg(test)]
 mod tests {
-    use super::{list_vocab_presets, save_vocab_presets};
+    use super::{
+        chunk_json_payload, list_vocab_presets, save_vocab_presets, KEYRING_CHUNK_MAX_UTF16_UNITS,
+    };
     use crate::types::{VocabPreset, VocabPresetStore};
     use std::fs;
     use std::path::PathBuf;
 
     #[test]
+    fn credential_payload_chunks_stay_under_windows_blob_limit() {
+        let payload = format!(
+            "{}{}{}",
+            "a".repeat(KEYRING_CHUNK_MAX_UTF16_UNITS + 25),
+            "😀".repeat(20),
+            "b".repeat(KEYRING_CHUNK_MAX_UTF16_UNITS + 25)
+        );
+        let chunks = chunk_json_payload(&payload);
+        assert!(chunks.len() > 1);
+        assert_eq!(chunks.concat(), payload);
+        assert!(chunks
+            .iter()
+            .all(|chunk| chunk.encode_utf16().count() <= KEYRING_CHUNK_MAX_UTF16_UNITS));
+    }
+
+    #[test]
     fn vocab_presets_roundtrip_json_file() {
-        let tmp: PathBuf = std::env::temp_dir().join(format!("openless-test-{}", uuid::Uuid::new_v4()));
+        let tmp: PathBuf =
+            std::env::temp_dir().join(format!("openless-test-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&tmp).expect("create temp dir");
         // Linux path helper uses XDG_DATA_HOME first.
         unsafe {
@@ -810,7 +935,10 @@ mod tests {
         let loaded = list_vocab_presets().expect("list presets");
         assert_eq!(loaded.custom.len(), 1);
         assert_eq!(loaded.custom[0].id, "test");
-        assert_eq!(loaded.custom[0].phrases, vec!["PR".to_string(), "CI".to_string()]);
+        assert_eq!(
+            loaded.custom[0].phrases,
+            vec!["PR".to_string(), "CI".to_string()]
+        );
         assert_eq!(loaded.disabled_builtin_preset_ids, vec!["chef".to_string()]);
         let _ = fs::remove_dir_all(&tmp);
     }
