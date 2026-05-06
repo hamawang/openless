@@ -462,6 +462,7 @@ fn migrate_legacy_sources() -> CredsRoot {
 fn migrate_legacy_sources_for_update() -> Result<CredsRoot> {
     if let Some(legacy) = load_legacy_credentials() {
         save_credentials(&legacy)?;
+        remove_legacy_keyring_credentials();
         return Ok(legacy);
     }
 
