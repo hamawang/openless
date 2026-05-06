@@ -1,5 +1,11 @@
 name: CI
 
+# 多平台跨语言质量门禁。release-tauri.yml 是发版流水线（仅打包构建），这里负责
+# 在合并前快速验证两件事：
+#   1. 前端 typecheck + vite bundle 通过（tsc + vite build，捕获跨 locale 类型 drift）
+#   2. Rust 后端在 macOS / Windows 都能 cargo check 过（捕获 cfg 漏分支 / 平台 API 误用）
+# 跑 build-mac.sh / windows-package-msvc.ps1 太重；只跑轻量 cargo check + vite build。
+
 on:
   push:
     branches: [main, dev]
@@ -7,9 +13,20 @@ on:
     branches: [main, dev]
 
 jobs:
-  windows-tauri:
-    name: Windows Tauri checks
-    runs-on: windows-latest
+  cross-platform:
+    name: ${{ matrix.label }} checks
+    strategy:
+      # 一个平台挂掉不阻塞其他平台拿到验证结果。
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            label: macOS
+            preflight: false
+          - os: windows-latest
+            label: Windows
+            preflight: true
+    runs-on: ${{ matrix.os }}
     defaults:
       run:
         working-directory: openless-all/app
@@ -32,10 +49,12 @@ jobs:
         run: npm ci
 
       - name: Check Windows prerequisites
+        if: matrix.preflight
         shell: pwsh
         run: ./scripts/windows-preflight.ps1 -Toolchain msvc
 
       - name: Check PowerShell scripts
+        if: matrix.preflight
         shell: pwsh
         run: |
           foreach ($script in @("./scripts/windows-preflight.ps1", "./scripts/windows-build-gnu.ps1", "./scripts/windows-runtime-smoke.ps1")) {
@@ -47,8 +66,25 @@ jobs:
             }
           }
 
-      - name: Build frontend
+      - name: Build frontend (tsc + vite)
         run: npm run build
 
-      - name: Check Tauri backend
+      - name: Check Tauri backend (cargo check)
         run: cargo check --manifest-path src-tauri/Cargo.toml
+
+      - name: Verify version triplet stays in sync
+        # 两个平台都跑这个校验：Windows runner 自带 git-bash，跨 shell 表现一致。
+        # 一旦三处版本号 drift 立刻 fail，避免发版时再发现漏改。
+        shell: bash
+        run: |
+          PKG=$(node -p "require('./package.json').version")
+          TAU=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          CRG=$(grep -E '^version = ' src-tauri/Cargo.toml | head -1 | sed -E 's/^version = "(.+)"$/\1/')
+          echo "package.json     = $PKG"
+          echo "tauri.conf.json  = $TAU"
+          echo "Cargo.toml       = $CRG"
+          if [ "$PKG" != "$TAU" ] || [ "$PKG" != "$CRG" ]; then
+            echo "::error::version triplet 不一致 — 请用 scripts/bump-version.sh 同步更新"
+            exit 1
+          fi
+          echo "[ok] 三处版本号一致：$PKG"

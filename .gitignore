@@ -22,8 +22,17 @@ SC/
 apps/
 promo/
 promo-openless/
+promo-openless-v2/
 docs/old-promo/
 .worktrees/
+
+# 派生产物（兜底）：项目曾出现 promo-openless-v2/node_modules 等遗漏，
+# 这里全局通配，避免某子目录漏配 .gitignore 时把 build artifact 推进 PR。
+node_modules/
+dist/
+target/
+.cargo/registry/
+.cargo/git/
 
 # Windows TSF IME local build outputs
 openless-all/app/windows-ime/OpenLessIme/
