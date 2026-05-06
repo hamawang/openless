@@ -2,6 +2,8 @@ param(
   [string]$ExePath = "",
   [ValidateSet("notepad", "browser", "wt-cmd", "wt-powershell", "win32edit")]
   [string]$Target = "notepad",
+  [ValidateSet("volcengine", "foundry-local-whisper")]
+  [string]$AsrProvider = "volcengine",
   [string]$Phrase = "OpenLess Windows real regression",
   [int]$TimeoutSeconds = 120,
   [int]$VirtualKey = 0xA3,
@@ -118,7 +120,11 @@ function Set-HoldHotkeyPreference($Path) {
   if ($null -eq $prefs.enabledModes) { $prefs | Add-Member -NotePropertyName enabledModes -NotePropertyValue @("light", "structured", "formal", "raw") }
   if ($null -eq $prefs.launchAtLogin) { $prefs | Add-Member -NotePropertyName launchAtLogin -NotePropertyValue $false }
   if ($null -eq $prefs.showCapsule) { $prefs | Add-Member -NotePropertyName showCapsule -NotePropertyValue $true }
-  if ($null -eq $prefs.activeAsrProvider) { $prefs | Add-Member -NotePropertyName activeAsrProvider -NotePropertyValue "volcengine" }
+  if ($null -eq $prefs.PSObject.Properties["activeAsrProvider"]) {
+    $prefs | Add-Member -NotePropertyName activeAsrProvider -NotePropertyValue $AsrProvider
+  } else {
+    $prefs.activeAsrProvider = $AsrProvider
+  }
   if ($null -eq $prefs.activeLlmProvider) { $prefs | Add-Member -NotePropertyName activeLlmProvider -NotePropertyValue "ark" }
   if ($null -eq $prefs.restoreClipboardAfterPaste) {
     $prefs | Add-Member -NotePropertyName restoreClipboardAfterPaste -NotePropertyValue $true
@@ -126,6 +132,55 @@ function Set-HoldHotkeyPreference($Path) {
     $prefs.restoreClipboardAfterPaste = $true
   }
   Write-TextUtf8 $Path ($prefs | ConvertTo-Json -Depth 8)
+  return $previous
+}
+
+function Set-ActiveAsrCredential($Path) {
+  $previous = Read-TextUtf8 $Path
+  if ([string]::IsNullOrWhiteSpace($previous)) {
+    $credentials = [pscustomobject]@{
+      version = 1
+      active = [pscustomobject]@{
+        asr = $AsrProvider
+        llm = "ark"
+      }
+      providers = [pscustomobject]@{
+        asr = [pscustomobject]@{}
+        llm = [pscustomobject]@{}
+      }
+    }
+  } else {
+    $credentials = $previous | ConvertFrom-Json
+    if ($null -eq $credentials.PSObject.Properties["active"]) {
+      $credentials | Add-Member -NotePropertyName active -NotePropertyValue ([pscustomobject]@{})
+    } elseif ($null -eq $credentials.active) {
+      $credentials.active = [pscustomobject]@{}
+    }
+    if ($null -eq $credentials.active.PSObject.Properties["asr"]) {
+      $credentials.active | Add-Member -NotePropertyName asr -NotePropertyValue $AsrProvider
+    } else {
+      $credentials.active.asr = $AsrProvider
+    }
+    if ($null -eq $credentials.active.PSObject.Properties["llm"]) {
+      $credentials.active | Add-Member -NotePropertyName llm -NotePropertyValue "ark"
+    }
+    if ($null -eq $credentials.PSObject.Properties["providers"]) {
+      $credentials | Add-Member -NotePropertyName providers -NotePropertyValue ([pscustomobject]@{})
+    } elseif ($null -eq $credentials.providers) {
+      $credentials.providers = [pscustomobject]@{}
+    }
+    if ($null -eq $credentials.providers.PSObject.Properties["asr"]) {
+      $credentials.providers | Add-Member -NotePropertyName asr -NotePropertyValue ([pscustomobject]@{})
+    } elseif ($null -eq $credentials.providers.asr) {
+      $credentials.providers.asr = [pscustomobject]@{}
+    }
+    if ($null -eq $credentials.providers.PSObject.Properties["llm"]) {
+      $credentials.providers | Add-Member -NotePropertyName llm -NotePropertyValue ([pscustomobject]@{})
+    } elseif ($null -eq $credentials.providers.llm) {
+      $credentials.providers.llm = [pscustomobject]@{}
+    }
+  }
+  Write-TextUtf8 $Path ($credentials | ConvertTo-Json -Depth 12)
   return $previous
 }
 
@@ -593,50 +648,76 @@ function Speak-TestPhrase($Text) {
 }
 
 $credentialStatus = Get-OpenLessCredentialStatus
-if ($RequireJsonCredentials -and (-not $credentialStatus.VolcengineConfigured -or -not $credentialStatus.ArkConfigured)) {
-  throw "Real ASR regression requires configured Volcengine ASR and Ark LLM credentials."
+if ($RequireJsonCredentials) {
+  if ($AsrProvider -eq "volcengine" -and (-not $credentialStatus.VolcengineConfigured -or -not $credentialStatus.ArkConfigured)) {
+    throw "Real ASR regression requires configured Volcengine ASR and Ark LLM credentials when ASR=volcengine."
+  }
+  if ($AsrProvider -eq "foundry-local-whisper" -and -not $credentialStatus.ArkConfigured) {
+    Write-Warning "Ark LLM credentials are not configured; local ASR smoke accepts the existing raw transcript fallback when LLM is unconfigured."
+  }
 }
 if (-not $credentialStatus.VolcengineConfigured -or -not $credentialStatus.ArkConfigured) {
-  Write-Warning "Legacy credentials.json is incomplete; continuing because the app may use the OS credential vault."
+  $missingCredentialParts = @()
+  if (-not $credentialStatus.VolcengineConfigured) { $missingCredentialParts += "Volcengine ASR" }
+  if (-not $credentialStatus.ArkConfigured) { $missingCredentialParts += "Ark LLM" }
+  $providerCredentialNote = if ($AsrProvider -eq "volcengine") {
+    "ASR=volcengine needs Volcengine ASR and Ark LLM credentials unless the app resolves them from the OS credential vault."
+  } else {
+    "ASR=foundry-local-whisper does not require Volcengine credentials; Ark LLM is optional because raw transcript fallback is accepted."
+  }
+  Write-Warning "Legacy credentials.json is incomplete ($($missingCredentialParts -join ', ')); $providerCredentialNote Continuing because the app may use the OS credential vault."
 }
 
 $logPath = Join-Path $env:LOCALAPPDATA "OpenLess\Logs\openless.log"
 $historyPath = Join-Path $env:APPDATA "OpenLess\history.json"
 $preferencesPath = Join-Path $env:APPDATA "OpenLess\preferences.json"
-$baselineCount = Get-HistoryCount $historyPath
-$previousPreferences = Set-HoldHotkeyPreference $preferencesPath
-$previousClipboard = Get-Clipboard -Raw -ErrorAction SilentlyContinue
-$clipboardSentinel = "OPENLESS_OLD_CLIPBOARD_SENTINEL_$(Get-Date -Format 'yyyyMMddHHmmssfff')"
-Restore-ClipboardValue $clipboardSentinel
-$debugTranscriptPath = $null
-if (-not [string]::IsNullOrWhiteSpace($InjectedTranscriptText)) {
-  $debugTranscriptPath = Join-Path $env:TEMP "openless-debug-transcript.txt"
-  Write-TextUtf8 $debugTranscriptPath $InjectedTranscriptText
-}
-
-Get-Process openless -ErrorAction SilentlyContinue | Stop-Process -Force
-Remove-Item -LiteralPath $logPath -Force -ErrorAction SilentlyContinue
-
-Write-Host "== Real ASR + direct insertion smoke ($Target) =="
-$env:OPENLESS_SHOW_MAIN_ON_START = "1"
-$env:OPENLESS_ACCEPT_SYNTHETIC_HOTKEY_EVENTS = "1"
-if ($DebugHotkeyEvents) {
-  $env:OPENLESS_DEBUG_HOTKEY_EVENTS = "1"
-}
-if ($debugTranscriptPath) {
-  $env:OPENLESS_DEBUG_TRANSCRIPT_FILE = $debugTranscriptPath
-}
-try {
-  $openless = Start-Process -FilePath $ExePath -WorkingDirectory (Split-Path $ExePath -Parent) -PassThru
-} finally {
-  Remove-Item Env:OPENLESS_SHOW_MAIN_ON_START -ErrorAction SilentlyContinue
-  Remove-Item Env:OPENLESS_ACCEPT_SYNTHETIC_HOTKEY_EVENTS -ErrorAction SilentlyContinue
-  Remove-Item Env:OPENLESS_DEBUG_HOTKEY_EVENTS -ErrorAction SilentlyContinue
-  Remove-Item Env:OPENLESS_DEBUG_TRANSCRIPT_FILE -ErrorAction SilentlyContinue
-}
-
+$credentialsPath = Join-Path $env:APPDATA "OpenLess\credentials.json"
 $inputTarget = $null
+$openless = $null
+$previousPreferences = $null
+$previousCredentials = $null
+$previousClipboard = $null
+$debugTranscriptPath = $null
+$preferencesRewritten = $false
+$credentialsRewritten = $false
+$clipboardCaptured = $false
+
 try {
+  $baselineCount = Get-HistoryCount $historyPath
+  $previousClipboard = Get-Clipboard -Raw -ErrorAction SilentlyContinue
+  $clipboardCaptured = $true
+  $previousPreferences = Set-HoldHotkeyPreference $preferencesPath
+  $preferencesRewritten = $true
+  $previousCredentials = Set-ActiveAsrCredential $credentialsPath
+  $credentialsRewritten = $true
+  $clipboardSentinel = "OPENLESS_OLD_CLIPBOARD_SENTINEL_$(Get-Date -Format 'yyyyMMddHHmmssfff')"
+  Restore-ClipboardValue $clipboardSentinel
+  if (-not [string]::IsNullOrWhiteSpace($InjectedTranscriptText)) {
+    $debugTranscriptPath = Join-Path $env:TEMP "openless-debug-transcript.txt"
+    Write-TextUtf8 $debugTranscriptPath $InjectedTranscriptText
+  }
+
+  Get-Process openless -ErrorAction SilentlyContinue | Stop-Process -Force
+  Remove-Item -LiteralPath $logPath -Force -ErrorAction SilentlyContinue
+
+  Write-Host "== Real ASR + direct insertion smoke ($Target, ASR=$AsrProvider) =="
+  $env:OPENLESS_SHOW_MAIN_ON_START = "1"
+  $env:OPENLESS_ACCEPT_SYNTHETIC_HOTKEY_EVENTS = "1"
+  if ($DebugHotkeyEvents) {
+    $env:OPENLESS_DEBUG_HOTKEY_EVENTS = "1"
+  }
+  if ($debugTranscriptPath) {
+    $env:OPENLESS_DEBUG_TRANSCRIPT_FILE = $debugTranscriptPath
+  }
+  try {
+    $openless = Start-Process -FilePath $ExePath -WorkingDirectory (Split-Path $ExePath -Parent) -PassThru
+  } finally {
+    Remove-Item Env:OPENLESS_SHOW_MAIN_ON_START -ErrorAction SilentlyContinue
+    Remove-Item Env:OPENLESS_ACCEPT_SYNTHETIC_HOTKEY_EVENTS -ErrorAction SilentlyContinue
+    Remove-Item Env:OPENLESS_DEBUG_HOTKEY_EVENTS -ErrorAction SilentlyContinue
+    Remove-Item Env:OPENLESS_DEBUG_TRANSCRIPT_FILE -ErrorAction SilentlyContinue
+  }
+
   if (-not (Wait-LogPattern $logPath "hotkey listener installed|Windows low-level keyboard hook" 20)) {
     throw "Windows low-level keyboard hook was not installed."
   }
@@ -705,6 +786,14 @@ try {
   Write-Host "[ok] History updated. raw='$($latest.rawTranscript)'"
   Write-Host "[ok] Final text length=$($latest.finalText.Length), insertStatus=$($latest.insertStatus)"
   Write-Host "[ok] $Target readback length=$($targetText.Length)"
+
+  if (Test-Path $logPath) {
+    $logText = Get-Content -Raw -Encoding UTF8 $logPath
+    $forbiddenNativeDictationPattern = "Win\+H|Voice Typing|Windows\.Media\.SpeechRecognition|SpeechRecognizer|SAPI"
+    if ($logText -match $forbiddenNativeDictationPattern) {
+      throw "OpenLess log contains a native Windows dictation route marker; this smoke must use the OpenLess pipeline."
+    }
+  }
 } finally {
   Release-Hotkey
   if ($null -ne $inputTarget) {
@@ -721,15 +810,26 @@ try {
     }
   }
   Get-Process openless -ErrorAction SilentlyContinue | Stop-Process -Force
-  if ($null -eq $previousPreferences) {
-    Remove-Item -LiteralPath $preferencesPath -Force -ErrorAction SilentlyContinue
-  } else {
-    Write-TextUtf8 $preferencesPath $previousPreferences
+  if ($preferencesRewritten) {
+    if ($null -eq $previousPreferences) {
+      Remove-Item -LiteralPath $preferencesPath -Force -ErrorAction SilentlyContinue
+    } else {
+      Write-TextUtf8 $preferencesPath $previousPreferences
+    }
   }
-  Restore-ClipboardValue $previousClipboard
+  if ($credentialsRewritten) {
+    if ($null -eq $previousCredentials) {
+      Remove-Item -LiteralPath $credentialsPath -Force -ErrorAction SilentlyContinue
+    } else {
+      Write-TextUtf8 $credentialsPath $previousCredentials
+    }
+  }
+  if ($clipboardCaptured) {
+    Restore-ClipboardValue $previousClipboard
+  }
   if ($debugTranscriptPath) {
     Remove-Item -LiteralPath $debugTranscriptPath -Force -ErrorAction SilentlyContinue
   }
 }
 
-Write-Host "Real ASR + direct insertion smoke ($Target) passed."
+Write-Host "Real ASR + direct insertion smoke ($Target, ASR=$AsrProvider) passed."
