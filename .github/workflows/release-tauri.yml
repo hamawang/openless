@@ -212,6 +212,16 @@ jobs:
             }
             "$($t.EnvName)=$dll" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
             Write-Host "[ok] built $dll (exported $($t.EnvName))"
+
+            # bundle.resources 引用的是 src-tauri/openless-ime-payload/{x64,x86}/OpenLessIme.dll
+            # （仓库里 commit 的是 0 字节占位让 mac 本地 build 也能 resolve）。
+            # 这里用真 dll 覆盖占位，让 NSIS / MSI 都装上真文件；NSIS hook 的 regsvr32
+            # 同时会把 64 / 32 位 COM 注册到 HKLM\Software\Classes\CLSID 的
+            # KEY_WOW64_64KEY / KEY_WOW64_32KEY 两侧（windows_ime_profile.rs 都会查）。
+            $payloadDir = Join-Path $appRoot "src-tauri\openless-ime-payload\$($t.Folder)"
+            New-Item -ItemType Directory -Force -Path $payloadDir | Out-Null
+            Copy-Item -Force -Path $dll -Destination (Join-Path $payloadDir 'OpenLessIme.dll')
+            Write-Host "[ok] copied real $($t.Folder) dll into bundle.resources payload path"
           }
 
       # ── Windows tauri build：保持 bash shell，因为 PowerShell 调外部命令
@@ -317,6 +327,7 @@ jobs:
           }
 
       # ── Linux：产 deb / rpm / AppImage ──
+      # bundle.resources 里的 Windows TSF DLL 占位对 Linux 包没意义，用空 map 覆盖跳过。
       - name: Build (Linux)
         if: matrix.platform == 'ubuntu-22.04'
         shell: bash
@@ -326,9 +337,11 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
-            npm run tauri -- build --bundles deb,rpm,appimage --config '{"bundle":{"createUpdaterArtifacts":true}}'
+            npm run tauri -- build --bundles deb,rpm,appimage \
+              --config '{"bundle":{"resources":{},"createUpdaterArtifacts":true}}'
           else
-            npm run tauri -- build --bundles deb,rpm,appimage
+            npm run tauri -- build --bundles deb,rpm,appimage \
+              --config '{"bundle":{"resources":{}}}'
           fi
 
       - name: Disambiguate macOS updater bundle filename
