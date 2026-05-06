@@ -171,6 +171,15 @@ pub struct UserPreferences {
     /// 默认 300（5 分钟）：兼顾连续听写不重加载、长时间不用释放 1.2GB+ RAM。
     #[serde(default = "default_local_asr_keep_loaded_secs")]
     pub local_asr_keep_loaded_secs: u32,
+    /// Windows Foundry Local Whisper 当前激活的模型 alias。
+    #[serde(default = "default_foundry_local_asr_model")]
+    pub foundry_local_asr_model: String,
+    /// Windows Foundry Local Whisper 语言 hint。空字符串 = 自动检测。
+    #[serde(default)]
+    pub foundry_local_asr_language_hint: String,
+    /// Windows Foundry Local Whisper 模型在 runtime 中保持加载多久。
+    #[serde(default = "default_local_asr_keep_loaded_secs")]
+    pub foundry_local_asr_keep_loaded_secs: u32,
 }
 
 fn default_local_asr_model() -> String {
@@ -183,6 +192,21 @@ fn default_local_asr_mirror() -> String {
 
 fn default_local_asr_keep_loaded_secs() -> u32 {
     300
+}
+
+fn default_foundry_local_asr_model() -> String {
+    crate::asr::local::foundry::DEFAULT_MODEL_ALIAS.into()
+}
+
+fn default_active_asr_provider() -> String {
+    #[cfg(target_os = "windows")]
+    {
+        return crate::asr::local::foundry::PROVIDER_ID.into();
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        "volcengine".into()
+    }
 }
 
 fn default_qa_hotkey() -> Option<QaHotkeyBinding> {
@@ -207,7 +231,7 @@ impl Default for UserPreferences {
             launch_at_login: false,
             show_capsule: true,
             mute_during_recording: false,
-            active_asr_provider: "volcengine".into(),
+            active_asr_provider: default_active_asr_provider(),
             active_llm_provider: "ark".into(),
             restore_clipboard_after_paste: true,
             allow_non_tsf_insertion_fallback: true,
@@ -220,6 +244,9 @@ impl Default for UserPreferences {
             local_asr_active_model: default_local_asr_model(),
             local_asr_mirror: default_local_asr_mirror(),
             local_asr_keep_loaded_secs: default_local_asr_keep_loaded_secs(),
+            foundry_local_asr_model: default_foundry_local_asr_model(),
+            foundry_local_asr_language_hint: String::new(),
+            foundry_local_asr_keep_loaded_secs: default_local_asr_keep_loaded_secs(),
         }
     }
 }

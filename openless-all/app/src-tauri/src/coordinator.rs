@@ -1109,6 +1109,24 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
         return Err(message);
     }
 
+    let active_asr = CredentialsVault::get_active_asr();
+    if crate::asr::local::foundry::is_foundry_local_whisper(&active_asr) {
+        let message = "Windows 本地 Whisper 尚未接入听写流程，请先切换到其他 ASR 供应商".to_string();
+        log::warn!("[coord] Foundry Local Whisper selected before provider wiring");
+        emit_capsule(
+            inner,
+            CapsuleState::Error,
+            0.0,
+            0,
+            Some(message.clone()),
+            None,
+        );
+        restore_prepared_windows_ime_session(inner, current_session_id);
+        inner.state.lock().phase = SessionPhase::Idle;
+        schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
+        return Err(message);
+    }
+
     if let Err(message) = ensure_microphone_permission(inner) {
         log::warn!("[coord] microphone permission gate failed: {message}");
         emit_capsule(
@@ -1126,8 +1144,6 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
     }
 
     emit_capsule(inner, CapsuleState::Recording, 0.0, 0, None, None);
-
-    let active_asr = CredentialsVault::get_active_asr();
 
     #[cfg(target_os = "macos")]
     if crate::asr::local::is_local_qwen3(&active_asr) {
@@ -2156,6 +2172,10 @@ fn ensure_asr_credentials() -> Result<(), String> {
         }
     }
 
+    if crate::asr::local::foundry::is_foundry_local_whisper(&active_asr) {
+        return Ok(());
+    }
+
     if is_whisper_compatible_provider(&active_asr) {
         let api_key = CredentialsVault::get(CredentialAccount::AsrApiKey)
             .ok()
@@ -2173,6 +2193,12 @@ fn ensure_asr_credentials() -> Result<(), String> {
     } else {
         Ok(())
     }
+}
+
+#[cfg(test)]
+fn is_keyless_local_asr_provider(id: &str) -> bool {
+    crate::asr::local::is_local_qwen3(id)
+        || crate::asr::local::foundry::is_foundry_local_whisper(id)
 }
 
 #[cfg(target_os = "macos")]
@@ -3010,6 +3036,16 @@ mod tests {
             "AltLeft"
         ));
         assert!(!window_key_matches_trigger(HotkeyTrigger::Fn, "Fn", "Fn"));
+    }
+
+    #[test]
+    fn foundry_local_provider_is_keyless_and_not_whisper_compatible() {
+        assert!(is_keyless_local_asr_provider(
+            crate::asr::local::foundry::PROVIDER_ID
+        ));
+        assert!(!is_whisper_compatible_provider(
+            crate::asr::local::foundry::PROVIDER_ID
+        ));
     }
 
     #[test]

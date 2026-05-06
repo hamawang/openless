@@ -124,7 +124,9 @@ fn asr_configured_for_provider(provider: &str, snap: &CredentialsSnapshot) -> bo
     if provider == "volcengine" {
         return volcengine_configured(snap);
     }
-    if provider == crate::asr::local::PROVIDER_ID {
+    if provider == crate::asr::local::PROVIDER_ID
+        || crate::asr::local::foundry::is_foundry_local_whisper(provider)
+    {
         // 本地 ASR 不依赖云端凭据。
         return true;
     }
@@ -946,6 +948,10 @@ mod tests {
 
         assert!(asr_configured_for_provider(
             crate::asr::local::PROVIDER_ID,
+            &snapshot()
+        ));
+        assert!(asr_configured_for_provider(
+            crate::asr::local::foundry::PROVIDER_ID,
             &snapshot()
         ));
     }

@@ -169,7 +169,14 @@ impl Default for CredsActive {
 }
 
 fn creds_default_asr() -> String {
-    "volcengine".into()
+    #[cfg(target_os = "windows")]
+    {
+        return crate::asr::local::foundry::PROVIDER_ID.into();
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        "volcengine".into()
+    }
 }
 fn creds_default_llm() -> String {
     "ark".into()

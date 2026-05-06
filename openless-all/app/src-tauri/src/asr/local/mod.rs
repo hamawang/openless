@@ -5,6 +5,7 @@
 
 pub mod cache;
 pub mod download;
+pub mod foundry;
 mod local_provider;
 pub mod models;
 pub mod test_run;

@@ -137,6 +137,12 @@ export interface UserPreferences {
   /** 本地 ASR 引擎在内存中的保留时长（秒）。0 = 说完话即释放；
    *  300 = 默认 5 分钟；86400 ≈ 不释放（保持加载）。 */
   localAsrKeepLoadedSecs: number;
+  /** Windows Foundry Local Whisper 当前激活的模型 alias。 */
+  foundryLocalAsrModel: string;
+  /** Windows Foundry Local Whisper 语言 hint。空字符串表示自动检测。 */
+  foundryLocalAsrLanguageHint: string;
+  /** Windows Foundry Local Whisper 模型在 runtime 中保持加载的秒数。 */
+  foundryLocalAsrKeepLoadedSecs: number;
 }
 
 /** Rust 通过 `qa:state` 事件下发的 payload。

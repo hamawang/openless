@@ -46,7 +46,7 @@ const mockSettings: UserPreferences = {
   launchAtLogin: false,
   showCapsule: true,
   muteDuringRecording: false,
-  activeAsrProvider: 'volcengine',
+  activeAsrProvider: 'foundry-local-whisper',
   activeLlmProvider: 'ark',
   restoreClipboardAfterPaste: true,
   allowNonTsfInsertionFallback: true,
@@ -59,6 +59,9 @@ const mockSettings: UserPreferences = {
   localAsrActiveModel: 'qwen3-asr-0.6b',
   localAsrMirror: 'huggingface',
   localAsrKeepLoadedSecs: 300,
+  foundryLocalAsrModel: 'whisper-small',
+  foundryLocalAsrLanguageHint: '',
+  foundryLocalAsrKeepLoadedSecs: 300,
 };
 
 const mockHotkeyCapability: HotkeyCapability = {
@@ -72,7 +75,7 @@ const mockHotkeyCapability: HotkeyCapability = {
 };
 
 const mockCredentialsStatus: CredentialsStatus = {
-  activeAsrProvider: 'volcengine',
+  activeAsrProvider: 'foundry-local-whisper',
   activeLlmProvider: 'ark',
   asrConfigured: true,
   llmConfigured: true,
