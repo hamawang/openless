@@ -15,6 +15,10 @@ jobs:
         working-directory: openless-all/app
     steps:
       - uses: actions/checkout@v4
+        with:
+          # vendor/qwen-asr 是 macOS 上 build.rs 必须的 git submodule。Windows
+          # checkout 也拉一份保持与 release-tauri.yml 一致，开销几秒可以忽略。
+          submodules: recursive
 
       - uses: actions/setup-node@v4
         with:
