@@ -72,19 +72,32 @@ jobs:
       - name: Check Tauri backend (cargo check)
         run: cargo check --manifest-path src-tauri/Cargo.toml
 
-      - name: Verify version triplet stays in sync
+      - name: Verify version sync across all 5 files
         # 两个平台都跑这个校验：Windows runner 自带 git-bash，跨 shell 表现一致。
-        # 一旦三处版本号 drift 立刻 fail，避免发版时再发现漏改。
+        # 一旦版本号 drift 立刻 fail，避免发版时再发现漏改。
+        # 校验 5 处：package.json / package-lock.json (root + nested) /
+        # tauri.conf.json / Cargo.toml / Cargo.lock 的 [openless] 包。
         shell: bash
         run: |
           PKG=$(node -p "require('./package.json').version")
+          LOCK_ROOT=$(node -p "require('./package-lock.json').version")
+          LOCK_NESTED=$(node -p "require('./package-lock.json').packages[''].version")
           TAU=$(node -p "require('./src-tauri/tauri.conf.json').version")
           CRG=$(grep -E '^version = ' src-tauri/Cargo.toml | head -1 | sed -E 's/^version = "(.+)"$/\1/')
-          echo "package.json     = $PKG"
-          echo "tauri.conf.json  = $TAU"
-          echo "Cargo.toml       = $CRG"
-          if [ "$PKG" != "$TAU" ] || [ "$PKG" != "$CRG" ]; then
-            echo "::error::version triplet 不一致 — 请用 scripts/bump-version.sh 同步更新"
+          # Cargo.lock：找 [openless] 包紧跟的 version 行
+          CARGO_LOCK_VER=$(awk 'BEGIN{found=0} /^name = "openless"$/{found=1; next} found && /^version = /{gsub(/"/,""); print $3; exit}' src-tauri/Cargo.lock)
+          echo "package.json         = $PKG"
+          echo "package-lock root    = $LOCK_ROOT"
+          echo "package-lock nested  = $LOCK_NESTED"
+          echo "tauri.conf.json      = $TAU"
+          echo "Cargo.toml           = $CRG"
+          echo "Cargo.lock openless  = $CARGO_LOCK_VER"
+          mismatch=0
+          for v in "$LOCK_ROOT" "$LOCK_NESTED" "$TAU" "$CRG" "$CARGO_LOCK_VER"; do
+            if [ "$v" != "$PKG" ]; then mismatch=1; fi
+          done
+          if [ "$mismatch" -ne 0 ]; then
+            echo "::error::版本号未对齐 — 请用 scripts/bump-version.sh 同步更新"
             exit 1
           fi
-          echo "[ok] 三处版本号一致：$PKG"
+          echo "[ok] 全部 5 处版本号一致：$PKG"

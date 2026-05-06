@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
-# 同步更新 OpenLess 三处版本号 + Cargo.lock。
+# 同步更新 OpenLess 四处版本号。
 # 用法：
 #     ./scripts/bump-version.sh 1.2.21
 #
-# 改的位置（CLAUDE.md 强调必须三处一起改）：
+# 改的位置（CLAUDE.md 强调必须同时改，否则 release-tauri.yml 失败）：
 #   - openless-all/app/package.json                "version": "X.Y.Z"
+#   - openless-all/app/package-lock.json           根包 version + 嵌套引用
 #   - openless-all/app/src-tauri/tauri.conf.json   "version": "X.Y.Z"
-#   - openless-all/app/src-tauri/Cargo.toml        version = "X.Y.Z"
+#   - openless-all/app/src-tauri/Cargo.toml        version = "X.Y.Z" (顶层)
 #   - openless-all/app/src-tauri/Cargo.lock        通过 cargo update -p openless 同步
 #
-# CI 的 cross-platform 任务最后一步会校验三个文件版本号一致；漏改一处直接 fail。
+# CI 的 cross-platform 任务最后一步会校验四个文件版本号一致；漏改一处直接 fail。
 
 set -euo pipefail
 
@@ -30,68 +31,80 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP="$REPO_ROOT/openless-all/app"
 
 PKG_JSON="$APP/package.json"
+PKG_LOCK="$APP/package-lock.json"
 TAURI_CONF="$APP/src-tauri/tauri.conf.json"
 CARGO_TOML="$APP/src-tauri/Cargo.toml"
+CARGO_LOCK="$APP/src-tauri/Cargo.lock"
 
-for f in "$PKG_JSON" "$TAURI_CONF" "$CARGO_TOML"; do
+for f in "$PKG_JSON" "$PKG_LOCK" "$TAURI_CONF" "$CARGO_TOML" "$CARGO_LOCK"; do
   if [ ! -f "$f" ]; then
     echo "错误：找不到 $f" >&2
     exit 1
   fi
 done
 
-# macOS sed 跟 GNU sed 行为不同（-i 后缀必填空字符串）。统一用 -i.bak 然后 rm。
-update_json_version() {
-  local file="$1"
-  sed -E -i.bak \
-    "s/\"version\":[[:space:]]*\"[0-9]+\.[0-9]+\.[0-9]+\"/\"version\": \"$NEW\"/" \
-    "$file"
-  rm "$file.bak"
-}
+# package.json + package-lock.json：npm version 一行同步两个，且不打 git tag。
+# --allow-same-version 让脚本可重复运行（实际 release flow 不会，但 dry-run 友好）。
+echo "▶ 升 package.json + package-lock.json → $NEW"
+( cd "$APP" && npm version "$NEW" --no-git-tag-version --allow-same-version > /dev/null )
 
-update_cargo_toml_version() {
-  local file="$1"
-  # 仅匹配文件顶层 [package] 段下的 version = "X.Y.Z"，避免误改 dependencies 里的版本。
-  # OpenLess 项目 Cargo.toml 第一个出现的 version = 一定是 [package] 自己的。
-  sed -E -i.bak \
-    "0,/^version = \"[0-9]+\.[0-9]+\.[0-9]+\"$/s//version = \"$NEW\"/" \
-    "$file"
-  rm "$file.bak"
-}
-
-echo "▶ 升 package.json → $NEW"
-update_json_version "$PKG_JSON"
-
+# tauri.conf.json：BSD sed 与 GNU sed 都支持 -E + -i.bak 后缀；不用行号范围地址。
 echo "▶ 升 tauri.conf.json → $NEW"
-update_json_version "$TAURI_CONF"
+sed -E -i.bak \
+  "s/\"version\":[[:space:]]*\"[0-9]+\.[0-9]+\.[0-9]+\"/\"version\": \"$NEW\"/" \
+  "$TAURI_CONF"
+rm "$TAURI_CONF.bak"
 
+# Cargo.toml：用 awk 替换文件里第一个 version = "X.Y.Z" 行（顶层 [package].version）。
+# 不用 GNU sed 的 `0,/.../` 行号范围地址（macOS BSD sed 不支持）。
 echo "▶ 升 Cargo.toml → $NEW"
-update_cargo_toml_version "$CARGO_TOML"
+awk -v new="$NEW" '
+  !done && /^version = "[0-9]+\.[0-9]+\.[0-9]+"$/ {
+    sub(/"[0-9]+\.[0-9]+\.[0-9]+"/, "\"" new "\"")
+    done = 1
+  }
+  { print }
+' "$CARGO_TOML" > "$CARGO_TOML.tmp"
+mv "$CARGO_TOML.tmp" "$CARGO_TOML"
 
+# Cargo.lock：cargo update 显式同步 openless package；失败要立刻退出，不能吞错。
 echo "▶ 同步 Cargo.lock"
-( cd "$APP/src-tauri" && cargo update -p openless 2>&1 | grep -E 'Updating|Locking|^error' || true )
+( cd "$APP/src-tauri" && cargo update -p openless 2>&1 | tail -5 )
 
+# 校验五处一致（package.json / package-lock.json / tauri.conf.json / Cargo.toml / Cargo.lock）
 echo
-echo "===== 验证三处版本一致 ====="
+echo "===== 验证版本一致性 ====="
 PKG=$(node -p "require('$PKG_JSON').version")
+LOCK_ROOT=$(node -p "require('$PKG_LOCK').version")
+LOCK_NESTED=$(node -p "require('$PKG_LOCK').packages[''].version")
 TAU=$(node -p "require('$TAURI_CONF').version")
 CRG=$(grep -E '^version = ' "$CARGO_TOML" | head -1 | sed -E 's/^version = "(.+)"$/\1/')
+CARGO_LOCK_VER=$(awk '/^name = "openless"$/{getline; if (match($0, /version = "([0-9.]+)"/, a)) {print a[1]; exit}}' "$CARGO_LOCK" 2>/dev/null \
+  || awk 'BEGIN{found=0} /^name = "openless"$/{found=1; next} found && /^version = /{gsub(/"/,""); print $3; exit}' "$CARGO_LOCK")
 
-printf '%-20s %s\n' 'package.json:' "$PKG"
-printf '%-20s %s\n' 'tauri.conf.json:' "$TAU"
-printf '%-20s %s\n' 'Cargo.toml:' "$CRG"
+printf '%-22s %s\n' 'package.json:'        "$PKG"
+printf '%-22s %s\n' 'package-lock root:'   "$LOCK_ROOT"
+printf '%-22s %s\n' 'package-lock nested:' "$LOCK_NESTED"
+printf '%-22s %s\n' 'tauri.conf.json:'     "$TAU"
+printf '%-22s %s\n' 'Cargo.toml:'          "$CRG"
+printf '%-22s %s\n' 'Cargo.lock (openless):' "$CARGO_LOCK_VER"
 
-if [ "$PKG" != "$NEW" ] || [ "$TAU" != "$NEW" ] || [ "$CRG" != "$NEW" ]; then
-  echo "::error::三处版本号未对齐 — 请检查 sed 是否成功" >&2
+mismatch=0
+for v in "$LOCK_ROOT" "$LOCK_NESTED" "$TAU" "$CRG" "$CARGO_LOCK_VER"; do
+  if [ "$v" != "$NEW" ]; then mismatch=1; fi
+done
+
+if [ "$mismatch" -ne 0 ] || [ "$PKG" != "$NEW" ]; then
+  echo
+  echo "::error::版本号未对齐 — 请检查脚本输出" >&2
   exit 1
 fi
 
 echo
-echo "✓ 三处版本号一致：$NEW"
+echo "✓ 全部一致：$NEW"
 echo
 echo "下一步建议："
-echo "  git diff --stat $PKG_JSON $TAURI_CONF $CARGO_TOML \"$APP/src-tauri/Cargo.lock\""
-echo "  git add $PKG_JSON $TAURI_CONF $CARGO_TOML \"$APP/src-tauri/Cargo.lock\""
+echo "  git add $PKG_JSON $PKG_LOCK $TAURI_CONF $CARGO_TOML $CARGO_LOCK"
 echo "  git commit -m 'chore(release): $NEW'"
 echo "  git push"
 echo "  git tag v$NEW-tauri && git push origin v$NEW-tauri"
