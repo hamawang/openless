@@ -62,6 +62,7 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_dialog::init())
         // 跨平台开机自启：mac 写 LaunchAgent plist，linux 写 ~/.config/autostart/*.desktop，
         // windows 写 HKCU\Software\Microsoft\Windows\CurrentVersion\Run。前端 toggle 直接
         // 调插件 isEnabled / enable / disable，不维持本地 prefs，让 OS 当唯一真相。issue #194。
@@ -244,6 +245,7 @@ pub fn run() {
             commands::local_asr_release_engine,
             commands::local_asr_preload,
             commands::local_asr_set_keep_loaded_secs,
+            commands::export_error_log,
             restart_app,
         ])
         .build(tauri::generate_context!())
@@ -420,7 +422,7 @@ fn init_file_logger() {
     let _ = CombinedLogger::init(loggers);
 }
 
-fn log_dir_path() -> std::path::PathBuf {
+pub fn log_dir_path() -> std::path::PathBuf {
     #[cfg(target_os = "macos")]
     {
         if let Ok(home) = std::env::var("HOME") {
