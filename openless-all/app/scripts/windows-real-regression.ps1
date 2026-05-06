@@ -84,7 +84,7 @@ $credentialStatus = Get-OpenLessCredentialStatus
 Write-Host "== Credential gate =="
 $credentialStatus | Format-List
 if ($RequireCredentials -and (-not $credentialStatus.VolcengineConfigured -or -not $credentialStatus.ArkConfigured)) {
-  Write-Warning "Legacy credentials.json is incomplete; continuing because the app uses the OS credential vault."
+  throw "Real regression requires configured Volcengine ASR and Ark LLM credentials."
 }
 
 Write-Host ""
