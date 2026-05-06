@@ -147,6 +147,19 @@ fn configured(field: &Option<String>) -> bool {
         .unwrap_or(false)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LocalAsrReleasePlan {
+    qwen: bool,
+    foundry: bool,
+}
+
+fn local_asr_release_plan_for_provider(provider: &str) -> LocalAsrReleasePlan {
+    LocalAsrReleasePlan {
+        qwen: provider != crate::asr::local::PROVIDER_ID,
+        foundry: provider != FOUNDRY_LOCAL_PROVIDER_ID,
+    }
+}
+
 #[tauri::command]
 pub fn set_credential(window: Window, account: String, value: String) -> Result<(), String> {
     ensure_main_window(&window)?;
@@ -159,22 +172,30 @@ pub fn set_credential(window: Window, account: String, value: String) -> Result<
 }
 
 #[tauri::command]
-pub fn set_active_asr_provider(
+pub async fn set_active_asr_provider(
     coord: CoordinatorState<'_>,
+    runtime: State<'_, Arc<FoundryLocalRuntime>>,
     provider: String,
 ) -> Result<(), String> {
     if provider == FOUNDRY_LOCAL_PROVIDER_ID && !active_foundry_asr_is_supported(&provider) {
         return Err("Foundry Local Whisper is only available on Windows".to_string());
     }
     CredentialsVault::set_active_asr_provider(&provider).map_err(|e| e.to_string())?;
+    let release_plan = local_asr_release_plan_for_provider(&provider);
     if provider == crate::asr::local::PROVIDER_ID {
         // 切到本地 ASR → 后台预加载模型，下次按 hotkey 时不必等数秒。
         coord.preload_local_asr_in_background();
-    } else {
+    }
+    if release_plan.qwen {
         // 切回云端 → 用户已不需要本地引擎，立刻释放 1.2GB+ RAM；不释放的话只会等到
         // schedule_local_asr_release 的下一次 dictation 才触发，而切回云端后根本不会
         // 再走 local 路径，引擎会驻留到进程退出。
         coord.release_local_asr_engine();
+    }
+    if release_plan.foundry {
+        if let Err(error) = runtime.release_now().await {
+            log::warn!("[foundry-asr] release inactive runtime failed: {error:#}");
+        }
     }
     Ok(())
 }
@@ -1076,8 +1097,9 @@ mod tests {
     use super::{
         active_asr_is_keyless_for_validation, active_foundry_model_from_prefs,
         asr_configured_for_provider, asr_transcriptions_url, fetch_provider_models,
-        llm_configured_for_snapshot, models_url, normalize_foundry_language_hint, parse_model_ids,
-        persist_settings, validate_foundry_model_alias, ProviderConfig, SettingsWriter,
+        llm_configured_for_snapshot, local_asr_release_plan_for_provider, models_url,
+        normalize_foundry_language_hint, parse_model_ids, persist_settings,
+        validate_foundry_model_alias, ProviderConfig, SettingsWriter,
     };
     use crate::persistence::CredentialsSnapshot;
     use crate::types::{
@@ -1174,6 +1196,21 @@ mod tests {
         ));
         assert!(!active_asr_is_keyless_for_validation("volcengine"));
         assert!(!active_asr_is_keyless_for_validation("whisper"));
+    }
+
+    #[test]
+    fn provider_switch_release_plan_covers_inactive_local_runtimes() {
+        let qwen = local_asr_release_plan_for_provider(crate::asr::local::PROVIDER_ID);
+        assert!(!qwen.qwen);
+        assert!(qwen.foundry);
+
+        let foundry = local_asr_release_plan_for_provider(crate::asr::local::foundry::PROVIDER_ID);
+        assert!(foundry.qwen);
+        assert!(!foundry.foundry);
+
+        let cloud = local_asr_release_plan_for_provider("volcengine");
+        assert!(cloud.qwen);
+        assert!(cloud.foundry);
     }
 
     #[test]
