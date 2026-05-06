@@ -495,7 +495,7 @@ fn load_credentials_for_update() -> Result<CredsRoot> {
     match load_keyring_credentials() {
         Ok(Some(root)) => {
             remove_legacy_keyring_credentials();
-            remove_legacy_credentials_file()?;
+            remove_legacy_credentials_file_best_effort();
             Ok(root)
         }
         Ok(None) => migrate_legacy_sources_for_update(),
@@ -540,7 +540,7 @@ fn save_credentials(root: &CredsRoot) -> Result<()> {
         }
     }
 
-    remove_legacy_credentials_file()?;
+    remove_legacy_credentials_file_best_effort();
     Ok(())
 }
 
