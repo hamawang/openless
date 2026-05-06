@@ -16,7 +16,10 @@ tauri-build = { version = "2", features = [] }
 cc = "1.1"
 
 [dependencies]
-tauri = { version = "2", features = ["macos-private-api", "tray-icon"] }
+# 锁 ~2.10 是因为 Tauri 2.11.0 已发到 crates.io，但 npm 端 @tauri-apps/api / cli
+# 还停在 2.10.1 没同步发布；tauri build 会校验 npm 与 Rust crate 的 major/minor
+# 一致，跨 minor (2.10 vs 2.11) 直接 fail。等 npm 端发 2.11 后再放开。
+tauri = { version = "~2.10", features = ["macos-private-api", "tray-icon"] }
 tauri-plugin-shell = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-single-instance = "2"
