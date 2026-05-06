@@ -49,6 +49,7 @@ pub fn run() {
 
     let coordinator = Arc::new(coordinator::Coordinator::new());
     let local_asr_download_manager = Arc::new(asr::local::DownloadManager::new());
+    let foundry_local_runtime = Arc::new(asr::local::FoundryLocalRuntime::new());
 
     tauri::Builder::default()
         // 单实例锁：第二个进程启动时立即退出，激活信号转给已运行实例的主窗口。
@@ -71,6 +72,7 @@ pub fn run() {
         ))
         .manage(coordinator.clone())
         .manage(local_asr_download_manager.clone())
+        .manage(foundry_local_runtime.clone())
         .setup(move |app| {
             // Capsule 启动时定位到屏幕底部居中并隐藏；coordinator 按需显示。
             // 与 Swift `CapsuleWindowController.repositionToBottomCenter` 同语义。
@@ -244,6 +246,10 @@ pub fn run() {
             commands::local_asr_release_engine,
             commands::local_asr_preload,
             commands::local_asr_set_keep_loaded_secs,
+            commands::foundry_local_asr_status,
+            commands::foundry_local_asr_set_model,
+            commands::foundry_local_asr_set_language_hint,
+            commands::foundry_local_asr_release,
             restart_app,
         ])
         .build(tauri::generate_context!())
