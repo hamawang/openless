@@ -1716,13 +1716,15 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
         #[cfg(target_os = "windows")]
         ActiveAsr::FoundryLocalWhisper(local) => {
             debug_assert!(!uses_global_timeout);
-            let timeout_duration = foundry_transcribe_timeout_duration();
-            match tokio::time::timeout(timeout_duration, local.transcribe()).await {
-                Ok(Ok(r)) => {
+            match local
+                .transcribe(foundry_audio_transcribe_timeout_duration())
+                .await
+            {
+                Ok(r) => {
                     schedule_foundry_local_asr_release(inner, current_session_id);
                     r
                 }
-                Ok(Err(e)) => {
+                Err(e) => {
                     log::error!("[coord] Foundry Local Whisper transcribe failed: {e:#}");
                     emit_capsule(
                         inner,
@@ -1736,26 +1738,6 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
                     inner.state.lock().phase = SessionPhase::Idle;
                     schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
                     return Err(e.to_string());
-                }
-                Err(_) => {
-                    log::error!(
-                        "[coord] Foundry Local Whisper timeout after {} seconds",
-                        FOUNDRY_LOCAL_TRANSCRIBE_TIMEOUT_SECS
-                    );
-                    local.cancel();
-                    schedule_foundry_local_asr_release(inner, current_session_id);
-                    emit_capsule(
-                        inner,
-                        CapsuleState::Error,
-                        0.0,
-                        elapsed,
-                        Some("本地识别超时".to_string()),
-                        None,
-                    );
-                    restore_prepared_windows_ime_session(inner, current_session_id);
-                    inner.state.lock().phase = SessionPhase::Idle;
-                    schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
-                    return Err("foundry local timeout".to_string());
                 }
             }
         }
@@ -3256,11 +3238,13 @@ mod tests {
 
     #[cfg(target_os = "windows")]
     #[test]
-    fn foundry_transcribe_has_finite_extended_timeout() {
-        let timeout = foundry_transcribe_timeout_duration();
+    fn foundry_audio_transcribe_timeout_is_separate_from_prepare() {
+        let timeout = foundry_audio_transcribe_timeout_duration();
 
-        assert!(timeout > std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS));
-        assert!(timeout <= std::time::Duration::from_secs(15 * 60));
+        assert_eq!(
+            timeout,
+            std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS)
+        );
     }
 
     #[test]
@@ -3579,11 +3563,8 @@ const CAPSULE_AUTO_HIDE_DELAY_MS: u64 = 2000;
 const COORDINATOR_GLOBAL_TIMEOUT_SECS: u64 = 15;
 
 #[cfg(target_os = "windows")]
-const FOUNDRY_LOCAL_TRANSCRIBE_TIMEOUT_SECS: u64 = 10 * 60;
-
-#[cfg(target_os = "windows")]
-fn foundry_transcribe_timeout_duration() -> std::time::Duration {
-    std::time::Duration::from_secs(FOUNDRY_LOCAL_TRANSCRIBE_TIMEOUT_SECS)
+fn foundry_audio_transcribe_timeout_duration() -> std::time::Duration {
+    std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS)
 }
 
 /// begin_session 中各 await 之间的 cancel race 检查结果。

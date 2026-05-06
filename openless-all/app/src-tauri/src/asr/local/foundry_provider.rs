@@ -62,7 +62,7 @@ impl FoundryLocalWhisperAsr {
         self.language_hint.as_deref()
     }
 
-    pub async fn transcribe(&self) -> Result<RawTranscript> {
+    pub async fn transcribe(&self, audio_timeout: std::time::Duration) -> Result<RawTranscript> {
         let pcm = self.buffer.lock().clone();
         if pcm.is_empty() {
             return Ok(RawTranscript {
@@ -71,14 +71,18 @@ impl FoundryLocalWhisperAsr {
             });
         }
 
-        let result = self.transcribe_inner(&pcm).await;
+        let result = self.transcribe_inner(&pcm, audio_timeout).await;
         if result.is_ok() {
             self.buffer.lock().clear();
         }
         result
     }
 
-    async fn transcribe_inner(&self, pcm: &[u8]) -> Result<RawTranscript> {
+    async fn transcribe_inner(
+        &self,
+        pcm: &[u8],
+        audio_timeout: std::time::Duration,
+    ) -> Result<RawTranscript> {
         let duration_ms = pcm_duration_ms(pcm);
 
         #[cfg(not(target_os = "windows"))]
@@ -95,7 +99,12 @@ impl FoundryLocalWhisperAsr {
             let wav_file = TempWavFile::create(pcm)?;
             let text = self
                 .runtime
-                .transcribe_audio_file(&self.model_alias, self.language_hint(), wav_file.path())
+                .transcribe_audio_file(
+                    &self.model_alias,
+                    self.language_hint(),
+                    wav_file.path(),
+                    audio_timeout,
+                )
                 .await
                 .with_context(|| {
                     format!(

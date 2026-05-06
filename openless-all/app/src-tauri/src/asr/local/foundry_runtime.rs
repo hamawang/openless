@@ -129,6 +129,7 @@ mod imp {
             alias: &str,
             language_hint: Option<&str>,
             audio_path: &Path,
+            audio_timeout: std::time::Duration,
         ) -> Result<String> {
             let _lifecycle = self.lifecycle.lock().await;
             self.cancel_prepare.store(false, Ordering::SeqCst);
@@ -140,9 +141,14 @@ mod imp {
             if let Some(language_hint) = normalized_language_hint(language_hint) {
                 client = client.language(language_hint);
             }
-            let result = client
-                .transcribe(audio_path)
+            let result = tokio::time::timeout(audio_timeout, client.transcribe(audio_path))
                 .await
+                .with_context(|| {
+                    format!(
+                        "transcribe audio with Foundry model {alias} timed out after {} seconds",
+                        audio_timeout.as_secs()
+                    )
+                })?
                 .with_context(|| format!("transcribe audio with Foundry model {alias}"))?;
             Ok(result.text)
         }
@@ -448,6 +454,7 @@ impl FoundryLocalRuntime {
         alias: &str,
         _language_hint: Option<&str>,
         _audio_path: &std::path::Path,
+        _audio_timeout: std::time::Duration,
     ) -> anyhow::Result<String> {
         anyhow::bail!("Foundry Local Whisper is only available on Windows: {alias}");
     }
