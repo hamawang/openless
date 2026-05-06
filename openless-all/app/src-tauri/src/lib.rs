@@ -254,6 +254,7 @@ pub fn run() {
             commands::foundry_local_asr_status,
             commands::foundry_local_asr_set_model,
             commands::foundry_local_asr_set_language_hint,
+            commands::foundry_local_asr_prepare,
             commands::foundry_local_asr_release,
             restart_app,
         ])

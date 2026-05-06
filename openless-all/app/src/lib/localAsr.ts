@@ -1,4 +1,4 @@
-// localAsr.ts — IPC + 事件类型 for 本地 Qwen3-ASR 引擎与模型管理。
+// localAsr.ts — IPC + 事件类型 for 本地 ASR 引擎与模型管理。
 //
 // 后端命令定义：openless-all/app/src-tauri/src/commands.rs `local_asr_*`
 // 事件：local-asr-download-progress / local-asr-token
@@ -63,6 +63,32 @@ export interface FoundryLocalAsrStatus {
   endpoint: string | null;
   error: string | null;
 }
+
+export type FoundryLocalAsrModelAlias = 'whisper-small' | 'whisper-base' | 'whisper-tiny';
+
+export interface FoundryLocalAsrModelOption {
+  alias: FoundryLocalAsrModelAlias;
+  labelKey: string;
+  descKey: string;
+}
+
+export const FOUNDRY_LOCAL_ASR_MODELS: FoundryLocalAsrModelOption[] = [
+  {
+    alias: 'whisper-small',
+    labelKey: 'localAsr.foundryModelSmall',
+    descKey: 'localAsr.foundryModelSmallDesc',
+  },
+  {
+    alias: 'whisper-base',
+    labelKey: 'localAsr.foundryModelBase',
+    descKey: 'localAsr.foundryModelBaseDesc',
+  },
+  {
+    alias: 'whisper-tiny',
+    labelKey: 'localAsr.foundryModelTiny',
+    descKey: 'localAsr.foundryModelTinyDesc',
+  },
+];
 
 const MOCK_SETTINGS: LocalAsrSettings = {
   providerId: 'local-qwen3',
@@ -206,6 +232,10 @@ export function setFoundryLocalAsrLanguageHint(languageHint: string): Promise<vo
     { languageHint },
     () => undefined,
   );
+}
+
+export function prepareFoundryLocalAsr(modelAlias: string): Promise<string> {
+  return invokeOrMock('foundry_local_asr_prepare', { modelAlias }, () => `mock-${modelAlias}`);
 }
 
 export function releaseFoundryLocalAsr(): Promise<void> {

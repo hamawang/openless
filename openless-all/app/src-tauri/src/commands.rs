@@ -967,6 +967,18 @@ pub fn foundry_local_asr_set_language_hint(
 }
 
 #[tauri::command]
+pub async fn foundry_local_asr_prepare(
+    runtime: State<'_, Arc<FoundryLocalRuntime>>,
+    model_alias: String,
+) -> Result<String, String> {
+    validate_foundry_model_alias(&model_alias)?;
+    runtime
+        .ensure_loaded(&model_alias)
+        .await
+        .map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
 pub async fn foundry_local_asr_release(
     runtime: State<'_, Arc<FoundryLocalRuntime>>,
 ) -> Result<(), String> {

@@ -1,4 +1,4 @@
-// LocalAsr.tsx — 本地 Qwen3-ASR 模型管理页。
+// LocalAsr.tsx — 本地 ASR 模型管理页。
 //
 // 功能：
 //  - 顶部：当前激活模型 + 镜像源切换
@@ -11,25 +11,33 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { isTauri, setActiveAsrProvider } from '../lib/ipc';
 import {
+  FOUNDRY_LOCAL_ASR_MODELS,
   cancelLocalAsrDownload,
   deleteLocalAsrModel,
   downloadLocalAsrModel,
   fetchLocalAsrRemoteInfo,
+  getFoundryLocalAsrStatus,
   getLocalAsrEngineStatus,
   getLocalAsrSettings,
   listLocalAsrModels,
+  prepareFoundryLocalAsr,
   preloadLocalAsr,
+  releaseFoundryLocalAsr,
   releaseLocalAsrEngine,
+  setFoundryLocalAsrModel,
   setLocalAsrActiveModel,
   setLocalAsrKeepLoadedSecs,
   setLocalAsrMirror,
   testLocalAsrModel,
+  type FoundryLocalAsrModelAlias,
+  type FoundryLocalAsrStatus,
   type LocalAsrDownloadProgress,
   type LocalAsrEngineStatus,
   type LocalAsrModelStatus,
   type LocalAsrSettings,
   type LocalAsrTestResult,
 } from '../lib/localAsr';
+import { useHotkeySettings } from '../state/HotkeySettingsContext';
 import { Btn, Card, PageHeader, Pill } from './_atoms';
 
 interface RemoteSize {
@@ -41,12 +49,16 @@ interface RemoteSize {
 
 export function LocalAsr() {
   const { t } = useTranslation();
+  const { prefs, updatePrefs } = useHotkeySettings();
   const [settings, setSettings] = useState<LocalAsrSettings | null>(null);
   const [models, setModels] = useState<LocalAsrModelStatus[]>([]);
   const [progress, setProgress] = useState<Record<string, LocalAsrDownloadProgress>>({});
   const [remoteSizes, setRemoteSizes] = useState<Record<string, RemoteSize>>({});
   const [error, setError] = useState<string | null>(null);
   const [busyModelId, setBusyModelId] = useState<string | null>(null);
+  const [foundryStatus, setFoundryStatus] = useState<FoundryLocalAsrStatus | null>(null);
+  const [selectedFoundryAlias, setSelectedFoundryAlias] = useState<FoundryLocalAsrModelAlias>('whisper-small');
+  const [foundryBusy, setFoundryBusy] = useState<'enable' | 'prepare' | 'release' | null>(null);
   const [testingModelId, setTestingModelId] = useState<string | null>(null);
   const [testResults, setTestResults] = useState<Record<string, LocalAsrTestResult | { error: string }>>({});
   const [engineStatus, setEngineStatus] = useState<LocalAsrEngineStatus | null>(null);
@@ -62,6 +74,26 @@ export function LocalAsr() {
     }
   };
 
+  const refreshFoundryStatus = async () => {
+    try {
+      const status = await getFoundryLocalAsrStatus();
+      setFoundryStatus(status);
+      if (isFoundryAlias(status.activeModel)) {
+        setSelectedFoundryAlias(status.activeModel);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setFoundryStatus({
+        providerId: 'foundry-local-whisper',
+        available: false,
+        activeModel: selectedFoundryAlias,
+        loadedModelId: null,
+        endpoint: null,
+        error: message,
+      });
+    }
+  };
+
   const refresh = async () => {
     try {
       setError(null);
@@ -69,6 +101,7 @@ export function LocalAsr() {
       setSettings(s);
       setModels(list);
       void refreshEngineStatus();
+      void refreshFoundryStatus();
       // 拉远端真实尺寸（每个模型一次，结果留缓存）
       void Promise.all(
         list.map(async m => {
@@ -183,6 +216,60 @@ export function LocalAsr() {
     }
   };
 
+  const syncFoundryPrefs = async (modelAlias: FoundryLocalAsrModelAlias, enableProvider: boolean) => {
+    await updatePrefs(current => ({
+      ...current,
+      activeAsrProvider: enableProvider ? 'foundry-local-whisper' : current.activeAsrProvider,
+      foundryLocalAsrModel: modelAlias,
+    }));
+  };
+
+  const handleEnableFoundry = async () => {
+    if (!foundryAvailable) return;
+    setFoundryBusy('enable');
+    try {
+      setError(null);
+      await setFoundryLocalAsrModel(selectedFoundryAlias);
+      await setActiveAsrProvider('foundry-local-whisper');
+      await syncFoundryPrefs(selectedFoundryAlias, true);
+      await refreshFoundryStatus();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setFoundryBusy(null);
+    }
+  };
+
+  const handlePrepareFoundry = async () => {
+    if (!foundryAvailable) return;
+    setFoundryBusy('prepare');
+    try {
+      setError(null);
+      await setFoundryLocalAsrModel(selectedFoundryAlias);
+      await syncFoundryPrefs(selectedFoundryAlias, false);
+      await prepareFoundryLocalAsr(selectedFoundryAlias);
+      await refreshFoundryStatus();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      await refreshFoundryStatus();
+    } finally {
+      setFoundryBusy(null);
+    }
+  };
+
+  const handleReleaseFoundry = async () => {
+    setFoundryBusy('release');
+    try {
+      setError(null);
+      await releaseFoundryLocalAsr();
+      await refreshFoundryStatus();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setFoundryBusy(null);
+    }
+  };
+
   const handleDownload = async (modelId: string) => {
     setBusyModelId(modelId);
     try {
@@ -275,6 +362,11 @@ export function LocalAsr() {
   };
 
   const engineAvailable = settings?.engineAvailable ?? false;
+  const foundryAvailable = foundryStatus?.available === true;
+  const foundryDefault = prefs?.activeAsrProvider === 'foundry-local-whisper';
+  const selectedFoundryModel = FOUNDRY_LOCAL_ASR_MODELS.find(
+    model => model.alias === selectedFoundryAlias,
+  ) ?? FOUNDRY_LOCAL_ASR_MODELS[0];
 
   return (
     <div style={{ padding: '20px 28px 32px', overflowY: 'auto', height: '100%' }}>
@@ -291,6 +383,95 @@ export function LocalAsr() {
         </div>
       </Card>
 
+      <Card style={{ marginBottom: 16 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
+            <div style={{ minWidth: 0, flex: '1 1 360px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, flexWrap: 'wrap' }}>
+                <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--ol-ink)' }}>
+                  {t('localAsr.foundryTitle')}
+                </div>
+                {foundryDefault && <Pill tone="blue" size="sm">{t('localAsr.activeBadge')}</Pill>}
+                <Pill tone={foundryStatus?.available ? 'ok' : 'outline'} size="sm">
+                  {foundryStatus?.available
+                    ? t('localAsr.foundryAvailable')
+                    : t('localAsr.foundryUnavailable')}
+                </Pill>
+              </div>
+              <div style={{ fontSize: 13, color: 'var(--ol-ink-3)', lineHeight: 1.55 }}>
+                {t('localAsr.foundryDesc')}
+              </div>
+            </div>
+            <select
+              value={selectedFoundryAlias}
+              onChange={e => setSelectedFoundryAlias(e.target.value as FoundryLocalAsrModelAlias)}
+              disabled={foundryBusy !== null}
+              style={{
+                fontSize: 13,
+                padding: '6px 10px',
+                borderRadius: 8,
+                border: '0.5px solid rgba(0,0,0,0.12)',
+                background: 'var(--ol-surface)',
+                color: 'var(--ol-ink)',
+                minWidth: 220,
+                alignSelf: 'flex-start',
+              }}>
+              {FOUNDRY_LOCAL_ASR_MODELS.map(model => (
+                <option key={model.alias} value={model.alias}>
+                  {t(model.labelKey)}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div style={{ fontSize: 12.5, color: 'var(--ol-ink-3)', lineHeight: 1.6 }}>
+            <div>
+              <span style={{ color: 'var(--ol-ink-4)' }}>{t('localAsr.foundrySelectedModel')}: </span>
+              <strong>{t(selectedFoundryModel.labelKey)}</strong>
+              <span> · {t(selectedFoundryModel.descKey)}</span>
+            </div>
+            <div>
+              <span style={{ color: 'var(--ol-ink-4)' }}>{t('localAsr.foundryActiveModel')}: </span>
+              {foundryStatus?.activeModel ?? 'whisper-small'}
+            </div>
+            <div>
+              <span style={{ color: 'var(--ol-ink-4)' }}>{t('localAsr.foundryLoadedModel')}: </span>
+              {foundryStatus?.loadedModelId ?? t('localAsr.foundryNotLoaded')}
+            </div>
+            {foundryStatus?.error && (
+              <div style={{ color: '#9b2c2c' }}>
+                <span>{t('localAsr.foundryError')}: </span>
+                {foundryStatus.error}
+              </div>
+            )}
+          </div>
+
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <Btn
+              variant="blue"
+              size="sm"
+              disabled={foundryBusy !== null || !foundryAvailable}
+              onClick={() => void handleEnableFoundry()}>
+              {foundryBusy === 'enable' ? t('localAsr.foundryEnabling') : t('localAsr.foundrySetDefault')}
+            </Btn>
+            <Btn
+              variant="primary"
+              size="sm"
+              disabled={foundryBusy !== null || !foundryAvailable}
+              onClick={() => void handlePrepareFoundry()}>
+              {foundryBusy === 'prepare' ? t('localAsr.foundryPreparing') : t('localAsr.foundryPrepare')}
+            </Btn>
+            <Btn
+              variant="ghost"
+              size="sm"
+              disabled={foundryBusy !== null || !foundryStatus?.loadedModelId}
+              onClick={() => void handleReleaseFoundry()}>
+              {foundryBusy === 'release' ? t('localAsr.foundryReleasing') : t('localAsr.releaseNow')}
+            </Btn>
+          </div>
+        </div>
+      </Card>
+
       {!engineAvailable && (
         <Card style={{ marginBottom: 16, background: 'rgba(255, 235, 200, 0.4)' }}>
           <div style={{ fontSize: 13, color: 'var(--ol-ink-2)' }}>
@@ -298,6 +479,10 @@ export function LocalAsr() {
           </div>
         </Card>
       )}
+
+      <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--ol-ink)', margin: '4px 0 10px' }}>
+        {t('localAsr.qwenTitle')}
+      </div>
 
       <Card style={{ marginBottom: 16 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}>
@@ -608,6 +793,10 @@ function TestResultBlock({ result }: { result: LocalAsrTestResult | { error: str
       )}
     </div>
   );
+}
+
+function isFoundryAlias(value: string): value is FoundryLocalAsrModelAlias {
+  return FOUNDRY_LOCAL_ASR_MODELS.some(model => model.alias === value);
 }
 
 function formatBytes(n: number): string {
