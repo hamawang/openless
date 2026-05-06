@@ -388,26 +388,28 @@ fn load_keyring_credentials() -> Result<Option<CredsRoot>> {
         .context("decode system credential vault payload")
 }
 
+fn load_legacy_credentials() -> Option<CredsRoot> {
+    credentials_path()
+        .ok()
+        .and_then(|p| read_legacy_credentials_file(&p))
+}
+
 fn load_credentials() -> CredsRoot {
     match load_keyring_credentials() {
         Ok(Some(root)) => return root,
         Ok(None) => {}
         Err(e) => {
             log::warn!("[vault] system credential read failed: {e}");
-            return CredsRoot::default();
+            return load_legacy_credentials().unwrap_or_default();
         }
     }
 
-    let Some(legacy) = credentials_path()
-        .ok()
-        .and_then(|p| read_legacy_credentials_file(&p))
-    else {
+    let Some(legacy) = load_legacy_credentials() else {
         return CredsRoot::default();
     };
 
     if let Err(e) = save_credentials(&legacy) {
         log::warn!("[vault] legacy credential migration failed: {e}");
-        return CredsRoot::default();
     }
     legacy
 }
