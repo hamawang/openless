@@ -2378,8 +2378,13 @@ fn schedule_local_asr_release(inner: &Arc<Inner>) {
 }
 
 #[cfg(target_os = "windows")]
+fn foundry_local_asr_release_keep_secs(inner: &Arc<Inner>) -> u32 {
+    inner.prefs.get().foundry_local_asr_keep_loaded_secs
+}
+
+#[cfg(target_os = "windows")]
 fn schedule_foundry_local_asr_release(inner: &Arc<Inner>, session_id: u64) {
-    let keep_secs = inner.prefs.get().local_asr_keep_loaded_secs;
+    let keep_secs = foundry_local_asr_release_keep_secs(inner);
     let runtime = Arc::clone(&inner.foundry_local_runtime);
     let inner = Arc::clone(inner);
     tauri::async_runtime::spawn(async move {
@@ -3245,6 +3250,19 @@ mod tests {
             timeout,
             std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS)
         );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn foundry_release_uses_foundry_keep_loaded_preference() {
+        let runtime = Arc::new(crate::asr::local::FoundryLocalRuntime::new());
+        let coordinator = Coordinator::new_with_foundry_runtime(runtime);
+        let mut prefs = coordinator.inner.prefs.get();
+        prefs.local_asr_keep_loaded_secs = 3;
+        prefs.foundry_local_asr_keep_loaded_secs = 7;
+        coordinator.inner.prefs.set(prefs).unwrap();
+
+        assert_eq!(foundry_local_asr_release_keep_secs(&coordinator.inner), 7);
     }
 
     #[test]
