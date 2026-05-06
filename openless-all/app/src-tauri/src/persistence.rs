@@ -398,16 +398,26 @@ fn load_keyring_credentials() -> Result<Option<CredsRoot>> {
 }
 
 fn load_legacy_keyring_credentials() -> CredsRoot {
+    match load_legacy_keyring_credentials_for_update() {
+        Ok(root) => root,
+        Err(e) => {
+            log::warn!("[vault] read legacy vault credentials failed: {e}");
+            CredsRoot::default()
+        }
+    }
+}
+
+fn load_legacy_keyring_credentials_for_update() -> Result<CredsRoot> {
     let mut root = CredsRoot::default();
     for account in CredentialAccount::all() {
         let legacy_account = account.keyring_account();
         match get_keyring_password(legacy_account) {
             Ok(Some(value)) => write_account(&mut root, *account, Some(value)),
             Ok(None) => {}
-            Err(e) => log::warn!("[vault] read legacy vault {legacy_account} failed: {e}"),
+            Err(e) => return Err(e.context(format!("read legacy vault {legacy_account}"))),
         }
     }
-    clean_credentials(&root)
+    Ok(clean_credentials(&root))
 }
 
 fn remove_legacy_keyring_credentials() {
@@ -455,7 +465,7 @@ fn migrate_legacy_sources_for_update() -> Result<CredsRoot> {
         return Ok(legacy);
     }
 
-    let legacy_vault = load_legacy_keyring_credentials();
+    let legacy_vault = load_legacy_keyring_credentials_for_update()?;
     if legacy_vault_has_credentials(&legacy_vault) {
         save_credentials(&legacy_vault)?;
         remove_legacy_keyring_credentials();
