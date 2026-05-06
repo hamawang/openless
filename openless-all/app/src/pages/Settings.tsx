@@ -6,6 +6,7 @@ import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../components/Icon';
 import { isDialogStatus, UpdateDialog, useAutoUpdate } from '../components/AutoUpdate';
+import { detectOS } from '../components/WindowChrome';
 import { APP_VERSION_LABEL } from '../lib/appVersion';
 import { isHotkeyModeMigrationNoticeActive } from '../lib/hotkeyMigration';
 import { getHotkeyStartStopLabel, getHotkeyTriggerLabel } from '../lib/hotkey';
@@ -411,7 +412,7 @@ type AsrPresetId = typeof ASR_PRESETS[number]['id'];
 
 function ProvidersSection() {
   const { t } = useTranslation();
-  const { prefs, updatePrefs, capability } = useHotkeySettings();
+  const { prefs, updatePrefs } = useHotkeySettings();
   // `*Provider` 立即跟随 <select> 改动（受控组件必须实时反映用户输入）；
   // `committed*Provider` 才决定 CredentialField 的 key，仅在后端 active
   // 切换 + 默认值写完后再 commit。两者拆开是为了同时满足：
@@ -427,8 +428,9 @@ function ProvidersSection() {
   const asrSwitchSeqRef = useRef(0);
   const [llmModelRevision, setLlmModelRevision] = useState(0);
   const [asrModelRevision, setAsrModelRevision] = useState(0);
+  const os = detectOS();
   const visibleAsrPresets = ASR_PRESETS.filter(
-    p => p.id !== 'foundry-local-whisper' || !capability || capability.adapter === 'windowsLowLevel',
+    p => p.id !== 'foundry-local-whisper' || os === 'win',
   );
 
   useEffect(() => {
@@ -441,7 +443,7 @@ function ProvidersSection() {
     const asrId = knownAsr ? knownAsr.id : 'volcengine';
     setAsrProvider(asrId);
     setCommittedAsrProvider(asrId);
-  }, [prefs, capability]);
+  }, [prefs, os]);
 
   // issue #219 / #220 P2：
   //   1. 立刻 setLlmProvider —— 受控 <select> 必须反映用户最新选择。
