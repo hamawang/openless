@@ -414,18 +414,20 @@ fn load_legacy_credentials() -> Option<CredsRoot> {
         .and_then(|p| read_legacy_credentials_file(&p))
 }
 
-fn load_credentials() -> CredsRoot {
-    match load_keyring_credentials() {
-        Ok(Some(root)) => return root,
-        Ok(None) => {}
-        Err(e) => {
-            log::warn!("[vault] system credential read failed: {e}");
-            return load_legacy_credentials().unwrap_or_default();
+fn legacy_vault_has_credentials(root: &CredsRoot) -> bool {
+    !root.providers.asr.is_empty() || !root.providers.llm.is_empty()
+}
+
+fn migrate_legacy_sources() -> CredsRoot {
+    if let Some(legacy) = load_legacy_credentials() {
+        if let Err(e) = save_credentials(&legacy) {
+            log::warn!("[vault] legacy credential migration failed: {e}");
         }
+        return legacy;
     }
 
     let legacy_vault = load_legacy_keyring_credentials();
-    if !legacy_vault.providers.asr.is_empty() || !legacy_vault.providers.llm.is_empty() {
+    if legacy_vault_has_credentials(&legacy_vault) {
         if let Err(e) = save_credentials(&legacy_vault) {
             log::warn!("[vault] legacy vault credential migration failed: {e}");
         } else {
@@ -434,14 +436,32 @@ fn load_credentials() -> CredsRoot {
         return legacy_vault;
     }
 
-    let Some(legacy) = load_legacy_credentials() else {
-        return CredsRoot::default();
-    };
+    CredsRoot::default()
+}
 
-    if let Err(e) = save_credentials(&legacy) {
-        log::warn!("[vault] legacy credential migration failed: {e}");
+fn load_credentials() -> CredsRoot {
+    match load_keyring_credentials() {
+        Ok(Some(root)) => {
+            remove_legacy_keyring_credentials();
+            root
+        }
+        Ok(None) => migrate_legacy_sources(),
+        Err(e) => {
+            log::warn!("[vault] system credential read failed: {e}");
+            load_legacy_credentials().unwrap_or_default()
+        }
     }
-    legacy
+}
+
+fn load_credentials_for_update() -> Result<CredsRoot> {
+    match load_keyring_credentials() {
+        Ok(Some(root)) => {
+            remove_legacy_keyring_credentials();
+            Ok(root)
+        }
+        Ok(None) => Ok(migrate_legacy_sources()),
+        Err(e) => Err(e),
+    }
 }
 
 fn save_credentials(root: &CredsRoot) -> Result<()> {
@@ -866,7 +886,7 @@ impl CredentialsVault {
 
     pub fn set(account: CredentialAccount, value: &str) -> Result<()> {
         let _guard = credentials_lock().lock();
-        let mut root = load_credentials();
+        let mut root = load_credentials_for_update()?;
         let v = if value.is_empty() {
             None
         } else {
@@ -878,7 +898,7 @@ impl CredentialsVault {
 
     pub fn remove(account: CredentialAccount) -> Result<()> {
         let _guard = credentials_lock().lock();
-        let mut root = load_credentials();
+        let mut root = load_credentials_for_update()?;
         write_account(&mut root, account, None);
         save_credentials(&root)
     }
@@ -890,14 +910,14 @@ impl CredentialsVault {
 
     pub fn set_active_asr_provider(id: &str) -> Result<()> {
         let _guard = credentials_lock().lock();
-        let mut root = load_credentials();
+        let mut root = load_credentials_for_update()?;
         root.active.asr = id.to_string();
         save_credentials(&root)
     }
 
     pub fn set_active_llm_provider(id: &str) -> Result<()> {
         let _guard = credentials_lock().lock();
-        let mut root = load_credentials();
+        let mut root = load_credentials_for_update()?;
         root.active.llm = id.to_string();
         save_credentials(&root)
     }
