@@ -53,6 +53,28 @@ try {
   Copy-Item -LiteralPath (Join-Path $releaseRoot "openless.exe") -Destination (Join-Path $artifactDevRoot "openless.exe") -Force
   Copy-Item -LiteralPath (Resolve-WebView2Loader) -Destination (Join-Path $artifactDevRoot "WebView2Loader.dll") -Force
 
+  # Build OpenLessIme.dll (x64 + x86) 并导出绝对路径 env var——
+  # nsis/openless-ime-hooks.nsh 的 PREINSTALL 用 File "$%OPENLESS_IME_DLL_X64%" / _X86
+  # 在 makensis 编译时把 dll 嵌入 NSIS 包；wix/openless-ime.wxs 也用同一对 env 解析
+  # candle/light 的绝对路径（CI release-tauri.yml 同款做法）。
+  foreach ($t in @(
+    @{ Platform = 'x64';   Folder = 'x64'; EnvName = 'OPENLESS_IME_DLL_X64' },
+    @{ Platform = 'Win32'; Folder = 'x86'; EnvName = 'OPENLESS_IME_DLL_X86' }
+  )) {
+    $out = Join-Path $buildRoot "src-tauri\target\windows-ime-msvc\$($t.Folder)\Release"
+    $obj = Join-Path $buildRoot "src-tauri\target\windows-ime-msvc\obj\$($t.Folder)\Release"
+    & ./scripts/windows-ime-build.ps1 -Configuration Release -Platform $t.Platform -OutputDirectory $out -IntermediateDirectory $obj
+    if ($LASTEXITCODE -ne 0) {
+      throw "OpenLessIme $($t.Platform) build failed with exit $LASTEXITCODE"
+    }
+    $dll = (Resolve-Path (Join-Path $out 'OpenLessIme.dll')).Path
+    if (-not (Test-Path $dll)) {
+      throw "OpenLessIme.dll not produced at $dll"
+    }
+    Set-Item -Path "Env:$($t.EnvName)" -Value $dll
+    Write-Host "[ok] built $dll (exported $($t.EnvName))"
+  }
+
   npm run tauri build -- --target x86_64-pc-windows-gnu --bundles msi nsis
 } finally {
   Pop-Location
