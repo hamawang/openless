@@ -79,10 +79,6 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": {
-      "openless-ime-payload/x64/OpenLessIme.dll": "tsf-ime/x64/OpenLessIme.dll",
-      "openless-ime-payload/x86/OpenLessIme.dll": "tsf-ime/x86/OpenLessIme.dll"
-    },
     "macOS": {
       "minimumSystemVersion": "12.0",
       "infoPlist": "Info.plist",
@@ -101,10 +97,6 @@
           "OpenLessImeDllX64Component",
           "OpenLessImeDllX86Component"
         ]
-      },
-      "nsis": {
-        "installMode": "perMachine",
-        "installerHooks": "installer.nsh"
       }
     }
   },
