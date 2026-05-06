@@ -47,9 +47,14 @@ pub fn run() {
     init_file_logger();
     log::info!("=== OpenLess 启动 ===");
 
+    let foundry_local_runtime = Arc::new(asr::local::FoundryLocalRuntime::new());
+    #[cfg(target_os = "windows")]
+    let coordinator = Arc::new(coordinator::Coordinator::new_with_foundry_runtime(Arc::clone(
+        &foundry_local_runtime,
+    )));
+    #[cfg(not(target_os = "windows"))]
     let coordinator = Arc::new(coordinator::Coordinator::new());
     let local_asr_download_manager = Arc::new(asr::local::DownloadManager::new());
-    let foundry_local_runtime = Arc::new(asr::local::FoundryLocalRuntime::new());
 
     tauri::Builder::default()
         // 单实例锁：第二个进程启动时立即退出，激活信号转给已运行实例的主窗口。

@@ -20,6 +20,8 @@ use crate::asr::{
     DictionaryHotword, RawTranscript, VolcengineCredentials, VolcengineStreamingASR,
     WhisperBatchASR,
 };
+#[cfg(target_os = "windows")]
+use crate::asr::local::{foundry, FoundryLocalRuntime, FoundryLocalWhisperAsr};
 use crate::hotkey::{HotkeyEvent, HotkeyMonitor};
 use crate::insertion::TextInserter;
 use crate::persistence::{
@@ -56,6 +58,8 @@ enum SessionPhase {
 enum ActiveAsr {
     Volcengine(Arc<VolcengineStreamingASR>),
     Whisper(Arc<WhisperBatchASR>),
+    #[cfg(target_os = "windows")]
+    FoundryLocalWhisper(Arc<FoundryLocalWhisperAsr>),
     /// 本地 Qwen3-ASR；只在 macOS + 模型已下载时可达。
     #[cfg(target_os = "macos")]
     Local(Arc<crate::asr::local::LocalQwenAsr>),
@@ -145,6 +149,8 @@ struct Inner {
     /// 本地 Qwen3-ASR 引擎缓存。跨会话复用，避免每次重加载 1.2GB+ 模型。
     /// 释放时机由 prefs.local_asr_keep_loaded_secs 决定。
     local_asr_cache: Arc<crate::asr::local::LocalAsrCache>,
+    #[cfg(target_os = "windows")]
+    foundry_local_runtime: Arc<FoundryLocalRuntime>,
     recorder: Mutex<Option<SessionResource<Recorder>>>,
     recording_mute: Mutex<SharedRecordingMuteState>,
     hotkey: Mutex<Option<HotkeyMonitor>>,
@@ -221,6 +227,49 @@ struct PreparedWindowsImeSessionSlot {
 
 impl Coordinator {
     pub fn new() -> Self {
+        #[cfg(target_os = "windows")]
+        {
+            Self::new_with_foundry_runtime(Arc::new(FoundryLocalRuntime::new()))
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            let history = HistoryStore::new().unwrap_or_else(|e| {
+                log::error!("[coord] HistoryStore init failed: {e}; falling back to empty");
+                HistoryStore::new().expect("history store init")
+            });
+            let prefs = PreferencesStore::new().expect("preferences store init");
+            let vocab = DictionaryStore::new().expect("dictionary store init");
+
+            Self {
+                inner: Arc::new(Inner {
+                    app: Mutex::new(None),
+                    history,
+                    prefs,
+                    vocab,
+                    inserter: TextInserter::new(),
+                    state: Mutex::new(SessionState::default()),
+                    asr: Mutex::new(None),
+                    recorder: Mutex::new(None),
+                    recording_mute: Mutex::new(SharedRecordingMuteState::new()),
+                    hotkey: Mutex::new(None),
+                    hotkey_status: Mutex::new(HotkeyStatus::default()),
+                    hotkey_trigger_held: AtomicBool::new(false),
+                    translation_modifier_seen: AtomicBool::new(false),
+                    qa_hotkey: Mutex::new(None),
+                    qa_state: Mutex::new(QaSessionState::default()),
+                    capsule_layout: Mutex::new(None),
+                    qa_asr: Mutex::new(None),
+                    qa_recorder: Mutex::new(None),
+                    qa_stream_cancelled: Arc::new(AtomicBool::new(false)),
+                    local_asr_cache: Arc::new(crate::asr::local::LocalAsrCache::new()),
+                }),
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    pub fn new_with_foundry_runtime(foundry_local_runtime: Arc<FoundryLocalRuntime>) -> Self {
         let history = HistoryStore::new().unwrap_or_else(|e| {
             log::error!("[coord] HistoryStore init failed: {e}; falling back to empty");
             HistoryStore::new().expect("history store init")
@@ -235,9 +284,7 @@ impl Coordinator {
                 prefs,
                 vocab,
                 inserter: TextInserter::new(),
-                #[cfg(target_os = "windows")]
                 windows_ime: WindowsImeSessionController::new(),
-                #[cfg(target_os = "windows")]
                 prepared_windows_ime_session: Arc::new(Mutex::new(Vec::new())),
                 state: Mutex::new(SessionState::default()),
                 asr: Mutex::new(None),
@@ -254,6 +301,7 @@ impl Coordinator {
                 qa_recorder: Mutex::new(None),
                 qa_stream_cancelled: Arc::new(AtomicBool::new(false)),
                 local_asr_cache: Arc::new(crate::asr::local::LocalAsrCache::new()),
+                foundry_local_runtime,
             }),
         }
     }
@@ -874,6 +922,8 @@ fn cancel_active_asr(asr: ActiveAsr) {
     match asr {
         ActiveAsr::Volcengine(v) => v.cancel(),
         ActiveAsr::Whisper(w) => w.cancel(),
+        #[cfg(target_os = "windows")]
+        ActiveAsr::FoundryLocalWhisper(local) => local.cancel(),
         #[cfg(target_os = "macos")]
         ActiveAsr::Local(local) => local.cancel(),
     }
@@ -1110,22 +1160,6 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
     }
 
     let active_asr = CredentialsVault::get_active_asr();
-    if crate::asr::local::foundry::is_foundry_local_whisper(&active_asr) {
-        let message = "Windows 本地 Whisper 尚未接入听写流程，请先切换到其他 ASR 供应商".to_string();
-        log::warn!("[coord] Foundry Local Whisper selected before provider wiring");
-        emit_capsule(
-            inner,
-            CapsuleState::Error,
-            0.0,
-            0,
-            Some(message.clone()),
-            None,
-        );
-        restore_prepared_windows_ime_session(inner, current_session_id);
-        inner.state.lock().phase = SessionPhase::Idle;
-        schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
-        return Err(message);
-    }
 
     if let Err(message) = ensure_microphone_permission(inner) {
         log::warn!("[coord] microphone permission gate failed: {message}");
@@ -1144,6 +1178,36 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
     }
 
     emit_capsule(inner, CapsuleState::Recording, 0.0, 0, None, None);
+
+    #[cfg(target_os = "windows")]
+    if foundry::is_foundry_local_whisper(&active_asr) {
+        let prefs = inner.prefs.get();
+        let model_alias = if foundry::model_alias_is_known(&prefs.foundry_local_asr_model) {
+            prefs.foundry_local_asr_model.clone()
+        } else {
+            foundry::DEFAULT_MODEL_ALIAS.to_string()
+        };
+        let language_hint = prefs.foundry_local_asr_language_hint.trim().to_string();
+        let language_hint = if language_hint.is_empty() {
+            None
+        } else {
+            Some(language_hint)
+        };
+        let local = Arc::new(FoundryLocalWhisperAsr::new(
+            Arc::clone(&inner.foundry_local_runtime),
+            model_alias,
+            language_hint,
+        ));
+        store_asr_for_session(
+            inner,
+            current_session_id,
+            ActiveAsr::FoundryLocalWhisper(Arc::clone(&local)),
+        );
+        let consumer: Arc<dyn crate::recorder::AudioConsumer> = local;
+        start_recorder_and_enter_listening(inner, current_session_id, &active_asr, consumer)
+            .await?;
+        return Ok(());
+    }
 
     #[cfg(target_os = "macos")]
     if crate::asr::local::is_local_qwen3(&active_asr) {
@@ -1613,6 +1677,46 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
                     inner.state.lock().phase = SessionPhase::Idle;
                     schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
                     return Err("whisper global timeout".to_string());
+                }
+            }
+        }
+        #[cfg(target_os = "windows")]
+        ActiveAsr::FoundryLocalWhisper(local) => {
+            let timeout_duration = std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS);
+            match tokio::time::timeout(timeout_duration, local.transcribe()).await {
+                Ok(Ok(r)) => r,
+                Ok(Err(e)) => {
+                    log::error!("[coord] Foundry Local Whisper transcribe failed: {e:#}");
+                    emit_capsule(
+                        inner,
+                        CapsuleState::Error,
+                        0.0,
+                        elapsed,
+                        Some(format!("本地识别失败: {e}")),
+                        None,
+                    );
+                    restore_prepared_windows_ime_session(inner, current_session_id);
+                    inner.state.lock().phase = SessionPhase::Idle;
+                    schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
+                    return Err(e.to_string());
+                }
+                Err(_) => {
+                    log::error!(
+                        "[coord] Foundry Local Whisper 全局超时 {} 秒",
+                        COORDINATOR_GLOBAL_TIMEOUT_SECS
+                    );
+                    emit_capsule(
+                        inner,
+                        CapsuleState::Error,
+                        0.0,
+                        elapsed,
+                        Some("识别超时".to_string()),
+                        None,
+                    );
+                    restore_prepared_windows_ime_session(inner, current_session_id);
+                    inner.state.lock().phase = SessionPhase::Idle;
+                    schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
+                    return Err("foundry local global timeout".to_string());
                 }
             }
         }
@@ -3045,6 +3149,18 @@ mod tests {
         ));
         assert!(!is_whisper_compatible_provider(
             crate::asr::local::foundry::PROVIDER_ID
+        ));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn coordinator_shares_app_foundry_runtime() {
+        let runtime = Arc::new(crate::asr::local::FoundryLocalRuntime::new());
+        let coordinator = Coordinator::new_with_foundry_runtime(Arc::clone(&runtime));
+
+        assert!(Arc::ptr_eq(
+            &runtime,
+            &coordinator.inner.foundry_local_runtime
         ));
     }
 
