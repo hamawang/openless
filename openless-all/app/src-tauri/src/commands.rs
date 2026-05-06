@@ -886,6 +886,20 @@ pub fn local_asr_set_keep_loaded_secs(
     coord.prefs().set(prefs).map_err(|e| e.to_string())
 }
 
+/// 把当前会话的 openless.log 复制到用户选择的位置（前端用 plugin-dialog 拿 target_path）。
+/// 路径来自 lib::log_dir_path() —— mac: ~/Library/Logs/OpenLess/openless.log，
+/// windows: %LOCALAPPDATA%\OpenLess\Logs\openless.log。
+#[tauri::command]
+pub fn export_error_log(target_path: String) -> Result<(), String> {
+    let src = crate::log_dir_path().join("openless.log");
+    if !src.exists() {
+        return Err(format!("日志文件不存在：{}", src.display()));
+    }
+    std::fs::copy(&src, std::path::Path::new(&target_path))
+        .map(|_| ())
+        .map_err(|e| format!("复制日志失败：{}", e))
+}
+
 // ─────────────────────────── unused but exported (silences dead_code) ───────────────────────────
 
 #[allow(dead_code)]

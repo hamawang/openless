@@ -60,9 +60,10 @@ interface SettingsProps {
   initialSection?: SettingsSectionId;
 }
 
-export type SettingsSectionId = 'recording' | 'providers' | 'shortcuts' | 'permissions' | 'language' | 'about';
+// "关于" tab 已移除（内容并入外层 SettingsModal 的 About 页，避免设置内外重复入口）。
+export type SettingsSectionId = 'recording' | 'providers' | 'shortcuts' | 'permissions' | 'language';
 
-const SECTION_ORDER: SettingsSectionId[] = ['recording', 'providers', 'shortcuts', 'permissions', 'language', 'about'];
+const SECTION_ORDER: SettingsSectionId[] = ['recording', 'providers', 'shortcuts', 'permissions', 'language'];
 
 async function autostartIsEnabled(): Promise<boolean> {
   const { invoke } = await import('@tauri-apps/api/core');
@@ -140,7 +141,6 @@ export function Settings({ embedded = false, initialSection = 'recording' }: Set
           {section === 'shortcuts' && <ShortcutsSection />}
           {section === 'permissions' && <PermissionsSection />}
           {section === 'language' && <LanguageSection />}
-          {section === 'about' && <AboutSection />}
         </div>
       </div>
     </>
@@ -1144,64 +1144,7 @@ function LanguageSection() {
   );
 }
 
-function AboutSection() {
-  const { t } = useTranslation();
-  const [qqCopied, setQqCopied] = useState(false);
-  const qqCopiedRef = useRef<number | null>(null);
-
-  useEffect(() => {
-    return () => {
-      if (qqCopiedRef.current) clearTimeout(qqCopiedRef.current);
-    };
-  }, []);
-
-  const copyQq = () => {
-    navigator.clipboard?.writeText('1078960553');
-    setQqCopied(true);
-    if (qqCopiedRef.current) clearTimeout(qqCopiedRef.current);
-    qqCopiedRef.current = window.setTimeout(() => setQqCopied(false), 1500);
-  };
-
-  return (
-    <Card>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 18 }}>
-        <div
-          style={{
-            width: 52, height: 52, borderRadius: 12,
-            background: 'linear-gradient(135deg, #0a0a0b 0%, #2563eb 100%)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            color: '#fff', fontSize: 22, fontWeight: 700, letterSpacing: '-0.02em',
-          }}
-        >OL</div>
-        <div>
-          <div style={{ fontSize: 16, fontWeight: 600 }}>OpenLess</div>
-          <AboutUpdateControl tagline={t('settings.about.tagline')} />
-        </div>
-      </div>
-      <SettingRow label={t('settings.about.source')}><Btn variant="ghost" size="sm" icon="link" onClick={() => openExternal('https://github.com/appergb/openless')}>GitHub</Btn></SettingRow>
-      <SettingRow label={t('settings.about.docs')}><Btn variant="ghost" size="sm" icon="link" onClick={() => openExternal('https://github.com/appergb/openless#readme')}>README</Btn></SettingRow>
-      <SettingRow label={t('settings.about.feedback')}><Btn variant="ghost" size="sm" icon="link" onClick={() => openExternal('https://github.com/appergb/openless/issues')}>GitHub Issues</Btn></SettingRow>
-      <SettingRow label={t('settings.about.qq')} desc={t('settings.about.qqDesc')}>
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-          <kbd style={{
-            padding: '4px 10px', fontSize: 12, fontFamily: 'var(--ol-font-mono)',
-            borderRadius: 6, background: 'var(--ol-surface-2)',
-            border: '0.5px solid var(--ol-line-strong)',
-            boxShadow: '0 1px 0 rgba(0,0,0,0.04)',
-            color: 'var(--ol-ink-2)',
-          }}>1078960553</kbd>
-          <button onClick={copyQq} title={t('settings.about.copyQq')} style={iconBtnStyle}>
-            <Icon name="copy" size={14} />
-          </button>
-          {qqCopied && <span style={{ fontSize: 11, color: 'var(--ol-ok)', whiteSpace: 'nowrap' }}>{t('common.copied')}</span>}
-        </div>
-      </SettingRow>
-      <SettingRow label={t('settings.about.privacy')} desc={t('settings.about.privacyDesc')}>
-        <Pill tone="default">{t('settings.about.localFirst')}</Pill>
-      </SettingRow>
-    </Card>
-  );
-}
+// AboutSection 已移除：内容并入 SettingsModal 的 AboutMini，避免设置内外两个"关于"重复入口。
 
 export function AboutUpdateControl({ tagline }: { tagline: string }) {
   const { t } = useTranslation();
