@@ -116,7 +116,7 @@ if (!/const hostMetrics = getCapsuleHostMetrics\(os,\s*translation\);/.test(caps
   throw new Error('capsule should derive host metrics from the shared layout contract');
 }
 
-if (!/justifyContent:\s*'center'/.test(capsuleTsx)) {
+if (!/return\s*\(\s*<div\s*style=\{\{[\s\S]*?width:\s*'100%',[\s\S]*?height:\s*'100%',[\s\S]*?position:\s*'relative',[\s\S]*?display:\s*'flex',[\s\S]*?alignItems:\s*'center',[\s\S]*?justifyContent:\s*'center',[\s\S]*?paddingLeft:\s*hostMetrics\.horizontalInset,[\s\S]*?paddingRight:\s*hostMetrics\.horizontalInset,[\s\S]*?\}\}/.test(capsuleTsx)) {
   throw new Error('capsule host should center the pill within the shared layout contract');
 }
 
