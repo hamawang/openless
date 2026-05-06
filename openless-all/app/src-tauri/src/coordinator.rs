@@ -1716,9 +1716,13 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
         #[cfg(target_os = "windows")]
         ActiveAsr::FoundryLocalWhisper(local) => {
             debug_assert!(!uses_global_timeout);
-            match local.transcribe().await {
-                Ok(r) => r,
-                Err(e) => {
+            let timeout_duration = foundry_transcribe_timeout_duration();
+            match tokio::time::timeout(timeout_duration, local.transcribe()).await {
+                Ok(Ok(r)) => {
+                    schedule_foundry_local_asr_release(inner, current_session_id);
+                    r
+                }
+                Ok(Err(e)) => {
                     log::error!("[coord] Foundry Local Whisper transcribe failed: {e:#}");
                     emit_capsule(
                         inner,
@@ -1732,6 +1736,26 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
                     inner.state.lock().phase = SessionPhase::Idle;
                     schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
                     return Err(e.to_string());
+                }
+                Err(_) => {
+                    log::error!(
+                        "[coord] Foundry Local Whisper timeout after {} seconds",
+                        FOUNDRY_LOCAL_TRANSCRIBE_TIMEOUT_SECS
+                    );
+                    local.cancel();
+                    schedule_foundry_local_asr_release(inner, current_session_id);
+                    emit_capsule(
+                        inner,
+                        CapsuleState::Error,
+                        0.0,
+                        elapsed,
+                        Some("本地识别超时".to_string()),
+                        None,
+                    );
+                    restore_prepared_windows_ime_session(inner, current_session_id);
+                    inner.state.lock().phase = SessionPhase::Idle;
+                    schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
+                    return Err("foundry local timeout".to_string());
                 }
             }
         }
@@ -2368,6 +2392,24 @@ fn schedule_local_asr_release(inner: &Arc<Inner>) {
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(dur).await;
         cache.release_if_idle(dur);
+    });
+}
+
+#[cfg(target_os = "windows")]
+fn schedule_foundry_local_asr_release(inner: &Arc<Inner>, session_id: u64) {
+    let keep_secs = inner.prefs.get().local_asr_keep_loaded_secs;
+    let runtime = Arc::clone(&inner.foundry_local_runtime);
+    let inner = Arc::clone(inner);
+    tauri::async_runtime::spawn(async move {
+        if keep_secs > 0 {
+            tokio::time::sleep(std::time::Duration::from_secs(keep_secs as u64)).await;
+            if inner.state.lock().session_id != session_id {
+                return;
+            }
+        }
+        if let Err(error) = runtime.release_now().await {
+            log::warn!("[foundry-asr] scheduled release failed: {error:#}");
+        }
     });
 }
 
@@ -3212,6 +3254,15 @@ mod tests {
         assert!(!asr_transcribe_uses_global_timeout(&active_asr));
     }
 
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn foundry_transcribe_has_finite_extended_timeout() {
+        let timeout = foundry_transcribe_timeout_duration();
+
+        assert!(timeout > std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS));
+        assert!(timeout <= std::time::Duration::from_secs(15 * 60));
+    }
+
     #[test]
     fn resolve_ark_endpoint_rejects_blank_key_without_custom_endpoint() {
         assert_eq!(
@@ -3526,6 +3577,14 @@ const CAPSULE_AUTO_HIDE_DELAY_MS: u64 = 2000;
 /// 设置为 15 秒（比 ASR 的 12 秒 FINAL_RESULT_TIMEOUT 稍长），
 /// 只在 ASR 超时机制失效时作为最后的防线触发。
 const COORDINATOR_GLOBAL_TIMEOUT_SECS: u64 = 15;
+
+#[cfg(target_os = "windows")]
+const FOUNDRY_LOCAL_TRANSCRIBE_TIMEOUT_SECS: u64 = 10 * 60;
+
+#[cfg(target_os = "windows")]
+fn foundry_transcribe_timeout_duration() -> std::time::Duration {
+    std::time::Duration::from_secs(FOUNDRY_LOCAL_TRANSCRIBE_TIMEOUT_SECS)
+}
 
 /// begin_session 中各 await 之间的 cancel race 检查结果。
 enum BeginOutcome {
