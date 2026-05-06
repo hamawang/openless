@@ -64,7 +64,7 @@ features = ["windows-native"]
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies.keyring]
 version = "3.6.3"
 default-features = false
-features = ["linux-native"]
+features = ["linux-native-sync-persistent", "crypto-rust"]
 
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.5"

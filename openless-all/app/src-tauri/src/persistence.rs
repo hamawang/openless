@@ -426,25 +426,43 @@ fn legacy_vault_has_credentials(root: &CredsRoot) -> bool {
     !root.providers.asr.is_empty() || !root.providers.llm.is_empty()
 }
 
-fn migrate_legacy_sources() -> CredsRoot {
+fn load_legacy_sources_without_migration() -> CredsRoot {
     if let Some(legacy) = load_legacy_credentials() {
-        if let Err(e) = save_credentials(&legacy) {
-            log::warn!("[vault] legacy credential migration failed: {e}");
-        }
         return legacy;
     }
 
     let legacy_vault = load_legacy_keyring_credentials();
     if legacy_vault_has_credentials(&legacy_vault) {
-        if let Err(e) = save_credentials(&legacy_vault) {
-            log::warn!("[vault] legacy vault credential migration failed: {e}");
-        } else {
-            remove_legacy_keyring_credentials();
-        }
         return legacy_vault;
     }
 
     CredsRoot::default()
+}
+
+fn migrate_legacy_sources() -> CredsRoot {
+    match migrate_legacy_sources_for_update() {
+        Ok(root) => root,
+        Err(e) => {
+            log::warn!("[vault] legacy credential migration failed: {e}");
+            load_legacy_sources_without_migration()
+        }
+    }
+}
+
+fn migrate_legacy_sources_for_update() -> Result<CredsRoot> {
+    if let Some(legacy) = load_legacy_credentials() {
+        save_credentials(&legacy)?;
+        return Ok(legacy);
+    }
+
+    let legacy_vault = load_legacy_keyring_credentials();
+    if legacy_vault_has_credentials(&legacy_vault) {
+        save_credentials(&legacy_vault)?;
+        remove_legacy_keyring_credentials();
+        return Ok(legacy_vault);
+    }
+
+    Ok(CredsRoot::default())
 }
 
 fn load_credentials() -> CredsRoot {
@@ -457,7 +475,7 @@ fn load_credentials() -> CredsRoot {
         Ok(None) => migrate_legacy_sources(),
         Err(e) => {
             log::warn!("[vault] system credential read failed: {e}");
-            load_legacy_credentials().unwrap_or_default()
+            load_legacy_sources_without_migration()
         }
     }
 }
@@ -469,7 +487,7 @@ fn load_credentials_for_update() -> Result<CredsRoot> {
             remove_legacy_credentials_file()?;
             Ok(root)
         }
-        Ok(None) => Ok(migrate_legacy_sources()),
+        Ok(None) => migrate_legacy_sources_for_update(),
         Err(e) => Err(e),
     }
 }
