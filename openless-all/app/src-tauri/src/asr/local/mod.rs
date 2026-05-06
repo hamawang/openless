@@ -6,11 +6,14 @@
 pub mod cache;
 pub mod download;
 pub mod foundry;
+pub mod foundry_runtime;
 mod local_provider;
 pub mod models;
 pub mod test_run;
 
 pub use cache::LocalAsrCache;
+#[allow(unused_imports)]
+pub use foundry_runtime::FoundryLocalRuntime;
 
 #[cfg(target_os = "macos")]
 mod qwen_engine;

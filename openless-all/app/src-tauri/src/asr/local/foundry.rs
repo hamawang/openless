@@ -46,6 +46,32 @@ pub fn default_language_hint() -> Option<String> {
     None
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+pub struct FoundryRuntimeStatus {
+    pub provider_id: String,
+    pub available: bool,
+    pub active_model: String,
+    pub loaded_model_id: Option<String>,
+    pub endpoint: Option<String>,
+    pub error: Option<String>,
+}
+
+impl FoundryRuntimeStatus {
+    #[allow(dead_code)]
+    pub fn unavailable(active_model: String, error: impl Into<String>) -> Self {
+        Self {
+            provider_id: PROVIDER_ID.into(),
+            available: false,
+            active_model,
+            loaded_model_id: None,
+            endpoint: None,
+            error: Some(error.into()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -59,5 +85,17 @@ mod tests {
     #[test]
     fn default_model_is_registered() {
         assert!(model_alias_is_known(DEFAULT_MODEL_ALIAS));
+    }
+
+    #[test]
+    fn unavailable_runtime_status_uses_native_audio_shape() {
+        let status = FoundryRuntimeStatus::unavailable("whisper-base".to_string(), "not ready");
+
+        assert_eq!(status.provider_id, PROVIDER_ID);
+        assert!(!status.available);
+        assert_eq!(status.active_model, "whisper-base");
+        assert_eq!(status.loaded_model_id, None);
+        assert_eq!(status.endpoint, None);
+        assert_eq!(status.error.as_deref(), Some("not ready"));
     }
 }
