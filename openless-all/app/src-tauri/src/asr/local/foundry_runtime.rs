@@ -55,14 +55,25 @@ mod imp {
         }
 
         pub fn status_snapshot(&self, active_model: &str) -> FoundryRuntimeStatus {
-            let state = self.state.lock();
-            FoundryRuntimeStatus {
-                provider_id: PROVIDER_ID.into(),
-                available: true,
-                active_model: active_model.to_string(),
-                loaded_model_id: state.loaded.as_ref().map(|loaded| loaded.model_id.clone()),
-                endpoint: None,
-                error: None,
+            match self.manager() {
+                Ok(_) => {
+                    let state = self.state.lock();
+                    FoundryRuntimeStatus {
+                        provider_id: PROVIDER_ID.into(),
+                        available: true,
+                        active_model: active_model.to_string(),
+                        loaded_model_id: state
+                            .loaded
+                            .as_ref()
+                            .map(|loaded| loaded.model_id.clone()),
+                        endpoint: None,
+                        error: None,
+                    }
+                }
+                Err(error) => FoundryRuntimeStatus::unavailable(
+                    active_model.to_string(),
+                    format!("Foundry Local runtime unavailable: {error:#}"),
+                ),
             }
         }
 
@@ -459,6 +470,11 @@ mod tests {
         assert_eq!(status.active_model, "whisper-small");
         assert_eq!(status.loaded_model_id, None);
         assert_eq!(status.endpoint, None);
+        if status.available {
+            assert_eq!(status.error, None);
+        } else {
+            assert!(status.error.is_some());
+        }
     }
 
     #[tokio::test]

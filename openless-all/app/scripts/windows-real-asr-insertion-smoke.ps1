@@ -135,9 +135,240 @@ function Set-HoldHotkeyPreference($Path) {
   return $previous
 }
 
+function Ensure-OpenLessCredentialNative {
+  if ("OpenLessCredentialNative" -as [type]) {
+    return
+  }
+
+  Add-Type @"
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+
+public static class OpenLessCredentialNative {
+  [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  public static extern bool CredRead(string target, UInt32 type, UInt32 reservedFlag, out IntPtr credentialPtr);
+
+  [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  public static extern bool CredWrite(ref OpenLessCredentialNativeCredential credential, UInt32 flags);
+
+  [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  public static extern bool CredDelete(string target, UInt32 type, UInt32 flags);
+
+  [DllImport("advapi32.dll", SetLastError = true)]
+  public static extern void CredFree(IntPtr buffer);
+}
+
+[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+public struct OpenLessCredentialNativeCredential {
+  public UInt32 Flags;
+  public UInt32 Type;
+  public string TargetName;
+  public string Comment;
+  public System.Runtime.InteropServices.ComTypes.FILETIME LastWritten;
+  public UInt32 CredentialBlobSize;
+  public IntPtr CredentialBlob;
+  public UInt32 Persist;
+  public UInt32 AttributeCount;
+  public IntPtr Attributes;
+  public string TargetAlias;
+  public string UserName;
+}
+"@
+}
+
+function Get-OpenLessCredentialTarget($Account) {
+  return "$Account.com.openless.app"
+}
+
+function Get-OpenLessKeyringPassword($Account) {
+  Ensure-OpenLessCredentialNative
+  $target = Get-OpenLessCredentialTarget $Account
+  $ptr = [IntPtr]::Zero
+  $ok = [OpenLessCredentialNative]::CredRead($target, 1, 0, [ref]$ptr)
+  if (-not $ok) {
+    $errorCode = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+    if ($errorCode -eq 1168) {
+      return $null
+    }
+    throw (New-Object ComponentModel.Win32Exception($errorCode, "Read Windows Credential Manager entry $target failed"))
+  }
+
+  try {
+    $credential = [Runtime.InteropServices.Marshal]::PtrToStructure($ptr, [type][OpenLessCredentialNativeCredential])
+    if ($credential.CredentialBlobSize -eq 0) {
+      return ""
+    }
+    $bytes = New-Object byte[] $credential.CredentialBlobSize
+    [Runtime.InteropServices.Marshal]::Copy($credential.CredentialBlob, $bytes, 0, $bytes.Length)
+    return [Text.Encoding]::Unicode.GetString($bytes)
+  } finally {
+    [OpenLessCredentialNative]::CredFree($ptr)
+  }
+}
+
+function Set-OpenLessKeyringPassword($Account, $Password) {
+  Ensure-OpenLessCredentialNative
+  $target = Get-OpenLessCredentialTarget $Account
+  $bytes = [Text.Encoding]::Unicode.GetBytes($Password)
+  $blob = [IntPtr]::Zero
+  if ($bytes.Length -gt 0) {
+    $blob = [Runtime.InteropServices.Marshal]::AllocHGlobal($bytes.Length)
+    [Runtime.InteropServices.Marshal]::Copy($bytes, 0, $blob, $bytes.Length)
+  }
+
+  try {
+    $credential = [OpenLessCredentialNativeCredential]::new()
+    $credential.Flags = 0
+    $credential.Type = 1
+    $credential.TargetName = $target
+    $credential.Comment = "keyring v3.6.3"
+    $credential.CredentialBlobSize = $bytes.Length
+    $credential.CredentialBlob = $blob
+    $credential.Persist = 3
+    $credential.AttributeCount = 0
+    $credential.Attributes = [IntPtr]::Zero
+    $credential.TargetAlias = ""
+    $credential.UserName = $Account
+    $ok = [OpenLessCredentialNative]::CredWrite([ref]$credential, 0)
+    if (-not $ok) {
+      $errorCode = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+      throw (New-Object ComponentModel.Win32Exception($errorCode, "Write Windows Credential Manager entry $target failed"))
+    }
+  } finally {
+    if ($blob -ne [IntPtr]::Zero) {
+      [Runtime.InteropServices.Marshal]::FreeHGlobal($blob)
+    }
+  }
+}
+
+function Remove-OpenLessKeyringPassword($Account) {
+  Ensure-OpenLessCredentialNative
+  $target = Get-OpenLessCredentialTarget $Account
+  $ok = [OpenLessCredentialNative]::CredDelete($target, 1, 0)
+  if (-not $ok) {
+    $errorCode = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+    if ($errorCode -ne 1168) {
+      throw (New-Object ComponentModel.Win32Exception($errorCode, "Delete Windows Credential Manager entry $target failed"))
+    }
+  }
+}
+
+function Split-OpenLessCredentialJson($Json) {
+  $chunks = @()
+  for ($start = 0; $start -lt $Json.Length; $start += 1000) {
+    $len = [Math]::Min(1000, $Json.Length - $start)
+    $chunks += $Json.Substring($start, $len)
+  }
+  if ($chunks.Count -eq 0) {
+    $chunks += ""
+  }
+  return $chunks
+}
+
+function Get-OpenLessVaultCredentials {
+  $manifestText = Get-OpenLessKeyringPassword "credentials.v1"
+  if ([string]::IsNullOrWhiteSpace($manifestText)) {
+    return $null
+  }
+  $manifest = $manifestText | ConvertFrom-Json
+  if ($manifest.openless_credentials_storage -ne "chunked" -or $manifest.version -ne 1) {
+    throw "Unsupported OpenLess credential vault manifest."
+  }
+
+  $json = ""
+  for ($i = 0; $i -lt [int]$manifest.chunks; $i++) {
+    $chunkAccount = if ($null -ne $manifest.PSObject.Properties["generation"] -and -not [string]::IsNullOrWhiteSpace($manifest.generation)) {
+      "credentials.v1.chunk.$($manifest.generation).$i"
+    } else {
+      "credentials.v1.chunk.$i"
+    }
+    $chunk = Get-OpenLessKeyringPassword $chunkAccount
+    if ($null -eq $chunk) {
+      throw "Missing OpenLess credential vault chunk $i."
+    }
+    $json += $chunk
+  }
+  return $json
+}
+
+function Set-OpenLessVaultCredentials($Json, $PreviousManifestJson) {
+  $previousManifest = $null
+  if (-not [string]::IsNullOrWhiteSpace($PreviousManifestJson)) {
+    $previousManifest = $PreviousManifestJson | ConvertFrom-Json
+  }
+
+  $chunks = Split-OpenLessCredentialJson $Json
+  for ($i = 0; $i -lt $chunks.Count; $i++) {
+    Set-OpenLessKeyringPassword "credentials.v1.chunk.$i" $chunks[$i]
+  }
+
+  $manifest = [pscustomobject]@{
+    openless_credentials_storage = "chunked"
+    version = 1
+    chunks = $chunks.Count
+  }
+  Set-OpenLessKeyringPassword "credentials.v1" ($manifest | ConvertTo-Json -Compress)
+
+  if ($null -ne $previousManifest -and $null -ne $previousManifest.PSObject.Properties["chunks"]) {
+    if ($null -ne $previousManifest.PSObject.Properties["generation"] -and -not [string]::IsNullOrWhiteSpace($previousManifest.generation)) {
+      for ($i = 0; $i -lt [int]$previousManifest.chunks; $i++) {
+        Remove-OpenLessKeyringPassword "credentials.v1.chunk.$($previousManifest.generation).$i"
+      }
+    } else {
+      for ($i = $chunks.Count; $i -lt [int]$previousManifest.chunks; $i++) {
+        Remove-OpenLessKeyringPassword "credentials.v1.chunk.$i"
+      }
+    }
+  }
+}
+
+function Restore-ActiveAsrCredential($Snapshot, $Path) {
+  if ($null -eq $Snapshot) {
+    return
+  }
+  if ($Snapshot.HadVault) {
+    $manifest = $Snapshot.VaultManifestJson | ConvertFrom-Json
+    $chunks = Split-OpenLessCredentialJson $Snapshot.VaultJson
+    $usesGeneratedChunks = $null -ne $manifest.PSObject.Properties["generation"] -and -not [string]::IsNullOrWhiteSpace($manifest.generation)
+    for ($i = 0; $i -lt $chunks.Count; $i++) {
+      $account = if ($usesGeneratedChunks) {
+        "credentials.v1.chunk.$($manifest.generation).$i"
+      } else {
+        "credentials.v1.chunk.$i"
+      }
+      Set-OpenLessKeyringPassword $account $chunks[$i]
+    }
+    Set-OpenLessKeyringPassword "credentials.v1" $Snapshot.VaultManifestJson
+    if ($usesGeneratedChunks) {
+      for ($i = 0; $i -lt $Snapshot.WrittenVaultChunks; $i++) {
+        Remove-OpenLessKeyringPassword "credentials.v1.chunk.$i"
+      }
+    } else {
+      for ($i = $chunks.Count; $i -lt $Snapshot.WrittenVaultChunks; $i++) {
+        Remove-OpenLessKeyringPassword "credentials.v1.chunk.$i"
+      }
+    }
+  } else {
+    Remove-OpenLessKeyringPassword "credentials.v1"
+    for ($i = 0; $i -lt $Snapshot.WrittenVaultChunks; $i++) {
+      Remove-OpenLessKeyringPassword "credentials.v1.chunk.$i"
+    }
+  }
+
+  if ($null -eq $Snapshot.LegacyJson) {
+    Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+  } else {
+    Write-TextUtf8 $Path $Snapshot.LegacyJson
+  }
+}
+
 function Set-ActiveAsrCredential($Path) {
-  $previous = Read-TextUtf8 $Path
-  if ([string]::IsNullOrWhiteSpace($previous)) {
+  $previousLegacy = Read-TextUtf8 $Path
+  $previousManifest = Get-OpenLessKeyringPassword "credentials.v1"
+  $previousVault = Get-OpenLessVaultCredentials
+  $source = if (-not [string]::IsNullOrWhiteSpace($previousVault)) { $previousVault } else { $previousLegacy }
+  if ([string]::IsNullOrWhiteSpace($source)) {
     $credentials = [pscustomobject]@{
       version = 1
       active = [pscustomobject]@{
@@ -150,7 +381,7 @@ function Set-ActiveAsrCredential($Path) {
       }
     }
   } else {
-    $credentials = $previous | ConvertFrom-Json
+    $credentials = $source | ConvertFrom-Json
     if ($null -eq $credentials.PSObject.Properties["active"]) {
       $credentials | Add-Member -NotePropertyName active -NotePropertyValue ([pscustomobject]@{})
     } elseif ($null -eq $credentials.active) {
@@ -180,8 +411,19 @@ function Set-ActiveAsrCredential($Path) {
       $credentials.providers.llm = [pscustomobject]@{}
     }
   }
-  Write-TextUtf8 $Path ($credentials | ConvertTo-Json -Depth 12)
-  return $previous
+  $json = $credentials | ConvertTo-Json -Depth 12 -Compress
+  $chunks = Split-OpenLessCredentialJson $json
+  Set-OpenLessVaultCredentials $json $previousManifest
+  if ([string]::IsNullOrWhiteSpace($previousVault)) {
+    Write-TextUtf8 $Path ($credentials | ConvertTo-Json -Depth 12)
+  }
+  return [pscustomobject]@{
+    LegacyJson = $previousLegacy
+    VaultJson = $previousVault
+    VaultManifestJson = $previousManifest
+    HadVault = -not [string]::IsNullOrWhiteSpace($previousVault)
+    WrittenVaultChunks = $chunks.Count
+  }
 }
 
 function Wait-LogPattern($Path, $Pattern, $TimeoutSeconds) {
@@ -818,11 +1060,7 @@ try {
     }
   }
   if ($credentialsRewritten) {
-    if ($null -eq $previousCredentials) {
-      Remove-Item -LiteralPath $credentialsPath -Force -ErrorAction SilentlyContinue
-    } else {
-      Write-TextUtf8 $credentialsPath $previousCredentials
-    }
+    Restore-ActiveAsrCredential $previousCredentials $credentialsPath
   }
   if ($clipboardCaptured) {
     Restore-ClipboardValue $previousClipboard
