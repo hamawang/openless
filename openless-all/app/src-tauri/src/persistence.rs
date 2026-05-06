@@ -300,12 +300,20 @@ fn read_legacy_credentials_file(path: &Path) -> Option<CredsRoot> {
     }
 }
 
-fn remove_legacy_credentials_file() {
-    let Ok(path) = credentials_path() else { return };
+fn remove_legacy_credentials_file() -> Result<()> {
+    let Ok(path) = credentials_path() else {
+        return Ok(());
+    };
     if path.exists() {
-        if let Err(e) = fs::remove_file(&path) {
-            log::warn!("[vault] remove legacy {} failed: {}", path.display(), e);
-        }
+        fs::remove_file(&path)
+            .with_context(|| format!("remove legacy credentials file {}", path.display()))?;
+    }
+    Ok(())
+}
+
+fn remove_legacy_credentials_file_best_effort() {
+    if let Err(e) = remove_legacy_credentials_file() {
+        log::warn!("[vault] remove legacy credentials file failed: {e}");
     }
 }
 
@@ -443,6 +451,7 @@ fn load_credentials() -> CredsRoot {
     match load_keyring_credentials() {
         Ok(Some(root)) => {
             remove_legacy_keyring_credentials();
+            remove_legacy_credentials_file_best_effort();
             root
         }
         Ok(None) => migrate_legacy_sources(),
@@ -457,6 +466,7 @@ fn load_credentials_for_update() -> Result<CredsRoot> {
     match load_keyring_credentials() {
         Ok(Some(root)) => {
             remove_legacy_keyring_credentials();
+            remove_legacy_credentials_file()?;
             Ok(root)
         }
         Ok(None) => Ok(migrate_legacy_sources()),
@@ -501,7 +511,7 @@ fn save_credentials(root: &CredsRoot) -> Result<()> {
         }
     }
 
-    remove_legacy_credentials_file();
+    remove_legacy_credentials_file()?;
     Ok(())
 }
 
