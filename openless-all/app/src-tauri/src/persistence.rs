@@ -313,11 +313,12 @@ fn remove_legacy_credentials_file() {
 struct CredsChunkManifest {
     openless_credentials_storage: String,
     version: u32,
+    generation: String,
     chunks: usize,
 }
 
-fn chunk_account(index: usize) -> String {
-    format!("{KEYRING_CREDENTIALS_CHUNK_PREFIX}{index}")
+fn chunk_account(generation: &str, index: usize) -> String {
+    format!("{KEYRING_CREDENTIALS_CHUNK_PREFIX}{generation}.{index}")
 }
 
 fn chunk_json_payload(json: &str) -> Vec<String> {
@@ -377,7 +378,7 @@ fn load_keyring_credentials() -> Result<Option<CredsRoot>> {
         .ok_or_else(|| anyhow!("invalid system credential vault manifest"))?;
     let mut json = String::new();
     for index in 0..manifest.chunks {
-        let account = chunk_account(index);
+        let account = chunk_account(&manifest.generation, index);
         let chunk = get_keyring_password(&account)?
             .ok_or_else(|| anyhow!("missing system credential vault chunk {index}"))?;
         json.push_str(&chunk);
@@ -386,6 +387,25 @@ fn load_keyring_credentials() -> Result<Option<CredsRoot>> {
     serde_json::from_str::<CredsRoot>(&json)
         .map(Some)
         .context("decode system credential vault payload")
+}
+
+fn load_legacy_keyring_credentials() -> CredsRoot {
+    let mut root = CredsRoot::default();
+    for account in CredentialAccount::all() {
+        let legacy_account = account.keyring_account();
+        match get_keyring_password(legacy_account) {
+            Ok(Some(value)) => write_account(&mut root, *account, Some(value)),
+            Ok(None) => {}
+            Err(e) => log::warn!("[vault] read legacy vault {legacy_account} failed: {e}"),
+        }
+    }
+    clean_credentials(&root)
+}
+
+fn remove_legacy_keyring_credentials() {
+    for account in CredentialAccount::all() {
+        delete_keyring_password(account.keyring_account());
+    }
 }
 
 fn load_legacy_credentials() -> Option<CredsRoot> {
@@ -404,6 +424,16 @@ fn load_credentials() -> CredsRoot {
         }
     }
 
+    let legacy_vault = load_legacy_keyring_credentials();
+    if !legacy_vault.providers.asr.is_empty() || !legacy_vault.providers.llm.is_empty() {
+        if let Err(e) = save_credentials(&legacy_vault) {
+            log::warn!("[vault] legacy vault credential migration failed: {e}");
+        } else {
+            remove_legacy_keyring_credentials();
+        }
+        return legacy_vault;
+    }
+
     let Some(legacy) = load_legacy_credentials() else {
         return CredsRoot::default();
     };
@@ -417,16 +447,15 @@ fn load_credentials() -> CredsRoot {
 fn save_credentials(root: &CredsRoot) -> Result<()> {
     let cleaned = clean_credentials(root);
     let json = serde_json::to_string(&cleaned).context("encode credentials failed")?;
-    let previous_chunk_count = get_keyring_password(KEYRING_CREDENTIALS_ACCOUNT)
+    let previous_manifest = get_keyring_password(KEYRING_CREDENTIALS_ACCOUNT)
         .ok()
         .flatten()
-        .and_then(|value| read_chunk_manifest(&value))
-        .map(|manifest| manifest.chunks)
-        .unwrap_or(0);
+        .and_then(|value| read_chunk_manifest(&value));
     let chunks = chunk_json_payload(&json);
+    let generation = Uuid::new_v4().to_string();
 
     for (index, chunk) in chunks.iter().enumerate() {
-        let account = chunk_account(index);
+        let account = chunk_account(&generation, index);
         keyring_entry_for(&account)?
             .set_password(chunk)
             .with_context(|| format!("write system credential vault chunk {index}"))?;
@@ -435,6 +464,7 @@ fn save_credentials(root: &CredsRoot) -> Result<()> {
     let manifest = CredsChunkManifest {
         openless_credentials_storage: "chunked".to_string(),
         version: 1,
+        generation: generation.clone(),
         chunks: chunks.len(),
     };
     let manifest_json =
@@ -443,8 +473,12 @@ fn save_credentials(root: &CredsRoot) -> Result<()> {
         .set_password(&manifest_json)
         .context("write system credential vault manifest")?;
 
-    for index in chunks.len()..previous_chunk_count {
-        delete_keyring_password(&chunk_account(index));
+    if let Some(previous) = previous_manifest {
+        if previous.generation != generation {
+            for index in 0..previous.chunks {
+                delete_keyring_password(&chunk_account(&previous.generation, index));
+            }
+        }
     }
 
     remove_legacy_credentials_file();
