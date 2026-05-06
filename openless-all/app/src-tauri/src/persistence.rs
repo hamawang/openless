@@ -321,12 +321,21 @@ fn remove_legacy_credentials_file_best_effort() {
 struct CredsChunkManifest {
     openless_credentials_storage: String,
     version: u32,
-    generation: String,
+    /// 旧版本（v1 早期）每次 save 都生成新 UUID 作为 chunk account 命名前缀，
+    /// 这让 macOS Keychain 的「始终允许」每次保存后失效 → 反复弹 ACL 弹窗。
+    /// 现在 save 总用稳定 chunk.{index} 名，此字段仅向后兼容旧 manifest 读取。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    generation: Option<String>,
     chunks: usize,
 }
 
-fn chunk_account(generation: &str, index: usize) -> String {
-    format!("{KEYRING_CREDENTIALS_CHUNK_PREFIX}{generation}.{index}")
+/// 旧版（generation=Some）：`credentials.v1.chunk.<UUID>.{index}`
+/// 新版（generation=None）：`credentials.v1.chunk.{index}` —— 稳定名，ACL 长期有效
+fn chunk_account(generation: Option<&str>, index: usize) -> String {
+    match generation {
+        Some(gen) => format!("{KEYRING_CREDENTIALS_CHUNK_PREFIX}{gen}.{index}"),
+        None => format!("{KEYRING_CREDENTIALS_CHUNK_PREFIX}{index}"),
+    }
 }
 
 fn chunk_json_payload(json: &str) -> Vec<String> {
@@ -386,7 +395,7 @@ fn load_keyring_credentials() -> Result<Option<CredsRoot>> {
         .ok_or_else(|| anyhow!("invalid system credential vault manifest"))?;
     let mut json = String::new();
     for index in 0..manifest.chunks {
-        let account = chunk_account(&manifest.generation, index);
+        let account = chunk_account(manifest.generation.as_deref(), index);
         let chunk = get_keyring_password(&account)?
             .ok_or_else(|| anyhow!("missing system credential vault chunk {index}"))?;
         json.push_str(&chunk);
@@ -479,7 +488,12 @@ fn migrate_legacy_sources_for_update() -> Result<CredsRoot> {
 fn load_credentials() -> CredsRoot {
     match load_keyring_credentials() {
         Ok(Some(root)) => {
-            remove_legacy_keyring_credentials();
+            // 不在这里调 remove_legacy_keyring_credentials() —— 它内部对 9 个
+            // 旧 account 各做一次 keyring delete，每次 delete 在 macOS Keychain
+            // 上仍要触发 ACL 检查。第一次成功 load 时 legacy entries 通常已经
+            // 被 migrate_legacy_sources_for_update 清理过了；这里若再无脑跑，
+            // 只会反复弹「OpenLess 想删除 X」十几次。文件 legacy（plaintext
+            // JSON）不需要 ACL，可继续 best-effort 删除。
             remove_legacy_credentials_file_best_effort();
             root
         }
@@ -494,7 +508,8 @@ fn load_credentials() -> CredsRoot {
 fn load_credentials_for_update() -> Result<CredsRoot> {
     match load_keyring_credentials() {
         Ok(Some(root)) => {
-            remove_legacy_keyring_credentials();
+            // 同 load_credentials：不再每次 update 都尝试 delete legacy keyring
+            // entries，避免反复触发 macOS Keychain ACL 弹窗。
             remove_legacy_credentials_file_best_effort();
             Ok(root)
         }
@@ -511,10 +526,13 @@ fn save_credentials(root: &CredsRoot) -> Result<()> {
         .flatten()
         .and_then(|value| read_chunk_manifest(&value));
     let chunks = chunk_json_payload(&json);
-    let generation = Uuid::new_v4().to_string();
 
+    // 先写所有 chunks（稳定名），再写 manifest —— 保证 partial-write 不会让
+    // manifest 指向不完整 chunks。stable name 让 macOS Keychain ACL 一次允许后
+    // 长期有效，不再因 UUID 轮换反复弹窗（这是 PR #277 早期 UUID-rotation
+    // 设计的回退）。
     for (index, chunk) in chunks.iter().enumerate() {
-        let account = chunk_account(&generation, index);
+        let account = chunk_account(None, index);
         keyring_entry_for(&account)?
             .set_password(chunk)
             .with_context(|| format!("write system credential vault chunk {index}"))?;
@@ -523,7 +541,7 @@ fn save_credentials(root: &CredsRoot) -> Result<()> {
     let manifest = CredsChunkManifest {
         openless_credentials_storage: "chunked".to_string(),
         version: 1,
-        generation: generation.clone(),
+        generation: None,
         chunks: chunks.len(),
     };
     let manifest_json =
@@ -532,10 +550,20 @@ fn save_credentials(root: &CredsRoot) -> Result<()> {
         .set_password(&manifest_json)
         .context("write system credential vault manifest")?;
 
+    // 清理旧 chunks：
+    // 1) 旧 manifest 用 UUID generation → 那一代 chunks 全删（迁移到 stable name）
+    // 2) 旧 manifest 也是 stable name，但 chunks 数量比这次多 → 删多余的 idx
     if let Some(previous) = previous_manifest {
-        if previous.generation != generation {
-            for index in 0..previous.chunks {
-                delete_keyring_password(&chunk_account(&previous.generation, index));
+        match previous.generation.as_deref() {
+            Some(prev_gen) => {
+                for index in 0..previous.chunks {
+                    delete_keyring_password(&chunk_account(Some(prev_gen), index));
+                }
+            }
+            None => {
+                for index in chunks.len()..previous.chunks {
+                    delete_keyring_password(&chunk_account(None, index));
+                }
             }
         }
     }
