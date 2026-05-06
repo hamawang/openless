@@ -118,6 +118,9 @@ pub struct UserPreferences {
     pub enabled_modes: Vec<PolishMode>,
     pub launch_at_login: bool,
     pub show_capsule: bool,
+    /// 录音期间临时静音系统输出，停止/取消/出错后恢复原静音状态。
+    #[serde(default)]
+    pub mute_during_recording: bool,
     pub active_asr_provider: String, // "volcengine" | "apple-speech" | ...
     pub active_llm_provider: String, // "ark" | "openai" | ...
     /// Windows/Linux 粘贴成功后是否恢复用户原剪贴板。默认 true 跟历史行为一致；
@@ -203,6 +206,8 @@ struct UserPreferencesWire {
     enabled_modes: Vec<PolishMode>,
     launch_at_login: bool,
     show_capsule: bool,
+    #[serde(default)]
+    mute_during_recording: bool,
     active_asr_provider: String,
     active_llm_provider: String,
     restore_clipboard_after_paste: bool,
@@ -210,6 +215,8 @@ struct UserPreferencesWire {
     working_languages: Vec<String>,
     translation_target_language: String,
     chinese_script_preference: ChineseScriptPreference,
+    #[serde(default)]
+    output_language_preference: OutputLanguagePreference,
     qa_hotkey: Option<ShortcutBinding>,
     qa_save_history: bool,
     custom_combo_hotkey: Option<ComboBinding>,
@@ -234,6 +241,7 @@ impl Default for UserPreferencesWire {
             enabled_modes: prefs.enabled_modes,
             launch_at_login: prefs.launch_at_login,
             show_capsule: prefs.show_capsule,
+            mute_during_recording: prefs.mute_during_recording,
             active_asr_provider: prefs.active_asr_provider,
             active_llm_provider: prefs.active_llm_provider,
             restore_clipboard_after_paste: prefs.restore_clipboard_after_paste,
@@ -241,6 +249,7 @@ impl Default for UserPreferencesWire {
             working_languages: prefs.working_languages,
             translation_target_language: prefs.translation_target_language,
             chinese_script_preference: prefs.chinese_script_preference,
+            output_language_preference: prefs.output_language_preference,
             qa_hotkey: prefs.qa_hotkey,
             qa_save_history: prefs.qa_save_history,
             custom_combo_hotkey: prefs.custom_combo_hotkey,
@@ -272,6 +281,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             enabled_modes: wire.enabled_modes,
             launch_at_login: wire.launch_at_login,
             show_capsule: wire.show_capsule,
+            mute_during_recording: wire.mute_during_recording,
             active_asr_provider: wire.active_asr_provider,
             active_llm_provider: wire.active_llm_provider,
             restore_clipboard_after_paste: wire.restore_clipboard_after_paste,
@@ -279,6 +289,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             working_languages: wire.working_languages,
             translation_target_language: wire.translation_target_language,
             chinese_script_preference: wire.chinese_script_preference,
+            output_language_preference: wire.output_language_preference,
             qa_hotkey: wire.qa_hotkey,
             qa_save_history: wire.qa_save_history,
             custom_combo_hotkey: wire.custom_combo_hotkey,
@@ -374,6 +385,7 @@ impl Default for UserPreferences {
             ],
             launch_at_login: false,
             show_capsule: true,
+            mute_during_recording: false,
             active_asr_provider: "volcengine".into(),
             active_llm_provider: "ark".into(),
             restore_clipboard_after_paste: true,
@@ -803,6 +815,11 @@ pub struct CapsulePayload {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct CredentialsStatus {
+    pub active_asr_provider: String,
+    pub active_llm_provider: String,
+    pub asr_configured: bool,
+    pub llm_configured: bool,
+    // 兼容旧前端字段（逐步迁移中）
     pub volcengine_configured: bool,
     pub ark_configured: bool,
 }

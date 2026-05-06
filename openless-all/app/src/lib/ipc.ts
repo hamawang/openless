@@ -49,6 +49,7 @@ const mockSettings: UserPreferences = {
   enabledModes: ['raw', 'light', 'structured', 'formal'],
   launchAtLogin: false,
   showCapsule: true,
+  muteDuringRecording: false,
   activeAsrProvider: 'volcengine',
   activeLlmProvider: 'ark',
   restoreClipboardAfterPaste: true,
@@ -79,6 +80,10 @@ const mockHotkeyCapability: HotkeyCapability = {
 };
 
 const mockCredentialsStatus: CredentialsStatus = {
+  activeAsrProvider: 'volcengine',
+  activeLlmProvider: 'ark',
+  asrConfigured: true,
+  llmConfigured: true,
   volcengineConfigured: true,
   arkConfigured: true,
 };

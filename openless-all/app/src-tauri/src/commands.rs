@@ -14,8 +14,7 @@ use crate::polish::{LLMError, OpenAICompatibleConfig, OpenAICompatibleLLMProvide
 use crate::types::{
     ChineseScriptPreference, ComboBinding, CredentialsStatus, DictationSession, DictionaryEntry,
     HotkeyCapability, HotkeyStatus, OutputLanguagePreference, PolishMode, ShortcutBinding,
-    UserPreferences,
-    VocabPresetStore, WindowsImeStatus,
+    UserPreferences, VocabPresetStore, WindowsImeStatus,
 };
 
 type CoordinatorState<'a> = State<'a, Arc<Coordinator>>;
@@ -150,16 +149,47 @@ pub fn get_windows_ime_status() -> WindowsImeStatus {
 #[tauri::command]
 pub fn get_credentials() -> CredentialsStatus {
     let snap = CredentialsVault::snapshot();
+    let active_asr_provider = CredentialsVault::get_active_asr();
+    let active_llm_provider = CredentialsVault::get_active_llm();
+    let volcengine_configured = volcengine_configured(&snap);
+    let asr_configured = asr_configured_for_provider(&active_asr_provider, &snap);
+    let llm_configured = llm_configured_for_snapshot(&snap);
     CredentialsStatus {
-        volcengine_configured: configured(&snap.volcengine_app_key)
-            && configured(&snap.volcengine_access_key)
-            && configured(&snap.volcengine_resource_id),
-        ark_configured: configured(&snap.ark_api_key),
+        active_asr_provider,
+        active_llm_provider,
+        asr_configured,
+        llm_configured,
+        volcengine_configured,
+        ark_configured: llm_configured,
     }
 }
 
+fn volcengine_configured(snap: &CredentialsSnapshot) -> bool {
+    configured(&snap.volcengine_app_key)
+        && configured(&snap.volcengine_access_key)
+        && configured(&snap.volcengine_resource_id)
+}
+
+fn asr_configured_for_provider(provider: &str, snap: &CredentialsSnapshot) -> bool {
+    if provider == "volcengine" {
+        return volcengine_configured(snap);
+    }
+    if provider == crate::asr::local::PROVIDER_ID {
+        // 本地 ASR 不依赖云端凭据。
+        return true;
+    }
+    configured(&snap.asr_endpoint) && configured(&snap.asr_model)
+}
+
+fn llm_configured_for_snapshot(snap: &CredentialsSnapshot) -> bool {
+    configured(&snap.ark_endpoint) && configured(&snap.ark_model_id)
+}
+
 fn configured(field: &Option<String>) -> bool {
-    field.as_ref().map(|s| !s.is_empty()).unwrap_or(false)
+    field
+        .as_ref()
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false)
 }
 
 #[tauri::command]
@@ -178,9 +208,14 @@ pub fn set_active_asr_provider(
     provider: String,
 ) -> Result<(), String> {
     CredentialsVault::set_active_asr_provider(&provider).map_err(|e| e.to_string())?;
-    // 切到本地 ASR → 后台预加载模型，下次按 hotkey 时不必等数秒。
     if provider == crate::asr::local::PROVIDER_ID {
+        // 切到本地 ASR → 后台预加载模型，下次按 hotkey 时不必等数秒。
         coord.preload_local_asr_in_background();
+    } else {
+        // 切回云端 → 用户已不需要本地引擎，立刻释放 1.2GB+ RAM；不释放的话只会等到
+        // schedule_local_asr_release 的下一次 dictation 才触发，而切回云端后根本不会
+        // 再走 local 路径，引擎会驻留到进程退出。
+        coord.release_local_asr_engine();
     }
     Ok(())
 }
@@ -1148,8 +1183,16 @@ pub fn local_asr_cancel_download(
 }
 
 #[tauri::command]
-pub fn local_asr_delete_model(model_id: String) -> Result<(), String> {
+pub fn local_asr_delete_model(
+    coord: CoordinatorState<'_>,
+    model_id: String,
+) -> Result<(), String> {
     let id = ModelId::from_str(&model_id).ok_or_else(|| format!("unknown model id: {model_id}"))?;
+    // 如果内存里加载的就是要删的这个模型，先释放：否则 mmap 残留指向已 unlink 的文件，
+    // 且 RAM 直到下次切模型 / 用户手动按"释放"才回收。
+    if coord.local_asr_loaded_model().as_deref() == Some(id.as_str()) {
+        coord.release_local_asr_engine();
+    }
     crate::asr::local::models::delete_model(id).map_err(|e| e.to_string())
 }
 
@@ -1209,9 +1252,11 @@ fn _ensure_snapshot_used(_: CredentialsSnapshot) {}
 #[cfg(test)]
 mod tests {
     use super::{
-        asr_transcriptions_url, fetch_provider_models, models_url, parse_model_ids,
-        persist_settings, ProviderConfig, SettingsWriter,
+        asr_configured_for_provider, asr_transcriptions_url, fetch_provider_models,
+        llm_configured_for_snapshot, models_url, parse_model_ids, persist_settings,
+        ProviderConfig, SettingsWriter,
     };
+    use crate::persistence::CredentialsSnapshot;
     use crate::types::{
         ComboBinding, HotkeyBinding, HotkeyMode, HotkeyTrigger, ShortcutBinding, UserPreferences,
     };
@@ -1226,6 +1271,65 @@ mod tests {
         dictation_refreshes: Mutex<u32>,
         qa_refreshes: Mutex<u32>,
         combo_refreshes: Mutex<u32>,
+    }
+
+    fn snapshot() -> CredentialsSnapshot {
+        CredentialsSnapshot::default()
+    }
+
+    #[test]
+    fn credentials_status_follows_active_asr_provider_requirements() {
+        let volcengine = CredentialsSnapshot {
+            volcengine_app_key: Some("app".into()),
+            volcengine_access_key: Some("access".into()),
+            volcengine_resource_id: Some("resource".into()),
+            ..snapshot()
+        };
+        assert!(asr_configured_for_provider("volcengine", &volcengine));
+
+        let whisper_key_only = CredentialsSnapshot {
+            asr_api_key: Some("key".into()),
+            ..snapshot()
+        };
+        assert!(!asr_configured_for_provider("whisper", &whisper_key_only));
+
+        let whisper_keyless_ready = CredentialsSnapshot {
+            asr_endpoint: Some("https://api.openai.com/v1".into()),
+            asr_model: Some("whisper-1".into()),
+            ..snapshot()
+        };
+        assert!(asr_configured_for_provider(
+            "whisper",
+            &whisper_keyless_ready
+        ));
+
+        assert!(asr_configured_for_provider(
+            crate::asr::local::PROVIDER_ID,
+            &snapshot()
+        ));
+    }
+
+    #[test]
+    fn credentials_status_accepts_keyless_llm_with_endpoint_and_model() {
+        let keyless_ready = CredentialsSnapshot {
+            ark_endpoint: Some("http://localhost:11434/v1".into()),
+            ark_model_id: Some("qwen".into()),
+            ..snapshot()
+        };
+        assert!(llm_configured_for_snapshot(&keyless_ready));
+
+        let key_without_endpoint = CredentialsSnapshot {
+            ark_api_key: Some("key".into()),
+            ark_model_id: Some("qwen".into()),
+            ..snapshot()
+        };
+        assert!(!llm_configured_for_snapshot(&key_without_endpoint));
+
+        let endpoint_without_model = CredentialsSnapshot {
+            ark_endpoint: Some("http://localhost:11434/v1".into()),
+            ..snapshot()
+        };
+        assert!(!llm_configured_for_snapshot(&endpoint_without_model));
     }
 
     impl SettingsWriter for FakeSettingsWriter {

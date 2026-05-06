@@ -186,6 +186,8 @@ function RecordingSection() {
     savePrefs({ ...prefs, hotkey: { ...prefs.hotkey, mode } });
   const onShowCapsuleChange = (showCapsule: boolean) =>
     savePrefs({ ...prefs, showCapsule });
+  const onMuteDuringRecordingChange = (muteDuringRecording: boolean) =>
+    savePrefs({ ...prefs, muteDuringRecording });
   const onRestoreClipboardChange = (restoreClipboardAfterPaste: boolean) =>
     savePrefs({ ...prefs, restoreClipboardAfterPaste });
   const onAllowNonTsfFallbackChange = (allowNonTsfInsertionFallback: boolean) =>
@@ -254,6 +256,12 @@ function RecordingSection() {
       </SettingRow>
       <SettingRow label={t('settings.recording.capsuleLabel')} desc={t('settings.recording.capsuleDesc')}>
         <Toggle on={prefs.showCapsule} onToggle={onShowCapsuleChange} />
+      </SettingRow>
+      <SettingRow
+        label={t('settings.recording.muteDuringRecordingLabel')}
+        desc={t('settings.recording.muteDuringRecordingDesc')}
+      >
+        <Toggle on={prefs.muteDuringRecording} onToggle={onMuteDuringRecordingChange} />
       </SettingRow>
       <SettingRow
         label={t('settings.recording.restoreClipboardLabel')}
