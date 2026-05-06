@@ -80,7 +80,8 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "openless-ime-payload/x64/OpenLessIme.dll": "tsf-ime/OpenLessIme.dll"
+      "openless-ime-payload/x64/OpenLessIme.dll": "tsf-ime/x64/OpenLessIme.dll",
+      "openless-ime-payload/x86/OpenLessIme.dll": "tsf-ime/x86/OpenLessIme.dll"
     },
     "macOS": {
       "minimumSystemVersion": "12.0",

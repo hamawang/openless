@@ -212,15 +212,17 @@ jobs:
             }
             "$($t.EnvName)=$dll" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
             Write-Host "[ok] built $dll (exported $($t.EnvName))"
-          }
 
-          # bundle.resources 引用的是 src-tauri/openless-ime-payload/x64/OpenLessIme.dll
-          # （仓库里 commit 的是 0 字节占位让 mac 本地 build 也能 resolve）。
-          # Windows CI 这里用真 x64 dll 覆盖占位，让 NSIS / MSI 包装的是真 dll。
-          $payloadDir = Join-Path $appRoot 'src-tauri\openless-ime-payload\x64'
-          New-Item -ItemType Directory -Force -Path $payloadDir | Out-Null
-          Copy-Item -Force -Path $env:OPENLESS_IME_DLL_X64 -Destination (Join-Path $payloadDir 'OpenLessIme.dll')
-          Write-Host "[ok] copied real x64 dll into bundle.resources payload path"
+            # bundle.resources 引用的是 src-tauri/openless-ime-payload/{x64,x86}/OpenLessIme.dll
+            # （仓库里 commit 的是 0 字节占位让 mac 本地 build 也能 resolve）。
+            # 这里用真 dll 覆盖占位，让 NSIS / MSI 都装上真文件；NSIS hook 的 regsvr32
+            # 同时会把 64 / 32 位 COM 注册到 HKLM\Software\Classes\CLSID 的
+            # KEY_WOW64_64KEY / KEY_WOW64_32KEY 两侧（windows_ime_profile.rs 都会查）。
+            $payloadDir = Join-Path $appRoot "src-tauri\openless-ime-payload\$($t.Folder)"
+            New-Item -ItemType Directory -Force -Path $payloadDir | Out-Null
+            Copy-Item -Force -Path $dll -Destination (Join-Path $payloadDir 'OpenLessIme.dll')
+            Write-Host "[ok] copied real $($t.Folder) dll into bundle.resources payload path"
+          }
 
       # ── Windows tauri build：保持 bash shell，因为 PowerShell 调外部命令
       #    会把 '{"bundle":...}' 的内部双引号吃掉、让 tauri 收到无效 JSON。
