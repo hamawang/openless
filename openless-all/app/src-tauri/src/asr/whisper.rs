@@ -104,4 +104,3 @@ impl crate::recorder::AudioConsumer for WhisperBatchASR {
         self.buffer.lock().extend_from_slice(pcm);
     }
 }
-

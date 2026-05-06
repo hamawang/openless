@@ -1,6 +1,6 @@
 [package]
 name = "openless"
-version = "1.2.19"
+version = "1.2.20"
 description = "OpenLess — local voice input that types where your cursor is"
 authors = ["OpenLess"]
 edition = "2021"
@@ -16,14 +16,14 @@ tauri-build = { version = "2", features = [] }
 cc = "1.1"
 
 [dependencies]
-# 锁 ~2.10 是因为 Tauri 2.11.0 已发到 crates.io，但 npm 端 @tauri-apps/api / cli
-# 还停在 2.10.1 没同步发布；tauri build 会校验 npm 与 Rust crate 的 major/minor
-# 一致，跨 minor (2.10 vs 2.11) 直接 fail。等 npm 端发 2.11 后再放开。
-tauri = { version = "~2.10", features = ["macos-private-api", "tray-icon"] }
+# 锁 ~2.11 因为 npm @tauri-apps/api 与 plugin-dialog 都已升 2.11；
+# tauri build 跨 minor 一致性检查会拒绝 npm 2.11 + Rust 2.10 的组合。
+tauri = { version = "~2.11", features = ["macos-private-api", "tray-icon"] }
 tauri-plugin-shell = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-autostart = "2"
+tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }

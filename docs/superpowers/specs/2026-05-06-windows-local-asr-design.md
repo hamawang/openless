@@ -245,4 +245,3 @@ No Win+H 验证：
 - 首次 execution provider 下载和模型下载的错误码、进度回调、缓存位置需要实测。
 - Windows installer 对 SDK native 依赖的收集需要 release workflow 验证。
 - 如果 Foundry Local runtime 无法在 Tauri app 内稳定嵌入，备选路线是用 SDK 管理 local REST service；若 REST 也不稳定，再评估 `whisper.cpp` / ONNX Runtime 自管路线。
-

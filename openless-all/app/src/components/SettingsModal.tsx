@@ -4,13 +4,13 @@
 // 开机自启）已从此弹窗移除，避免 "看似可点实际无效" 的负面体感。
 // 待 backend 就位后再补回（参见 issue #69）。
 
-import { useEffect, useState, type CSSProperties } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from './Icon';
 import { AboutUpdateControl, Settings as SettingsContent, type SettingsSectionId } from '../pages/Settings';
 import { Row } from './ui/Row';
 import { readFontScale, setFontScale, type FontScaleId } from '../lib/fontScale';
-import { openExternal } from '../lib/ipc';
+import { exportErrorLog, openExternal } from '../lib/ipc';
 import {
   FOLLOW_SYSTEM,
   getLocalePreference,
@@ -270,6 +270,41 @@ function PersonalizeSection() {
 
 function AboutMini() {
   const { t } = useTranslation();
+  const [qqCopied, setQqCopied] = useState(false);
+  const qqCopiedRef = useRef<number | null>(null);
+  const [exportStatus, setExportStatus] = useState<'idle' | 'busy' | 'ok' | 'err'>('idle');
+  const [exportMessage, setExportMessage] = useState<string>('');
+
+  useEffect(() => () => {
+    if (qqCopiedRef.current) clearTimeout(qqCopiedRef.current);
+  }, []);
+
+  const copyQq = () => {
+    navigator.clipboard?.writeText('1078960553');
+    setQqCopied(true);
+    if (qqCopiedRef.current) clearTimeout(qqCopiedRef.current);
+    qqCopiedRef.current = window.setTimeout(() => setQqCopied(false), 1500);
+  };
+
+  const onExportLog = async () => {
+    setExportStatus('busy');
+    setExportMessage('');
+    try {
+      const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const target = await exportErrorLog(`openless-${ts}.log`);
+      if (target == null) {
+        setExportStatus('idle');
+        return;
+      }
+      setExportStatus('ok');
+      setExportMessage(target);
+      window.setTimeout(() => setExportStatus('idle'), 4000);
+    } catch (err) {
+      setExportStatus('err');
+      setExportMessage(err instanceof Error ? err.message : String(err));
+    }
+  };
+
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 16 }}>
@@ -279,6 +314,14 @@ function AboutMini() {
           <AboutUpdateControl tagline={t('modal.about.tagline')} />
         </div>
       </div>
+      <Row label={t('modal.about.source')}>
+        <button
+          style={btnGhost}
+          onClick={() => openExternal('https://github.com/appergb/openless')}
+        >
+          GitHub
+        </button>
+      </Row>
       <Row label={t('modal.about.docs')}>
         <button
           style={btnGhost}
@@ -294,6 +337,40 @@ function AboutMini() {
         >
           {t('modal.about.feedbackBtn')}
         </button>
+      </Row>
+      <Row label={t('modal.about.qq')} desc={t('modal.about.qqDesc')}>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <kbd style={{
+            padding: '4px 10px', fontSize: 12, fontFamily: 'var(--ol-font-mono)',
+            borderRadius: 6, background: 'var(--ol-surface-2)',
+            border: '0.5px solid var(--ol-line-strong)',
+            boxShadow: '0 1px 0 rgba(0,0,0,0.04)',
+            color: 'var(--ol-ink-2)',
+          }}>1078960553</kbd>
+          <button onClick={copyQq} title={t('modal.about.copyQq')} style={btnGhost}>
+            <Icon name="copy" size={14} />
+          </button>
+          {qqCopied && <span style={{ fontSize: 11, color: 'var(--ol-ok)', whiteSpace: 'nowrap' }}>{t('common.copied')}</span>}
+        </div>
+      </Row>
+      <Row label={t('modal.about.exportErrorLog')} desc={t('modal.about.exportErrorLogDesc')}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <button style={btnGhost} onClick={onExportLog} disabled={exportStatus === 'busy'}>
+            {exportStatus === 'busy' ? t('modal.about.exporting') : t('modal.about.exportErrorLogBtn')}
+          </button>
+          {exportStatus === 'ok' && (
+            <span style={{ fontSize: 11, color: 'var(--ol-ok)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 220 }}
+                  title={exportMessage}>
+              {t('modal.about.exportSuccess')}
+            </span>
+          )}
+          {exportStatus === 'err' && (
+            <span style={{ fontSize: 11, color: 'var(--ol-err)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 220 }}
+                  title={exportMessage}>
+              {t('modal.about.exportFailed')}
+            </span>
+          )}
+        </div>
       </Row>
       <Row label={t('modal.about.privacy')} desc={t('modal.about.privacyDesc')}>
         <span style={{ fontSize: 11, padding: '3px 8px', borderRadius: 999, background: 'var(--ol-blue-soft)', color: 'var(--ol-blue)', fontWeight: 500 }}>{t('modal.about.localFirst')}</span>
