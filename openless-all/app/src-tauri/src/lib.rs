@@ -770,8 +770,12 @@ struct CapsuleWindowBounds {
 fn capsule_window_bounds(translation_active: bool) -> CapsuleWindowBounds {
     #[cfg(target_os = "windows")]
     {
+        const WINDOWS_CAPSULE_PILL_WIDTH: f64 = 196.0;
+        const WINDOWS_CAPSULE_SIDE_INSET: f64 = 12.0;
         CapsuleWindowBounds {
-            width: 220.0,
+            // Keep the existing Windows hitbox width, but express it as
+            // pill width (196) + symmetric 12px side insets for shadow room.
+            width: WINDOWS_CAPSULE_PILL_WIDTH + WINDOWS_CAPSULE_SIDE_INSET * 2.0,
             height: if translation_active { 118.0 } else { 84.0 },
             bottom_inset: 12.0,
         }
