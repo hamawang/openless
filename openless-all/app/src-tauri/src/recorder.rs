@@ -234,8 +234,18 @@ fn run_audio_thread(
         thread::sleep(std::time::Duration::from_millis(50));
     }
 
-    // Stream 在 drop 时自动停止。
+    // 显式 pause 再 drop。
+    // 实测 cpal 0.15 在 macOS coreaudio 上单纯 drop(Stream) 不会同步调用
+    // AudioOutputUnitStop，AudioUnit 的 render callback 会继续被系统调，
+    // process_callback 仍然以 ~5 ms / 帧的速率打 cb# 日志，macOS 一直认为
+    // 我们在用 mic（橙点不灭）。pause() 走的是 StreamTrait::pause —— 在
+    // coreaudio backend 里直接 AudioOutputUnitStop，同步终止 callback。
+    // 之后 drop 处理 dispose / 资源释放。pause 失败时仅 warn，不阻塞 drop。
+    if let Err(err) = stream.pause() {
+        log::warn!("[recorder] cpal Stream pause before drop failed: {err}");
+    }
     drop(stream);
+    log::info!("[recorder] cpal Stream dropped (mic released)");
 
     // 等待 watchdog 线程退出
     if let Some(handle) = watchdog_handle {
