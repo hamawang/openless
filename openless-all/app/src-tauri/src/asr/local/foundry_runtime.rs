@@ -171,10 +171,7 @@ mod imp {
                 return Ok(loaded);
             }
 
-            if let Some(previous) = self.loaded_for_different_alias(alias) {
-                Self::unload_model(&previous).await?;
-                self.clear_loaded_if_model_id(&previous.model_id);
-            }
+            let previous_loaded = self.loaded_for_different_alias(alias);
 
             self.check_prepare_cancelled()?;
             let manager = self.manager()?;
@@ -259,16 +256,67 @@ mod imp {
                 model_label.clone(),
                 0.0,
             ));
-            model
+            let model_id = model.id().to_string();
+            if previous_loaded
+                .as_ref()
+                .is_some_and(|previous| previous.model_id == model_id)
+            {
+                progress.as_ref()(FoundryPrepareProgressPayload::load(
+                    alias,
+                    model_label.clone(),
+                    100.0,
+                ));
+                let loaded = LoadedModel {
+                    alias: alias.to_string(),
+                    model_id,
+                    model,
+                };
+                *self.state.lock() = RuntimeState {
+                    manager: Some(manager),
+                    loaded: Some(loaded.clone()),
+                };
+                progress.as_ref()(FoundryPrepareProgressPayload::finished(
+                    alias,
+                    format!("{model_label} ready"),
+                ));
+                return Ok(loaded);
+            }
+
+            let unloaded_previous = if let Some(previous) = previous_loaded.as_ref() {
+                Self::unload_model(previous).await?;
+                self.clear_loaded_if_model_id(&previous.model_id);
+                Some(previous.clone())
+            } else {
+                None
+            };
+            if let Err(error) = self.check_prepare_cancelled() {
+                self.rollback_prepare_error(manager, unloaded_previous.as_ref(), alias, error)
+                    .await?;
+            }
+            if let Err(error) = model
                 .load()
                 .await
-                .with_context(|| format!("load Foundry model {alias}"))?;
+                .with_context(|| format!("load Foundry model {alias}"))
+            {
+                self.rollback_prepare_error(manager, unloaded_previous.as_ref(), alias, error)
+                    .await?;
+            }
             if self.cancel_prepare.load(Ordering::SeqCst) {
-                model
+                if let Err(error) = model
                     .unload()
                     .await
-                    .with_context(|| format!("unload cancelled Foundry model {alias}"))?;
-                anyhow::bail!("Foundry Local Whisper prepare cancelled");
+                    .with_context(|| format!("unload cancelled Foundry model {alias}"))
+                {
+                    self.rollback_prepare_error(manager, unloaded_previous.as_ref(), alias, error)
+                        .await?;
+                }
+                self.rollback_prepare_error(
+                    manager,
+                    unloaded_previous.as_ref(),
+                    alias,
+                    anyhow::anyhow!("Foundry Local Whisper prepare cancelled"),
+                )
+                .await?;
             }
             progress.as_ref()(FoundryPrepareProgressPayload::load(
                 alias,
@@ -278,7 +326,7 @@ mod imp {
 
             let loaded = LoadedModel {
                 alias: alias.to_string(),
-                model_id: model.id().to_string(),
+                model_id,
                 model,
             };
             *self.state.lock() = RuntimeState {
@@ -298,6 +346,43 @@ mod imp {
                 self.clear_loaded_if_model_id(&loaded.model_id);
             }
             Ok(())
+        }
+
+        async fn restore_loaded_model(
+            &self,
+            manager: &'static FoundryLocalManager,
+            loaded: &LoadedModel,
+        ) -> Result<()> {
+            loaded
+                .model
+                .load()
+                .await
+                .with_context(|| format!("restore Foundry model {}", loaded.model_id))?;
+            *self.state.lock() = RuntimeState {
+                manager: Some(manager),
+                loaded: Some(loaded.clone()),
+            };
+            Ok(())
+        }
+
+        async fn rollback_prepare_error(
+            &self,
+            manager: &'static FoundryLocalManager,
+            previous: Option<&LoadedModel>,
+            alias: &str,
+            error: anyhow::Error,
+        ) -> Result<()> {
+            if let Some(previous) = previous {
+                if let Err(restore_error) = self.restore_loaded_model(manager, previous).await {
+                    return Err(error).with_context(|| {
+                        format!(
+                            "prepare Foundry model {alias} failed; also failed to restore previous Foundry model {}: {restore_error:#}",
+                            previous.model_id
+                        )
+                    });
+                }
+            }
+            Err(error)
         }
 
         fn cached_loaded_model(&self, alias: &str) -> Option<LoadedModel> {
