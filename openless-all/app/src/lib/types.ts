@@ -119,6 +119,8 @@ export interface UserPreferences {
   showCapsule: boolean;
   /** 录音期间临时静音系统输出，停止/取消/出错后恢复原静音状态。 */
   muteDuringRecording: boolean;
+  /** 录音输入设备名称。空字符串 = 使用系统默认麦克风。 */
+  microphoneDeviceName: string;
   activeAsrProvider: string;
   activeLlmProvider: string;
   /** 仅 Windows/Linux：粘贴成功后是否恢复用户原剪贴板。默认 true。详见 issue #111。 */
@@ -152,6 +154,11 @@ export interface UserPreferences {
   /** 本地 ASR 引擎在内存中的保留时长（秒）。0 = 说完话即释放；
    *  300 = 默认 5 分钟；86400 ≈ 不释放（保持加载）。 */
   localAsrKeepLoadedSecs: number;
+}
+
+export interface MicrophoneDevice {
+  name: string;
+  isDefault: boolean;
 }
 
 /** Rust 通过 `qa:state` 事件下发的 payload。

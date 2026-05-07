@@ -1677,6 +1677,27 @@ fn store_recorder_for_session(inner: &Arc<Inner>, session_id: u64, recorder: Rec
     *inner.recorder.lock() = Some(SessionResource::new(session_id, recorder));
 }
 
+fn selected_microphone_device_name(inner: &Arc<Inner>) -> Option<String> {
+    let name = inner.prefs.get().microphone_device_name.trim().to_string();
+    if name.is_empty() {
+        None
+    } else {
+        Some(name)
+    }
+}
+
+fn stop_microphone_preview_monitor(inner: &Arc<Inner>, owner: &str) {
+    let Some(app) = inner.app.lock().as_ref().cloned() else {
+        return;
+    };
+    let state = app.state::<crate::commands::MicrophoneMonitorState>();
+    let recorder = state.lock().take();
+    if let Some(recorder) = recorder {
+        log::info!("[recorder] stopping microphone preview monitor before {owner}");
+        recorder.stop();
+    }
+}
+
 fn acquire_recording_mute(inner: &Arc<Inner>, owner: &str) {
     if !inner.prefs.get().mute_during_recording {
         return;
@@ -2093,8 +2114,10 @@ fn start_recorder_for_starting(
         );
     });
 
+    let microphone_device_name = selected_microphone_device_name(inner);
+    stop_microphone_preview_monitor(inner, "dictation recorder");
     acquire_recording_mute(inner, "dictation");
-    match Recorder::start(consumer, level_handler) {
+    match Recorder::start(microphone_device_name, consumer, level_handler) {
         Ok((rec, runtime_errors)) => {
             store_recorder_for_session(inner, session_id, rec);
             spawn_recorder_error_monitor(inner, runtime_errors);
@@ -3383,8 +3406,10 @@ async fn begin_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
         );
     });
 
+    let microphone_device_name = selected_microphone_device_name(inner);
+    stop_microphone_preview_monitor(inner, "QA recorder");
     acquire_recording_mute(inner, "qa");
-    match Recorder::start(consumer, level_handler) {
+    match Recorder::start(microphone_device_name, consumer, level_handler) {
         Ok((rec, runtime_errors)) => {
             *inner.qa_recorder.lock() = Some(rec);
             // QA 也跟主听写一样监听 cpal runtime error。设备中途消失 / panic 时

@@ -2,7 +2,7 @@
 // Internal sub-sections (Recording / Providers / Shortcuts / Permissions / Language / About)
 // keep their inline-style literals 1:1 with the source JSX.
 
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../components/Icon';
 import { ShortcutRecorder } from '../components/ShortcutRecorder';
@@ -16,6 +16,7 @@ import {
   getHotkeyStatus,
   getWindowsImeStatus,
   isTauri,
+  listMicrophoneDevices,
   openExternal,
   openSystemSettings,
   listProviderModels,
@@ -30,12 +31,16 @@ import {
   setQaHotkey,
   setSwitchStyleHotkey,
   setTranslationHotkey,
+  startMicrophoneLevelMonitor,
+  stopMicrophoneLevelMonitor,
   validateProviderCredentials,
 } from '../lib/ipc';
 import type {
   HotkeyCapability,
   HotkeyMode,
   HotkeyStatus,
+  HotkeyTrigger,
+  MicrophoneDevice,
   PermissionStatus,
   WindowsImeStatus,
 } from '../lib/types';
@@ -156,16 +161,17 @@ interface SettingRowProps {
   label: string;
   desc?: string;
   children: ReactNode;
+  controlWidth?: number | string;
 }
 
-function SettingRow({ label, desc, children }: SettingRowProps) {
+function SettingRow({ label, desc, children, controlWidth }: SettingRowProps) {
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '180px 1fr', gap: 16, padding: '14px 0', borderTop: '0.5px solid var(--ol-line-soft)' }}>
-      <div>
+    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 180px) minmax(0, 1fr)', gap: 16, padding: '14px 0', borderTop: '0.5px solid var(--ol-line-soft)' }}>
+      <div style={{ minWidth: 0 }}>
         <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--ol-ink)' }}>{label}</div>
         {desc && <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', marginTop: 4, lineHeight: 1.5 }}>{desc}</div>}
       </div>
-      <div style={{ display: 'flex', alignItems: 'flex-start' }}>{children}</div>
+      <div style={{ display: 'flex', alignItems: 'flex-start', minWidth: 0, width: controlWidth ?? 'auto' }}>{children}</div>
     </div>
   );
 }
@@ -173,6 +179,69 @@ function SettingRow({ label, desc, children }: SettingRowProps) {
 function RecordingSection() {
   const { t } = useTranslation();
   const { prefs, capability, updatePrefs: savePrefs } = useHotkeySettings();
+  const [microphoneDevices, setMicrophoneDevices] = useState<MicrophoneDevice[]>([]);
+  const [microphoneDevicesLoaded, setMicrophoneDevicesLoaded] = useState(false);
+  const [microphoneDevicesError, setMicrophoneDevicesError] = useState<string | null>(null);
+  const [microphonePickerOpen, setMicrophonePickerOpen] = useState(false);
+
+  const loadMicrophoneDevices = useCallback(async (
+    signal?: { cancelled: boolean },
+    options: { showLoading?: boolean } = {},
+  ) => {
+    if (options.showLoading ?? true) {
+      setMicrophoneDevicesLoaded(false);
+    }
+    setMicrophoneDevicesError(null);
+    try {
+      const devices = await listMicrophoneDevices();
+      if (signal?.cancelled) return;
+      setMicrophoneDevices(devices);
+      setMicrophoneDevicesLoaded(true);
+    } catch (err) {
+      console.error('[settings] list microphone devices failed', err);
+      if (signal?.cancelled) return;
+      setMicrophoneDevices([]);
+      setMicrophoneDevicesError(err instanceof Error ? err.message : String(err));
+      setMicrophoneDevicesLoaded(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    const signal = { cancelled: false };
+    void loadMicrophoneDevices(signal);
+    return () => {
+      signal.cancelled = true;
+    };
+  }, [loadMicrophoneDevices]);
+
+  useEffect(() => {
+    if (!isTauri) return;
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    async function listenForDeviceChanges() {
+      const { listen } = await import('@tauri-apps/api/event');
+      if (cancelled) return;
+      const stopListening = await listen('microphone:devices-changed', () => {
+        void loadMicrophoneDevices(undefined, { showLoading: false });
+      });
+      if (cancelled) {
+        stopListening();
+        return;
+      }
+      unlisten = stopListening;
+    }
+    void listenForDeviceChanges();
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [loadMicrophoneDevices]);
+
+  useEffect(() => {
+    if (microphonePickerOpen) {
+      void loadMicrophoneDevices(undefined, { showLoading: false });
+    }
+  }, [loadMicrophoneDevices, microphonePickerOpen]);
 
   if (!prefs || !capability) {
     return (
@@ -188,6 +257,8 @@ function RecordingSection() {
     savePrefs({ ...prefs, showCapsule });
   const onMuteDuringRecordingChange = (muteDuringRecording: boolean) =>
     savePrefs({ ...prefs, muteDuringRecording });
+  const onMicrophoneDeviceChange = (microphoneDeviceName: string) =>
+    savePrefs({ ...prefs, microphoneDeviceName });
   const onRestoreClipboardChange = (restoreClipboardAfterPaste: boolean) =>
     savePrefs({ ...prefs, restoreClipboardAfterPaste });
   const onAllowNonTsfFallbackChange = (allowNonTsfInsertionFallback: boolean) =>
@@ -200,6 +271,17 @@ function RecordingSection() {
   const hotkeyDesc = capability.requiresAccessibilityPermission
     ? t('settings.recording.hotkeyDescAcc')
     : t('settings.recording.hotkeyDescNoAcc');
+  const preferredMicrophoneAvailable = Boolean(
+    prefs.microphoneDeviceName
+    && microphoneDevices.some(device => device.name === prefs.microphoneDeviceName),
+  );
+  const effectiveMicrophoneDeviceName = prefs.microphoneDeviceName
+    && (!microphoneDevicesLoaded || preferredMicrophoneAvailable)
+    ? prefs.microphoneDeviceName
+    : '';
+  const selectedMicrophoneLabel = effectiveMicrophoneDeviceName
+    ? effectiveMicrophoneDeviceName
+    : t('settings.recording.microphoneDefault');
 
   return (
     <Card>
@@ -254,6 +336,67 @@ function RecordingSection() {
           ))}
         </div>
       </SettingRow>
+      <SettingRow label={t('settings.recording.microphoneLabel')} desc={t('settings.recording.microphoneDesc')}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <button
+            type="button"
+            aria-label={t('settings.recording.microphoneLabel')}
+            onClick={() => {
+              setMicrophonePickerOpen(true);
+            }}
+            onKeyDown={e => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                setMicrophonePickerOpen(true);
+              }
+            }}
+            onChange={() => {}}
+            style={{
+              ...inputStyle,
+              flex: '0 0 auto',
+              width: 200,
+              maxWidth: 200,
+              height: 32,
+              minWidth: 0,
+              alignSelf: 'flex-start',
+              padding: '0 9px 0 10px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 8,
+              textAlign: 'left',
+              color: 'var(--ol-ink)',
+            }}
+          >
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {selectedMicrophoneLabel}
+            </span>
+            <Icon name="chevRight" size={13} />
+          </button>
+          {!microphoneDevicesLoaded && (
+            <div style={{ fontSize: 11, color: 'var(--ol-ink-4)' }}>{t('common.loading')}</div>
+          )}
+          {microphoneDevicesError && (
+            <div style={{ fontSize: 11, color: 'var(--ol-err)', lineHeight: 1.5 }}>
+              {t('settings.recording.microphoneLoadError', { message: microphoneDevicesError })}
+            </div>
+          )}
+        </div>
+      </SettingRow>
+      {microphonePickerOpen && (
+        <MicrophonePickerDialog
+          devices={microphoneDevices}
+          selectedName={effectiveMicrophoneDeviceName}
+          onClose={() => setMicrophonePickerOpen(false)}
+          onRefresh={() => {
+            void loadMicrophoneDevices();
+          }}
+          loading={!microphoneDevicesLoaded}
+          onSelect={(name) => {
+            onMicrophoneDeviceChange(name);
+          }}
+        />
+      )}
       <SettingRow label={t('settings.recording.capsuleLabel')} desc={t('settings.recording.capsuleDesc')}>
         <Toggle on={prefs.showCapsule} onToggle={onShowCapsuleChange} />
       </SettingRow>
@@ -287,6 +430,330 @@ function RecordingSection() {
         </div>
       )}
     </Card>
+  );
+}
+
+function MicrophonePickerDialog({
+  devices,
+  selectedName,
+  onClose,
+  onRefresh,
+  loading,
+  onSelect,
+}: {
+  devices: MicrophoneDevice[];
+  selectedName: string;
+  onClose: () => void;
+  onRefresh: () => void;
+  loading: boolean;
+  onSelect: (name: string) => void;
+}) {
+  const { t } = useTranslation();
+  const [pickedName, setPickedName] = useState(selectedName);
+  const [previewName, setPreviewName] = useState(selectedName);
+  const [level, setLevel] = useState(0);
+  const [hoveredName, setHoveredName] = useState<string | null>(null);
+  const [pressedName, setPressedName] = useState<string | null>(null);
+  const [monitorError, setMonitorError] = useState<string | null>(null);
+  const monitorQueueRef = useRef<Promise<void>>(Promise.resolve());
+
+  const enqueueMonitorTask = useCallback((task: () => Promise<void>) => {
+    const next = monitorQueueRef.current.catch(() => undefined).then(task);
+    monitorQueueRef.current = next.catch(() => undefined);
+    return next;
+  }, []);
+
+  useEffect(() => {
+    setPickedName(selectedName);
+    setPreviewName(selectedName);
+  }, [selectedName]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    let timer: number | undefined;
+    setLevel(0);
+    setMonitorError(null);
+
+    async function start() {
+      await enqueueMonitorTask(async () => {
+        try {
+          if (isTauri) {
+            const { listen } = await import('@tauri-apps/api/event');
+            if (cancelled) return;
+            const stopListening = await listen<{ level: number }>('microphone:level', event => {
+              setLevel(Math.max(0, Math.min(1, event.payload.level ?? 0)));
+            });
+            if (cancelled) {
+              stopListening();
+              return;
+            }
+            unlisten = stopListening;
+            await startMicrophoneLevelMonitor(previewName);
+            if (cancelled) {
+              unlisten?.();
+              unlisten = undefined;
+              await stopMicrophoneLevelMonitor();
+            }
+          } else {
+            const tick = window.setInterval(() => {
+              setLevel(0.25 + Math.random() * 0.55);
+            }, 120);
+            if (cancelled) {
+              window.clearInterval(tick);
+              return;
+            }
+            unlisten = () => window.clearInterval(tick);
+          }
+        } catch (err) {
+          console.warn('[settings] microphone level monitor failed', err);
+          if (!cancelled) {
+            setMonitorError(err instanceof Error ? err.message : String(err));
+          }
+        }
+      });
+    }
+
+    timer = window.setTimeout(() => {
+      void start();
+    }, 140);
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) {
+        window.clearTimeout(timer);
+      }
+      void enqueueMonitorTask(async () => {
+        unlisten?.();
+        unlisten = undefined;
+        await stopMicrophoneLevelMonitor();
+      });
+    };
+  }, [enqueueMonitorTask, previewName]);
+
+  const rows = [
+    {
+      id: 'default',
+      name: '',
+      label: t('settings.recording.microphoneDefault'),
+      desc: t('settings.recording.microphoneDefaultDesc'),
+      isDefault: false,
+    },
+    ...devices.map((device, index) => ({
+      id: `${device.name}-${index}`,
+      name: device.name,
+      label: device.name,
+      desc: device.isDefault ? t('settings.recording.microphoneSystemDefault') : '',
+      isDefault: device.isDefault,
+    })),
+  ];
+
+  return (
+    <div
+      role="presentation"
+      onClick={onClose}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 40,
+        display: 'grid',
+        placeItems: 'center',
+        background: 'rgba(0,0,0,0.32)',
+        animation: 'olMicPickerFadeIn 120ms ease-out',
+      }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        onClick={e => e.stopPropagation()}
+        style={{
+          width: 450,
+          maxWidth: 'calc(100vw - 48px)',
+          borderRadius: 16,
+          background: 'rgba(255,255,255,0.96)',
+          border: '0.5px solid rgba(0,0,0,0.12)',
+          boxShadow: '0 24px 70px rgba(0,0,0,0.28)',
+          padding: 24,
+          animation: 'olMicPickerPopIn 160ms cubic-bezier(.2,.8,.2,1)',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 10 }}>
+          <div style={{ fontSize: 18, fontWeight: 650 }}>{t('settings.recording.microphoneDialogTitle')}</div>
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            <button
+              type="button"
+              onClick={onRefresh}
+              disabled={loading}
+              style={{
+                border: 0,
+                borderRadius: 999,
+                background: 'transparent',
+                color: loading ? 'var(--ol-ink-4)' : 'var(--ol-ink-3)',
+                cursor: 'default',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 28,
+                height: 28,
+                opacity: loading ? 0.65 : 1,
+                transition: 'background 0.16s var(--ol-motion-quick), opacity 0.16s var(--ol-motion-quick)',
+              }}
+              onMouseEnter={e => {
+                if (!loading) e.currentTarget.style.background = 'rgba(0,0,0,0.05)';
+              }}
+              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+              title={t('common.refresh')}
+            >
+              <Icon
+                name="refresh"
+                size={14}
+                style={{ animation: loading ? 'olMicPickerSpin 800ms linear infinite' : undefined }}
+              />
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              style={{
+                border: 0,
+                borderRadius: 999,
+                background: 'transparent',
+                color: 'var(--ol-ink-3)',
+                cursor: 'default',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 28,
+                height: 28,
+                transition: 'background 0.16s var(--ol-motion-quick)',
+              }}
+              onMouseEnter={e => (e.currentTarget.style.background = 'rgba(0,0,0,0.05)')}
+              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+              title={t('common.close')}
+            >
+              <Icon name="close" size={14} />
+            </button>
+          </div>
+        </div>
+        <div style={{ fontSize: 12.5, color: 'var(--ol-ink-3)', lineHeight: 1.55, marginBottom: 18 }}>
+          {t('settings.recording.microphoneDialogDesc')}
+        </div>
+        {monitorError && (
+          <div style={{ fontSize: 11.5, color: 'var(--ol-err)', lineHeight: 1.45, marginBottom: 12 }}>
+            {t('settings.recording.microphoneMonitorError', { message: monitorError })}
+          </div>
+        )}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {rows.map(row => {
+            const active = pickedName === row.name;
+            const previewing = previewName === row.name;
+            const hovered = hoveredName === row.name;
+            const pressed = pressedName === row.name;
+            return (
+              <button
+                key={row.id}
+                type="button"
+                onMouseEnter={() => {
+                  setHoveredName(row.name);
+                }}
+                onMouseLeave={() => {
+                  setHoveredName(null);
+                  setPressedName(null);
+                }}
+                onMouseDown={() => setPressedName(row.name)}
+                onMouseUp={() => setPressedName(null)}
+                onFocus={() => {
+                  setHoveredName(row.name);
+                }}
+                onBlur={() => setHoveredName(null)}
+                onClick={() => {
+                  setPickedName(row.name);
+                  setPreviewName(row.name);
+                  onSelect(row.name);
+                }}
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: '1fr auto',
+                  gap: 14,
+                  alignItems: 'center',
+                  width: '100%',
+                  padding: '14px 16px',
+                  borderRadius: 10,
+                  border: active ? '1px solid rgba(37,99,235,0.7)' : '0.5px solid rgba(0,0,0,0.12)',
+                  background: active
+                    ? 'rgba(37,99,235,0.08)'
+                    : hovered
+                      ? 'rgba(0,0,0,0.035)'
+                      : '#fff',
+                  boxShadow: active
+                    ? '0 0 0 3px rgba(37,99,235,0.08)'
+                    : hovered
+                      ? '0 8px 18px rgba(0,0,0,0.06)'
+                      : '0 1px 2px rgba(0,0,0,0.03)',
+                  color: 'var(--ol-ink)',
+                  cursor: 'default',
+                  textAlign: 'left',
+                  transform: pressed ? 'scale(0.992)' : hovered ? 'translateY(-1px)' : 'translateY(0)',
+                  transition: 'background 140ms ease, border-color 140ms ease, box-shadow 160ms ease, transform 120ms ease',
+                }}
+              >
+                <span style={{ minWidth: 0 }}>
+                  <span style={{ display: 'block', fontSize: 13, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {row.label}
+                  </span>
+                  {row.desc && (
+                    <span style={{ display: 'block', fontSize: 11.5, color: 'var(--ol-ink-4)', marginTop: 3 }}>
+                      {row.desc}
+                    </span>
+                  )}
+                </span>
+                <LevelMeter level={previewing ? level : 0} />
+              </button>
+            );
+          })}
+        </div>
+        <style>
+          {`
+            @keyframes olMicPickerFadeIn {
+              from { opacity: 0; }
+              to { opacity: 1; }
+            }
+            @keyframes olMicPickerPopIn {
+              from { opacity: 0; transform: translateY(8px) scale(.985); }
+              to { opacity: 1; transform: translateY(0) scale(1); }
+            }
+            @keyframes olMicPickerSpin {
+              from { transform: rotate(0deg); }
+              to { transform: rotate(360deg); }
+            }
+          `}
+        </style>
+      </div>
+    </div>
+  );
+}
+
+function LevelMeter({ level }: { level: number }) {
+  const amplified = Math.min(1, Math.max(0, level * 4.5));
+  const bars = [0.25, 0.5, 0.75, 1, 0.75, 0.5];
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, height: 32 }}>
+      {bars.map((weight, index) => {
+        const intensity = Math.min(1, amplified * (0.85 + weight * 0.35));
+        const height = 6 + intensity * (20 * weight);
+        return (
+          <span
+            key={`${weight}-${index}`}
+            style={{
+              width: 5,
+              height,
+              borderRadius: 999,
+              background: intensity > 0.08 ? 'var(--ol-blue)' : 'rgba(0,0,0,0.10)',
+              opacity: 0.35 + intensity * 0.65,
+              transition: 'height 70ms linear, opacity 90ms ease, background 120ms ease',
+            }}
+          />
+        );
+      })}
+    </span>
   );
 }
 
