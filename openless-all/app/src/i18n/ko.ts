@@ -210,6 +210,12 @@ export const ko: typeof zhCN = {
       desc: '하나의 언어를 선택하면 녹음 중 임의의 시점에 Shift 를 한 번 눌러 정지 후 전사를 해당 언어로 번역하여 커서 위치에 삽입합니다. "비활성화"를 선택하면 Shift 는 효과가 없으며 일반 정리 파이프라인을 따릅니다.',
       disabled: '비활성화 (Shift 로 번역 발동 안 함)',
     },
+    save: {
+      workingFailed: '작업 언어 저장에 실패했습니다. 다시 시도하세요.',
+      targetFailed: '번역 대상 언어 저장에 실패했습니다. 다시 시도하세요.',
+      hotkeyRegisterFailed: '번역 단축키 등록에 실패했습니다. 설정은 저장되지 않았습니다.',
+      hotkeySaveFailed: '번역 단축키 저장에 실패했습니다. 다시 시도하세요.',
+    },
     howto: {
       title: '사용 방법',
       step1: '다른 앱의 입력 상자에서 커서에 포커스합니다(메모, 메일, 채팅 창 모두 가능).',
@@ -453,6 +459,15 @@ export const ko: typeof zhCN = {
       privacy: '프라이버시',
       privacyDesc: '모든 인식 결과는 로컬에만 저장됩니다. 클라우드 API 는 실시간 전사와 정리에만 사용되며 녹음을 보관하지 않습니다.',
       localFirst: '로컬 우선',
+      betaChannelLabel: 'Beta 채널 참여',
+      betaChannelDesc: '기본은 정식 버전입니다. 켜면 최신 Beta 버전 다운로드 링크가 아래에 표시됩니다. Beta 빌드는 자동 업데이트로 배포되지 않으며 직접 다운로드해 설치해야 합니다. 불안정할 수 있으므로 사전 평가와 피드백을 제공할 의향이 있는 사용자에게만 권장합니다.',
+      betaChannelFetching: '최신 Beta 버전을 가져오는 중…',
+      betaChannelFetchBtn: '최신 Beta 확인',
+      betaChannelLatestPrefix: '최신 Beta:',
+      betaChannelDownloadBtn: '다운로드 페이지 열기',
+      betaChannelRefresh: '새로 고침',
+      betaChannelNoBeta: '아직 게시된 Beta 릴리스가 없습니다.',
+      betaChannelFetchError: 'Beta 릴리스 정보를 가져오지 못했습니다. 잠시 후 다시 시도하세요.',
       updateDialog: {
         available: {
           title: '새 버전 발견',

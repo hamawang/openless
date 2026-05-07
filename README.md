@@ -140,11 +140,16 @@ OpenLess does one thing: **turn speech into usable written text (especially AI p
 
 - Tauri 2 + Rust backend + React/TS frontend. macOS 12+, Windows 10+.
 - **Toggle and push-to-talk** recording modes. `Esc` cancels at any phase, including polish/insert.
-- Volcengine streaming ASR + OpenAI Whisper-compatible batch ASR; Ark / DeepSeek / OpenAI-compatible chat-completions for polish.
-- 4 output modes: raw, light polish, structured (**AI prompt mode**), formal.
+- **Cloud ASR**: Volcengine streaming ASR, OpenAI Whisper-compatible batch ASR, Apple Speech (macOS).
+- **Local ASR**: bundled Qwen3-ASR (0.6B / 1.7B) via vendored `antirez/qwen-asr`; Windows Foundry Local Whisper variants.
+- **Polish providers**: Ark / DeepSeek / OpenAI / Doubao / Anthropic-compatible chat-completions, plus any OpenAI-compatible endpoint you bring.
+- 4 output modes: raw, light polish, structured (**AI prompt mode**), formal. Plus a **translation hotkey** that converts speech directly into the configured target language ([#43](../../issues/43)).
+- **Selection-ask QA panel** — separate hotkey opens a floating panel that runs voice Q&A against the highlighted text in any app ([#118](../../issues/118)).
 - Main window: Overview / History / Vocab / Style / Settings. Persistent tray icon. Mini status capsule floating on screen.
-- **Bilingual UI** — Settings → Language switches between 简体中文 and English (auto-detects on first launch).
+- **Multilingual UI** — Settings → Language switches between 简体中文 / 繁體中文 / English / 日本語 / 한국어 (auto-detects on first launch).
 - **In-app auto-update** — Settings → About → Check button; signed updater artifacts via Tauri updater plugin.
+- **Beta channel (opt-in)** — Settings → About → Join Beta channel exposes the latest pre-release build for manual download; Beta releases never reach Stable users automatically (see [Contributing workflow](#contributing-workflow)).
+- **Distribution channels** — direct DMG/EXE from [Releases](../../releases), Homebrew Cask (`brew install --cask openless`), Windows installer.
 - **Single-instance lock** — prevents two OpenLess processes from racing the same hotkey edge.
 - Dictionary entries injected as Volcengine ASR `context.hotwords` and as semantic hints during polish; hits accumulate per session.
 - Platform-native global hotkey: CGEventTap on macOS, low-level keyboard hook (`WH_KEYBOARD_LL`) on Windows.
@@ -208,6 +213,37 @@ Logs: `~/Library/Logs/OpenLess/openless.log` (macOS) / `%LOCALAPPDATA%\OpenLess\
 
 **Windows build** — see [`openless-all/README.md`](openless-all/README.md) for MSVC vs GNU/MinGW routes.
 
+## Contributing workflow
+
+OpenLess uses a two-channel branching model.
+
+- **`beta`** — the **Beta channel**. Default branch and integration buffer; all in-progress development lands here. Beta builds may exist but are **not pushed to regular users** — they only reach people who explicitly opt into the Beta channel.
+- **`main`** — the **Stable channel (正式版)**. Always-releasable. The build everyone gets by default.
+
+```text
+your fork / topic branch
+        │  (test locally on your target platform first)
+        ▼
+   PR → beta  ← AI review (one pass, advisory only)
+        │     ← maintainer lightweight glance (scope, cross-module impact)
+        ▼
+       merged into beta
+        │  (periodically, after a two-platform smoke build)
+        ▼
+       merged into main  →  tag `v<version>-tauri`  →  release CI → Stable users
+```
+
+Rules of thumb:
+
+- **Open PRs against `beta`, never against `main`.** GitHub already defaults the base branch to `beta` for new PRs.
+- **Verify the change on your target platform before opening the PR** — build green is necessary, manual verification is required.
+- **AI review runs once per PR and is advisory.** Don't loop on it. Apply your judgment.
+- **Keep AI rework rounds tight (1–2).** If a fix resists, ask a human or restart with fresh context — multi-round AI back-and-forth tends to do more harm than good here.
+- **Beta work must not leak to Stable.** `main` only receives merges from `beta`, performed by maintainers after a successful two-platform smoke build. No direct pushes to `main`.
+- **Stable releases are cut from `main`** by pushing a `v<version>-tauri` tag — see the maintainer release checklist below.
+
+Beta release distribution (manual-download opt-in): the in-app updater always reads the Stable manifest, so regular users never get Beta builds via auto-update. Users who want to try Beta open **Settings → About**, flip "Join Beta channel", and download the latest Beta installer manually from the link the app fetches from GitHub. Tag convention: `v<version>-beta-tauri` produces the Beta release (marked GitHub pre-release; manifest written as `latest-{tgt}-{arch}-beta.json`); `v<version>-tauri` produces the Stable release. The two manifest files never overlap, so Stable users' updater feed cannot pick up Beta releases.
+
 ## Credentials
 
 Credentials live in the OS credential vault (service = `com.openless.app`): macOS Keychain, Windows Credential Manager, or Linux keyring. A legacy plaintext JSON file is read only as a migration source and removed after a successful vault write:
@@ -256,7 +292,7 @@ The main window is organized as Home / History / Dictionary / Settings. The Dict
 
 ## Architecture
 
-The active implementation is Tauri 2 (`openless-all/app/`). Auto-updates ride on the Tauri updater plugin; signed updater artifacts are produced by CI on every `v*-tauri` tag.
+The active implementation is Tauri 2 (`openless-all/app/`). Releases are split into two channels: **Stable** (`v<v>-tauri` tag, auto-updated to all users) and **Beta** (`v<v>-beta-tauri` tag, GitHub pre-release, manually downloaded by opt-in users). Signed updater artifacts are produced by CI on every release tag.
 
 **Tauri backend (Rust)** — each module depends only on `types.rs`:
 
@@ -292,10 +328,31 @@ Planned but not yet shipped:
 
 ## Maintainer release checklist
 
-- Bump version in `openless-all/app/package.json`, `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml`.
+OpenLess ships two release channels. Branch name = channel name (see [Contributing workflow](#contributing-workflow)).
+
+### Common prep (both channels)
+
+- Bump version in **all five** files: `package.json`, `package-lock.json` (root + nested entry under `packages.""`), `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, `Cargo.lock` (look for the `name = "openless"` block). CI's `Verify version sync` step will fail the build otherwise.
 - Run `INSTALL=0 ./scripts/build-mac.sh` and confirm the `.app` launches.
-- Verify on a clean macOS box: permission flow, hotkey, recording, ASR, polish, insertion, clipboard fallback.
-- Push a `v<version>-tauri` tag — CI builds + signs the updater artifacts and the macOS `.dmg` + Windows `.msi`. The updater needs `TAURI_SIGNING_PRIVATE_KEY` repo secret (matching the pubkey in `tauri.conf.json`).
+- Smoke-test on a clean machine: permission flow, hotkey, recording, ASR, polish, insertion, clipboard fallback.
+- Confirm `TAURI_SIGNING_PRIVATE_KEY` and (for macOS) the Apple signing/notarization secrets are set on the repo.
+
+### Beta channel — `v<v>-beta-tauri`
+
+1. Land changes onto the `beta` branch via PR review.
+2. Push tag **on `beta`**: `git tag v<v>-beta-tauri && git push origin v<v>-beta-tauri`.
+3. CI tags the GitHub Release as `Pre-release` and uploads only `latest-{tgt}-{arch}-beta.json` updater manifests. Stable users' `releases/latest` redirect is unaffected.
+4. Announce in the appropriate channel (issue thread, QQ group) that opt-in Beta users can grab it from Settings → About → Join Beta channel.
+
+### Stable channel — `v<v>-tauri`
+
+1. Merge `beta → main` after the Beta release has soaked enough (or run a final two-platform smoke build directly).
+2. Push tag **on `main`**: `git tag v<v>-tauri && git push origin v<v>-tauri`.
+3. CI publishes a normal GitHub Release and uploads `latest-{tgt}-{arch}.json` (no `-beta` suffix). All Stable users get the update through the in-app updater.
+
+### Post-release verification (always run)
+
+Run the 5-step checklist in [`CLAUDE.md` → Branch & release-channel workflow → Channel distribution](CLAUDE.md): page status (pre-release flag), asset filename channel-correctness, Stable user flow, Beta opt-in flow, raw endpoint sanity.
 
 ## Acknowledgements
 

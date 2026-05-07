@@ -206,6 +206,12 @@ export const zhCN = {
       desc: '选了某个语言后，录音过程中任意时刻按一下 Shift，停止后就会把转写翻译成该语言再插入到光标位置。选「不启用」则 Shift 没有任何效果，走普通润色管线。',
       disabled: '不启用（Shift 按下不触发翻译）',
     },
+    save: {
+      workingFailed: '工作语言保存失败，请重试。',
+      targetFailed: '翻译目标语言保存失败，请重试。',
+      hotkeyRegisterFailed: '翻译快捷键注册失败，未继续保存。',
+      hotkeySaveFailed: '翻译快捷键保存失败，请重试。',
+    },
     howto: {
       title: '使用方法',
       step1: '在另一个 app 的输入框里聚焦光标（备忘录、邮件、聊天窗口都行）。',
@@ -449,6 +455,15 @@ export const zhCN = {
       privacy: '隐私',
       privacyDesc: '所有识别结果仅保存在本机。云端 API 仅用于实时转写与润色，不会保留你的录音。',
       localFirst: '本地优先',
+      betaChannelLabel: '加入 Beta 渠道',
+      betaChannelDesc: '默认拿到的是正式版。打开后可在下方看到最新 Beta 版的下载入口；Beta 包不会通过自动更新推到普通用户，需要手动下载安装。可能不稳定，仅推荐愿意尝鲜与反馈问题的用户开启。',
+      betaChannelFetching: '正在获取最新 Beta 版本…',
+      betaChannelFetchBtn: '查询最新 Beta',
+      betaChannelLatestPrefix: '最新 Beta：',
+      betaChannelDownloadBtn: '前往下载',
+      betaChannelRefresh: '重新查询',
+      betaChannelNoBeta: '暂无已发布的 Beta 版。',
+      betaChannelFetchError: '获取 Beta 版本信息失败，请稍后重试。',
       updateDialog: {
         available: {
           title: '发现新版本',

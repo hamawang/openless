@@ -210,6 +210,12 @@ export const ja: typeof zhCN = {
       desc: 'いずれかの言語を選択すると、録音中の任意のタイミングで Shift を 1 回押すだけで、停止後に転写をその言語に翻訳してカーソル位置に入力します。「無効」を選ぶと Shift は何の効果もなく、通常の整文パイプラインに進みます。',
       disabled: '無効（Shift で翻訳を発動しない）',
     },
+    save: {
+      workingFailed: '作業言語の保存に失敗しました。もう一度お試しください。',
+      targetFailed: '翻訳ターゲット言語の保存に失敗しました。もう一度お試しください。',
+      hotkeyRegisterFailed: '翻訳ショートカットの登録に失敗しました。設定は保存されていません。',
+      hotkeySaveFailed: '翻訳ショートカットの保存に失敗しました。もう一度お試しください。',
+    },
     howto: {
       title: '使い方',
       step1: '別のアプリの入力欄でカーソルにフォーカス（メモ、メール、チャットウィンドウなど）。',
@@ -453,6 +459,15 @@ export const ja: typeof zhCN = {
       privacy: 'プライバシー',
       privacyDesc: 'すべての認識結果はローカルにのみ保存されます。クラウド API はリアルタイム転写と整文にのみ使用され、録音は保持されません。',
       localFirst: 'ローカル優先',
+      betaChannelLabel: 'Beta チャンネルに参加',
+      betaChannelDesc: '既定は正式版です。オンにすると最新 Beta 版のダウンロードリンクが下に表示されます。Beta ビルドは自動更新で配布されず、手動でダウンロード・インストールする必要があります。不安定な場合があるため、検証とフィードバック協力に同意するユーザーのみ推奨。',
+      betaChannelFetching: '最新 Beta 版を取得中…',
+      betaChannelFetchBtn: '最新 Beta を確認',
+      betaChannelLatestPrefix: '最新 Beta：',
+      betaChannelDownloadBtn: 'ダウンロード ページを開く',
+      betaChannelRefresh: '再取得',
+      betaChannelNoBeta: 'まだ Beta リリースは公開されていません。',
+      betaChannelFetchError: 'Beta バージョン情報の取得に失敗しました。後で再試行してください。',
       updateDialog: {
         available: {
           title: '新しいバージョンがあります',

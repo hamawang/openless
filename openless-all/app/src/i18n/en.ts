@@ -208,6 +208,12 @@ export const en: typeof zhCN = {
       desc: 'Pick a language and pressing Shift any time during recording will translate the transcript into it before insertion. Pick "Disabled" to make Shift a no-op (regular polish runs instead).',
       disabled: 'Disabled (Shift does nothing)',
     },
+    save: {
+      workingFailed: 'Failed to save working languages. Please try again.',
+      targetFailed: 'Failed to save translation target. Please try again.',
+      hotkeyRegisterFailed: 'Failed to register the translation shortcut. The preference was not saved.',
+      hotkeySaveFailed: 'Failed to save the translation shortcut. Please try again.',
+    },
     howto: {
       title: 'How to use',
       step1: 'Place the text cursor in another app (Notes, mail, chat — anything with a text field).',
@@ -451,6 +457,15 @@ export const en: typeof zhCN = {
       privacy: 'Privacy',
       privacyDesc: 'All transcripts stay on this device. Cloud APIs are only called for real-time transcription/polish; no recordings are retained.',
       localFirst: 'Local-first',
+      betaChannelLabel: 'Join Beta channel',
+      betaChannelDesc: 'Stable channel is the default. Enabling this exposes a manual download link to the latest Beta below; Beta builds are NOT pushed to regular users via auto-update — you have to download and install them yourself. May be unstable, only recommended if you are willing to test pre-release builds and report issues.',
+      betaChannelFetching: 'Fetching the latest Beta…',
+      betaChannelFetchBtn: 'Look up latest Beta',
+      betaChannelLatestPrefix: 'Latest Beta:',
+      betaChannelDownloadBtn: 'Open download page',
+      betaChannelRefresh: 'Refresh',
+      betaChannelNoBeta: 'No Beta release has been published yet.',
+      betaChannelFetchError: 'Failed to fetch Beta release info. Please try again later.',
       updateDialog: {
         available: {
           title: 'Update available',
