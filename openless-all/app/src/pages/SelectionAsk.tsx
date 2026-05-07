@@ -9,81 +9,15 @@ import { useTranslation } from 'react-i18next';
 import { Card, PageHeader } from './_atoms';
 import { useHotkeySettings } from '../state/HotkeySettingsContext';
 import { setQaHotkey } from '../lib/ipc';
-import type { QaHotkeyBinding } from '../lib/types';
-import { detectOS, type OS } from '../components/WindowChrome';
-import { getHotkeyTriggerLabel } from '../lib/hotkey';
-
-const QA_HOTKEY_DISABLED_ID = 'disabled' as const;
-
-interface QaHotkeyPreset {
-  id: string;
-  binding: QaHotkeyBinding;
-  label: string;
-}
-
-// macOS：用 Cmd 修饰键，跟系统其他快捷键肌肉记忆一致。
-const QA_HOTKEY_PRESETS_MAC: readonly QaHotkeyPreset[] = [
-  { id: 'cmd+shift+;', label: 'Cmd+Shift+;', binding: { primary: ';', modifiers: ['cmd', 'shift'] } },
-  { id: 'cmd+shift+/', label: 'Cmd+Shift+/', binding: { primary: '/', modifiers: ['cmd', 'shift'] } },
-  { id: 'cmd+shift+.', label: 'Cmd+Shift+.', binding: { primary: '.', modifiers: ['cmd', 'shift'] } },
-  { id: 'cmd+shift+,', label: 'Cmd+Shift+,', binding: { primary: ',', modifiers: ['cmd', 'shift'] } },
-] as const;
-
-// Windows：用 Ctrl 修饰键（macOS Cmd 的对等键）。**不**用 Fn——Win32 的
-// `RegisterHotKey` 和 `WH_KEYBOARD_LL` 都收不到 Fn 的虚拟键码（硬件级 modifier，
-// 在 OS 内核之下被吃掉），写进 preset 用户也注册不上。**不**用 Win+x——
-// 大部分 Win+x 已被系统 / Cortana 占用。
-const QA_HOTKEY_PRESETS_WIN: readonly QaHotkeyPreset[] = [
-  { id: 'ctrl+shift+;', label: 'Ctrl+Shift+;', binding: { primary: ';', modifiers: ['ctrl', 'shift'] } },
-  { id: 'ctrl+shift+/', label: 'Ctrl+Shift+/', binding: { primary: '/', modifiers: ['ctrl', 'shift'] } },
-  { id: 'ctrl+shift+.', label: 'Ctrl+Shift+.', binding: { primary: '.', modifiers: ['ctrl', 'shift'] } },
-  { id: 'ctrl+shift+,', label: 'Ctrl+Shift+,', binding: { primary: ',', modifiers: ['ctrl', 'shift'] } },
-] as const;
-
-// Linux：UI 展示用 Super，后端 binding 仍用 SUPER 同义词 `cmd` 透传到 global-hotkey。
-const QA_HOTKEY_PRESETS_LINUX: readonly QaHotkeyPreset[] = [
-  { id: 'super+shift+;', label: 'Super+Shift+;', binding: { primary: ';', modifiers: ['cmd', 'shift'] } },
-  { id: 'super+shift+/', label: 'Super+Shift+/', binding: { primary: '/', modifiers: ['cmd', 'shift'] } },
-  { id: 'super+shift+.', label: 'Super+Shift+.', binding: { primary: '.', modifiers: ['cmd', 'shift'] } },
-  { id: 'super+shift+,', label: 'Super+Shift+,', binding: { primary: ',', modifiers: ['cmd', 'shift'] } },
-] as const;
-
-function getQaHotkeyPresets(os: OS): readonly QaHotkeyPreset[] {
-  if (os === 'mac') return QA_HOTKEY_PRESETS_MAC;
-  if (os === 'linux') return QA_HOTKEY_PRESETS_LINUX;
-  return QA_HOTKEY_PRESETS_WIN;
-}
-
-function normalizeQaModifier(modifier: string): string {
-  const tag = modifier.toLowerCase();
-  if (tag === 'command' || tag === 'super' || tag === 'meta' || tag === 'win') {
-    return 'cmd';
-  }
-  return tag;
-}
-
-function bindingToPresetId(
-  binding: QaHotkeyBinding | null,
-  presets: readonly QaHotkeyPreset[],
-): string {
-  if (!binding) return QA_HOTKEY_DISABLED_ID;
-  const sortedMods = [...binding.modifiers].map(normalizeQaModifier).sort();
-  const match = presets.find(p => {
-    const pMods = [...p.binding.modifiers].map(normalizeQaModifier).sort();
-    return p.binding.primary === binding.primary
-      && pMods.length === sortedMods.length
-      && pMods.every((m, i) => m === sortedMods[i]);
-  });
-  return match ? match.id : presets[0].id;
-}
+import { defaultQaShortcut, formatComboLabel } from '../lib/hotkey';
+import { ShortcutRecorder } from '../components/ShortcutRecorder';
 
 export function SelectionAsk() {
   const { t } = useTranslation();
-  const { prefs, hotkey, updatePrefs: savePrefs } = useHotkeySettings();
-  const os = detectOS();
-  const qaHotkeyPresets = getQaHotkeyPresets(os);
-  const defaultHotkeyLabel = qaHotkeyPresets[0]?.label ?? '快捷键';
-  const recordHotkeyLabel = getHotkeyTriggerLabel(hotkey?.trigger);
+  const { prefs, updatePrefs: savePrefs } = useHotkeySettings();
+  const defaultQaHotkey = defaultQaShortcut();
+  const defaultHotkeyLabel = formatComboLabel(defaultQaHotkey);
+  const recordHotkeyLabel = prefs ? formatComboLabel(prefs.dictationHotkey) : '快捷键';
 
   if (!prefs) {
     return (
@@ -103,31 +37,11 @@ export function SelectionAsk() {
     );
   }
 
-  const onHotkeyChange = async (id: string) => {
-    if (id === QA_HOTKEY_DISABLED_ID) {
-      await savePrefs({ ...prefs, qaHotkey: null });
-      return;
-    }
-    const preset = qaHotkeyPresets.find(p => p.id === id);
-    if (!preset) return;
-    // 先让后端真注册成功 → 再写盘 prefs。否则 prefs 跟实际生效的快捷键脱节，
-    // 会让用户陷入"UI 改了但按了没反应"的迷雾（issue #118 v1 实测过）。
-    try {
-      await setQaHotkey(preset.binding);
-    } catch (error) {
-      console.error('[selectionAsk] failed to set qa hotkey', error);
-      // 后端拒绝绑定（如不支持的主键）→ 不写盘，UI 下次 render 仍显示旧值。
-      return;
-    }
-    await savePrefs({ ...prefs, qaHotkey: preset.binding });
-  };
-
   const onSaveHistoryChange = (qaSaveHistory: boolean) =>
     savePrefs({ ...prefs, qaSaveHistory });
 
   const enabled = prefs.qaHotkey !== null;
-  const currentId = bindingToPresetId(prefs.qaHotkey, qaHotkeyPresets);
-  const currentLabel = qaHotkeyPresets.find(p => p.id === currentId)?.label ?? defaultHotkeyLabel;
+  const currentLabel = prefs.qaHotkey ? formatComboLabel(prefs.qaHotkey) : defaultHotkeyLabel;
 
   return (
     <>
@@ -164,28 +78,25 @@ export function SelectionAsk() {
           <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', marginBottom: 12, lineHeight: 1.55 }}>
             {t('selectionAsk.hotkey.desc', { recordHotkey: recordHotkeyLabel })}
           </div>
-          <select
-            value={currentId}
-            onChange={e => onHotkeyChange(e.target.value)}
-            style={{
-              width: '100%',
-              maxWidth: 360,
-              height: 32,
-              padding: '0 10px',
-              fontSize: 13,
-              border: '0.5px solid var(--ol-line-strong)',
-              borderRadius: 8,
-              background: '#fff',
-              color: 'var(--ol-ink)',
-              fontFamily: 'inherit',
-              cursor: 'default',
+          <button
+            onClick={async () => {
+              const nextHotkey = enabled ? null : defaultQaHotkey;
+              await setQaHotkey(nextHotkey);
+              await savePrefs({ ...prefs, qaHotkey: nextHotkey });
             }}
+            style={{ fontSize: 12, padding: '5px 14px', background: enabled ? 'rgba(0,0,0,0.06)' : 'var(--ol-blue)', color: enabled ? 'var(--ol-ink-2)' : '#fff', border: 0, borderRadius: 6, fontFamily: 'inherit', fontWeight: 500, cursor: 'default', marginBottom: 10 }}
           >
-            <option value={QA_HOTKEY_DISABLED_ID}>{t('selectionAsk.hotkey.optionDisabled')}</option>
-            {qaHotkeyPresets.map(p => (
-              <option key={p.id} value={p.id}>{p.label}</option>
-            ))}
-          </select>
+            {enabled ? t('selectionAsk.hotkey.optionDisabled') : t('selectionAsk.statusEnabled')}
+          </button>
+          {prefs.qaHotkey && (
+            <ShortcutRecorder
+              value={prefs.qaHotkey}
+              onSave={async binding => {
+                await setQaHotkey(binding);
+                await savePrefs({ ...prefs, qaHotkey: binding });
+              }}
+            />
+          )}
         </Card>
 
         {/* 2. 历史保存 */}

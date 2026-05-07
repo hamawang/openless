@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../components/Icon';
 import { detectOS } from '../components/WindowChrome';
-import { getHotkeyTriggerLabel } from '../lib/hotkey';
+import { formatComboLabel } from '../lib/hotkey';
 import { clearHistory, deleteHistoryEntry, listHistory } from '../lib/ipc';
 import type { DictationSession, PolishMode } from '../lib/types';
 import { useHotkeySettings } from '../state/HotkeySettingsContext';
@@ -41,7 +41,7 @@ export function History() {
   const [items, setItems] = useState<DictationSession[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const { hotkey } = useHotkeySettings();
+  const { prefs } = useHotkeySettings();
 
   const refresh = async () => {
     const data = await listHistory();
@@ -130,7 +130,7 @@ export function History() {
             {loading && <div style={{ padding: 16, fontSize: 12, color: 'var(--ol-ink-4)' }}>{t('common.loading')}</div>}
             {!loading && filtered.length === 0 && (
               <div style={{ padding: 16, fontSize: 12, color: 'var(--ol-ink-4)' }}>
-                {t('history.empty', { trigger: getHotkeyTriggerLabel(hotkey?.trigger) })}
+                {t('history.empty', { trigger: prefs ? formatComboLabel(prefs.dictationHotkey) : '' })}
               </div>
             )}
             {filtered.map(s => (

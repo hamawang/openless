@@ -20,6 +20,7 @@ use crate::asr::{
     DictionaryHotword, RawTranscript, VolcengineCredentials, VolcengineStreamingASR,
     WhisperBatchASR,
 };
+use crate::combo_hotkey::{ComboHotkeyError, ComboHotkeyEvent, ComboHotkeyMonitor};
 use crate::hotkey::{HotkeyEvent, HotkeyMonitor};
 use crate::insertion::TextInserter;
 use crate::persistence::{
@@ -150,6 +151,13 @@ struct Inner {
     hotkey: Mutex<Option<HotkeyMonitor>>,
     hotkey_status: Mutex<HotkeyStatus>,
     hotkey_trigger_held: AtomicBool,
+    shortcut_recording_active: AtomicBool,
+    /// 自定义组合键监听器（global-hotkey crate）。当 `prefs.hotkey.trigger == Custom` 时
+    /// 代替 modifier-only 的 hotkey monitor。`None` 表示不使用自定义组合键或还没成功安装。
+    combo_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
+    translation_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
+    switch_style_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
+    open_app_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
     /// 翻译模式触发标志。每次 begin_session 重置为 false；hotkey 监听器在
     /// Listening / Starting 阶段看到 Shift down 边沿时 set true。
     /// end_session 在调 polish/translate 前读这个 flag + translation_target_language
@@ -178,6 +186,12 @@ enum QaPhase {
     Idle,
     Recording,
     Processing,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ActionHotkeyKind {
+    SwitchStyle,
+    OpenApp,
 }
 
 struct QaSessionState {
@@ -246,6 +260,11 @@ impl Coordinator {
                 hotkey: Mutex::new(None),
                 hotkey_status: Mutex::new(HotkeyStatus::default()),
                 hotkey_trigger_held: AtomicBool::new(false),
+                shortcut_recording_active: AtomicBool::new(false),
+                combo_hotkey: Mutex::new(None),
+                translation_hotkey: Mutex::new(None),
+                switch_style_hotkey: Mutex::new(None),
+                open_app_hotkey: Mutex::new(None),
                 translation_modifier_seen: AtomicBool::new(false),
                 qa_hotkey: Mutex::new(None),
                 qa_state: Mutex::new(QaSessionState::default()),
@@ -267,12 +286,16 @@ impl Coordinator {
             let inner = Arc::clone(&self.inner);
             tauri::async_runtime::spawn(async move {
                 let prefs = inner.prefs.get();
-                let model_id = match crate::asr::local::ModelId::from_str(&prefs.local_asr_active_model) {
-                    Some(m) => m,
-                    None => return,
-                };
+                let model_id =
+                    match crate::asr::local::ModelId::from_str(&prefs.local_asr_active_model) {
+                        Some(m) => m,
+                        None => return,
+                    };
                 if !crate::asr::local::models::is_downloaded(model_id) {
-                    log::info!("[coord] local ASR preload skipped: model {} not downloaded", model_id.as_str());
+                    log::info!(
+                        "[coord] local ASR preload skipped: model {} not downloaded",
+                        model_id.as_str()
+                    );
                     return;
                 }
                 let dir = match crate::asr::local::models::model_dir(model_id) {
@@ -349,6 +372,106 @@ impl Coordinator {
         }
     }
 
+    /// 启动自定义组合键监听器。当 `prefs.hotkey.trigger == Custom` 时，
+    /// 代替 modifier-only 的 hotkey monitor。
+    pub fn start_combo_hotkey_listener(&self) {
+        let inner = Arc::clone(&self.inner);
+        std::thread::Builder::new()
+            .name("openless-combo-hotkey-supervisor".into())
+            .spawn(move || combo_hotkey_supervisor_loop(inner))
+            .ok();
+    }
+
+    pub fn stop_combo_hotkey_listener(&self) {
+        take_combo_hotkey_on_main_thread(&self.inner);
+    }
+
+    pub fn start_translation_hotkey_listener(&self) {
+        let inner = Arc::clone(&self.inner);
+        std::thread::Builder::new()
+            .name("openless-translation-hotkey-supervisor".into())
+            .spawn(move || translation_hotkey_supervisor_loop(inner))
+            .ok();
+    }
+
+    pub fn stop_translation_hotkey_listener(&self) {
+        take_translation_hotkey_on_main_thread(&self.inner);
+    }
+
+    pub fn start_switch_style_hotkey_listener(&self) {
+        let inner = Arc::clone(&self.inner);
+        std::thread::Builder::new()
+            .name("openless-switch-style-hotkey-supervisor".into())
+            .spawn(move || action_hotkey_supervisor_loop(inner, ActionHotkeyKind::SwitchStyle))
+            .ok();
+    }
+
+    pub fn stop_switch_style_hotkey_listener(&self) {
+        take_action_hotkey_on_main_thread(&self.inner, ActionHotkeyKind::SwitchStyle);
+    }
+
+    pub fn start_open_app_hotkey_listener(&self) {
+        let inner = Arc::clone(&self.inner);
+        std::thread::Builder::new()
+            .name("openless-open-app-hotkey-supervisor".into())
+            .spawn(move || action_hotkey_supervisor_loop(inner, ActionHotkeyKind::OpenApp))
+            .ok();
+    }
+
+    pub fn stop_open_app_hotkey_listener(&self) {
+        take_action_hotkey_on_main_thread(&self.inner, ActionHotkeyKind::OpenApp);
+    }
+
+    /// 用户在设置里改了自定义组合键时调用。
+    pub fn update_combo_hotkey_binding(&self) {
+        let prefs = self.inner.prefs.get();
+        if crate::shortcut_binding::legacy_modifier_trigger(&prefs.dictation_hotkey).is_some() {
+            // 修饰键单键由 HotkeyMonitor 处理，组合键 monitor 要释放。
+            take_combo_hotkey_on_main_thread(&self.inner);
+            log::info!("[coord] combo hotkey 已关闭（modifier-only）");
+            return;
+        }
+        let binding = prefs.dictation_hotkey.clone();
+        if is_unconfigured_shortcut(&binding) {
+            // Custom 但没录到有效主键：清掉旧 monitor，避免旧快捷键继续生效。
+            take_combo_hotkey_on_main_thread(&self.inner);
+            log::info!("[coord] combo hotkey 已关闭（无绑定）");
+            return;
+        };
+        let app = self.inner.app.lock().clone();
+        let Some(app) = app else {
+            log::warn!("[coord] update combo hotkey binding: AppHandle 未 bind，跳过");
+            return;
+        };
+        let inner_clone = Arc::clone(&self.inner);
+        let binding_for_main = binding.clone();
+        let _ = app.run_on_main_thread(move || {
+            if let Some(monitor) = inner_clone.combo_hotkey.lock().as_ref() {
+                if let Err(e) = monitor.update_binding(binding_for_main.clone()) {
+                    log::warn!("[coord] update combo hotkey binding 失败: {e}");
+                }
+                return;
+            }
+            let (tx, rx) = mpsc::channel::<ComboHotkeyEvent>();
+            match ComboHotkeyMonitor::start(binding_for_main, tx) {
+                Ok(monitor) => {
+                    *inner_clone.combo_hotkey.lock() = Some(monitor);
+                    log::info!(
+                        "[coord] combo hotkey listener installed on main thread (via update)"
+                    );
+                    let bridge_inner = Arc::clone(&inner_clone);
+                    std::thread::Builder::new()
+                        .name("openless-combo-hotkey-bridge".into())
+                        .spawn(move || combo_hotkey_bridge_loop(bridge_inner, rx))
+                        .ok();
+                }
+                Err(e) => {
+                    log::warn!("[coord] update combo hotkey binding 失败: {e}");
+                }
+            }
+        });
+    }
+
     /// 用户在设置里改了 QA 组合键时调用。先持久化（由 prefs.set 完成），
     /// 然后通知活着的 monitor 重新注册；monitor 不存在时 supervisor 会自然
     /// 在下一次循环里读到新的 prefs。
@@ -367,8 +490,24 @@ impl Coordinator {
                 self.inner.qa_hotkey.lock().take();
             }
             log::info!("[coord] QA hotkey 已关闭");
+            self.update_modifier_shortcut_bindings();
             return;
         };
+        if crate::shortcut_binding::legacy_modifier_trigger(&binding).is_some() {
+            let app = self.inner.app.lock().clone();
+            if let Some(app) = app {
+                let inner_clone = Arc::clone(&self.inner);
+                let _ = app.run_on_main_thread(move || {
+                    inner_clone.qa_hotkey.lock().take();
+                });
+            } else {
+                self.inner.qa_hotkey.lock().take();
+            }
+            self.update_modifier_shortcut_bindings();
+            log::info!("[coord] QA hotkey uses modifier-only listener");
+            return;
+        }
+        self.update_modifier_shortcut_bindings();
         // global-hotkey crate 的 manager.register/unregister 必须主线程跑。
         // 没在主线程会让 Carbon 句柄注册看似成功但事件不派发。
         let app = self.inner.app.lock().clone();
@@ -402,6 +541,84 @@ impl Coordinator {
                 Err(e) => {
                     log::warn!("[coord] update QA hotkey binding 失败: {e}");
                 }
+            }
+        });
+    }
+
+    pub fn update_translation_hotkey_binding(&self) {
+        if let Err(e) = self.try_update_translation_hotkey_binding() {
+            log::warn!("[coord] update translation hotkey binding 失败: {e}");
+        }
+    }
+
+    pub fn try_update_translation_hotkey_binding(&self) -> Result<(), String> {
+        let prefs = self.inner.prefs.get();
+        if is_builtin_translation_shift(&prefs.translation_hotkey)
+            || crate::shortcut_binding::legacy_modifier_trigger(&prefs.translation_hotkey).is_some()
+        {
+            take_translation_hotkey_on_main_thread(&self.inner);
+            self.update_modifier_shortcut_bindings();
+            log::info!("[coord] translation hotkey uses modifier-only listener");
+            return Ok(());
+        }
+        self.update_modifier_shortcut_bindings();
+        let app = self.inner.app.lock().clone();
+        let Some(app) = app else {
+            return Err("AppHandle 未 bind，无法注册翻译快捷键".into());
+        };
+        let inner_clone = Arc::clone(&self.inner);
+        let binding_for_main = prefs.translation_hotkey.clone();
+        let (result_tx, result_rx) = mpsc::sync_channel::<Result<(), String>>(1);
+        let _ = app.run_on_main_thread(move || {
+            let result = update_translation_hotkey_on_main_thread(inner_clone, binding_for_main);
+            let _ = result_tx.send(result.map_err(|e| e.to_string()));
+        });
+        match result_rx.recv_timeout(std::time::Duration::from_secs(5)) {
+            Ok(result) => result,
+            Err(_) => Err("注册翻译快捷键超时".into()),
+        }
+    }
+
+    pub fn update_switch_style_hotkey_binding(&self) {
+        self.update_action_hotkey_binding(ActionHotkeyKind::SwitchStyle);
+    }
+
+    pub fn update_open_app_hotkey_binding(&self) {
+        self.update_action_hotkey_binding(ActionHotkeyKind::OpenApp);
+    }
+
+    fn update_action_hotkey_binding(&self, kind: ActionHotkeyKind) {
+        let binding = action_hotkey_binding(&self.inner, kind);
+        if is_modifier_only_shortcut(&binding) {
+            take_action_hotkey_on_main_thread(&self.inner, kind);
+            log::warn!("[coord] action hotkey {kind:?} 使用了不支持的 modifier-only 绑定，已关闭");
+            return;
+        }
+
+        let app = self.inner.app.lock().clone();
+        let Some(app) = app else {
+            log::warn!("[coord] update action hotkey binding: AppHandle 未 bind，跳过");
+            return;
+        };
+        let inner_clone = Arc::clone(&self.inner);
+        let _ = app.run_on_main_thread(move || {
+            if let Some(monitor) = action_hotkey_slot(&inner_clone, kind).lock().as_ref() {
+                if let Err(e) = monitor.update_binding(binding.clone()) {
+                    log::warn!("[coord] update action hotkey {kind:?} binding 失败: {e}");
+                }
+                return;
+            }
+            let (tx, rx) = mpsc::channel::<ComboHotkeyEvent>();
+            match ComboHotkeyMonitor::start(binding, tx) {
+                Ok(monitor) => {
+                    *action_hotkey_slot(&inner_clone, kind).lock() = Some(monitor);
+                    let bridge_inner = Arc::clone(&inner_clone);
+                    std::thread::Builder::new()
+                        .name(action_hotkey_bridge_thread_name(kind).into())
+                        .spawn(move || action_hotkey_bridge_loop(bridge_inner, rx, kind))
+                        .ok();
+                }
+                Err(e) => log::warn!("[coord] update action hotkey {kind:?} binding 失败: {e}"),
             }
         });
     }
@@ -441,8 +658,59 @@ impl Coordinator {
     }
 
     pub fn update_hotkey_binding(&self) {
+        let prefs = self.inner.prefs.get();
+        let dictation_trigger =
+            crate::shortcut_binding::legacy_modifier_trigger(&prefs.dictation_hotkey);
+        let binding = crate::types::HotkeyBinding {
+            trigger: dictation_trigger.unwrap_or(crate::types::HotkeyTrigger::Custom),
+            mode: prefs.hotkey.mode,
+        };
+        if dictation_trigger.is_some() {
+            take_combo_hotkey_on_main_thread(&self.inner);
+        } else {
+            self.update_combo_hotkey_binding();
+        }
+        self.ensure_modifier_hotkey_monitor(binding);
+        self.update_modifier_shortcut_bindings();
+    }
+
+    fn ensure_modifier_hotkey_monitor(&self, binding: crate::types::HotkeyBinding) {
         if let Some(monitor) = self.inner.hotkey.lock().as_ref() {
-            monitor.update_binding(self.inner.prefs.get().hotkey);
+            monitor.update_binding(binding);
+            return;
+        }
+        let (tx, rx) = mpsc::channel::<HotkeyEvent>();
+        match HotkeyMonitor::start(binding, tx) {
+            Ok(monitor) => {
+                let adapter = monitor.kind();
+                *self.inner.hotkey.lock() = Some(monitor);
+                *self.inner.hotkey_status.lock() = HotkeyStatus {
+                    adapter,
+                    state: HotkeyStatusState::Installed,
+                    message: Some(format!("{} 已安装", adapter.display_name())),
+                    last_error: None,
+                };
+                let inner_clone = Arc::clone(&self.inner);
+                std::thread::Builder::new()
+                    .name("openless-hotkey-bridge".into())
+                    .spawn(move || hotkey_bridge_loop(inner_clone, rx))
+                    .ok();
+            }
+            Err(e) => {
+                *self.inner.hotkey_status.lock() = HotkeyStatus {
+                    adapter: HotkeyMonitor::capability().adapter,
+                    state: HotkeyStatusState::Failed,
+                    message: Some(e.message.clone()),
+                    last_error: Some(e),
+                };
+            }
+        }
+    }
+
+    pub fn update_modifier_shortcut_bindings(&self) {
+        if let Some(monitor) = self.inner.hotkey.lock().as_ref() {
+            let (qa_trigger, translation_trigger) = modifier_shortcut_triggers(&self.inner);
+            monitor.update_modifier_shortcuts(qa_trigger, translation_trigger);
         }
     }
 
@@ -468,6 +736,16 @@ impl Coordinator {
 
     pub fn cancel_dictation(&self) {
         cancel_session(&self.inner);
+    }
+
+    pub fn set_shortcut_recording_active(&self, active: bool) {
+        self.inner
+            .shortcut_recording_active
+            .store(active, Ordering::SeqCst);
+        if active {
+            reset_shortcut_held_state(&self.inner);
+        }
+        log::info!("[coord] shortcut recording active={active}");
     }
 
     pub async fn handle_window_hotkey_event(
@@ -518,6 +796,8 @@ fn hotkey_supervisor_loop(inner: Arc<Inner>) {
     let mut attempts: u32 = 0;
     let capability = HotkeyMonitor::capability();
     loop {
+        let prefs = inner.prefs.get();
+
         if inner.hotkey.lock().is_some() {
             return;
         }
@@ -528,11 +808,20 @@ fn hotkey_supervisor_loop(inner: Arc<Inner>) {
             last_error: None,
         };
         let (tx, rx) = mpsc::channel::<HotkeyEvent>();
-        let binding = inner.prefs.get().hotkey;
+        let trigger = crate::shortcut_binding::legacy_modifier_trigger(&prefs.dictation_hotkey)
+            .unwrap_or(crate::types::HotkeyTrigger::Custom);
+        let binding = crate::types::HotkeyBinding {
+            trigger,
+            mode: prefs.hotkey.mode,
+        };
         match HotkeyMonitor::start(binding, tx) {
             Ok(monitor) => {
                 let adapter = monitor.kind();
                 *inner.hotkey.lock() = Some(monitor);
+                if let Some(monitor) = inner.hotkey.lock().as_ref() {
+                    let (qa_trigger, translation_trigger) = modifier_shortcut_triggers(&inner);
+                    monitor.update_modifier_shortcuts(qa_trigger, translation_trigger);
+                }
                 *inner.hotkey_status.lock() = HotkeyStatus {
                     adapter,
                     state: HotkeyStatusState::Installed,
@@ -585,6 +874,15 @@ fn qa_hotkey_supervisor_loop(inner: Arc<Inner>) {
                 continue;
             }
         };
+        if crate::shortcut_binding::legacy_modifier_trigger(&binding).is_some() {
+            inner.qa_hotkey.lock().take();
+            if let Some(monitor) = inner.hotkey.lock().as_ref() {
+                let (qa_trigger, translation_trigger) = modifier_shortcut_triggers(&inner);
+                monitor.update_modifier_shortcuts(qa_trigger, translation_trigger);
+            }
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            continue;
+        }
 
         if inner.qa_hotkey.lock().is_some() {
             // 已注册成功 → 不重复装；睡 5s 复查（ binding 变化由 update 路径手动触发 ）。
@@ -657,12 +955,459 @@ fn qa_hotkey_supervisor_loop(inner: Arc<Inner>) {
 
 fn qa_hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<QaHotkeyEvent>) {
     while let Ok(evt) = rx.recv() {
+        if inner.shortcut_recording_active.load(Ordering::SeqCst) {
+            continue;
+        }
         let inner_cloned = Arc::clone(&inner);
         match evt {
             QaHotkeyEvent::Pressed => {
                 async_runtime::spawn(async move { handle_qa_hotkey_pressed(&inner_cloned).await });
             }
         }
+    }
+}
+
+// ─────────────────────────── combo hotkey supervisor ───────────────────────────
+
+fn combo_hotkey_supervisor_loop(inner: Arc<Inner>) {
+    let mut attempts: u32 = 0;
+    loop {
+        // 读当前 prefs
+        let prefs = inner.prefs.get();
+        if crate::shortcut_binding::legacy_modifier_trigger(&prefs.dictation_hotkey).is_some() {
+            // 不是 Custom → 睡着等 prefs 改动
+            take_combo_hotkey_on_main_thread(&inner);
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            continue;
+        }
+
+        let binding = prefs.dictation_hotkey.clone();
+        if is_unconfigured_shortcut(&binding) {
+            take_combo_hotkey_on_main_thread(&inner);
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            continue;
+        }
+
+        if inner.combo_hotkey.lock().is_some() {
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            continue;
+        }
+
+        let app = inner.app.lock().clone();
+        let app = match app {
+            Some(a) => a,
+            None => {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                continue;
+            }
+        };
+
+        let (tx, rx) = mpsc::channel::<ComboHotkeyEvent>();
+        let (init_tx, init_rx) =
+            mpsc::sync_channel::<Result<ComboHotkeyMonitor, ComboHotkeyError>>(1);
+        let binding_for_main = binding.clone();
+        let _ = app.run_on_main_thread(move || {
+            let result = ComboHotkeyMonitor::start(binding_for_main, tx);
+            let _ = init_tx.send(result);
+        });
+
+        let init_result = match init_rx.recv_timeout(std::time::Duration::from_secs(5)) {
+            Ok(r) => r,
+            Err(_) => {
+                attempts += 1;
+                if attempts <= 3 || attempts % 10 == 0 {
+                    log::warn!(
+                        "[coord] combo hotkey 第 {attempts} 次注册超时（主线程未回执）；3s 后重试"
+                    );
+                }
+                std::thread::sleep(std::time::Duration::from_secs(3));
+                continue;
+            }
+        };
+
+        match init_result {
+            Ok(monitor) => {
+                *inner.combo_hotkey.lock() = Some(monitor);
+                log::info!(
+                    "[coord] combo hotkey listener installed on main thread (after {} attempt(s))",
+                    attempts + 1
+                );
+                let inner_clone = Arc::clone(&inner);
+                std::thread::Builder::new()
+                    .name("openless-combo-hotkey-bridge".into())
+                    .spawn(move || combo_hotkey_bridge_loop(inner_clone, rx))
+                    .ok();
+                attempts = 0;
+            }
+            Err(e) => {
+                attempts += 1;
+                if attempts <= 3 || attempts % 10 == 0 {
+                    log::warn!("[coord] combo hotkey 第 {attempts} 次注册失败: {e}; 3s 后重试");
+                }
+                std::thread::sleep(std::time::Duration::from_secs(3));
+            }
+        }
+    }
+}
+
+fn combo_hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<ComboHotkeyEvent>) {
+    while let Ok(evt) = rx.recv() {
+        if inner.shortcut_recording_active.load(Ordering::SeqCst) {
+            continue;
+        }
+        let inner_cloned = Arc::clone(&inner);
+        match evt {
+            ComboHotkeyEvent::Pressed => {
+                async_runtime::spawn(async move { handle_pressed_edge(&inner_cloned).await });
+            }
+            ComboHotkeyEvent::Released => {
+                async_runtime::spawn(async move { handle_released_edge(&inner_cloned).await });
+            }
+        }
+    }
+}
+
+fn translation_hotkey_supervisor_loop(inner: Arc<Inner>) {
+    let mut attempts: u32 = 0;
+    loop {
+        let binding = inner.prefs.get().translation_hotkey;
+        if is_builtin_translation_shift(&binding)
+            || crate::shortcut_binding::legacy_modifier_trigger(&binding).is_some()
+        {
+            take_translation_hotkey_on_main_thread(&inner);
+            if let Some(monitor) = inner.hotkey.lock().as_ref() {
+                let (qa_trigger, translation_trigger) = modifier_shortcut_triggers(&inner);
+                monitor.update_modifier_shortcuts(qa_trigger, translation_trigger);
+            }
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            continue;
+        }
+
+        if inner.translation_hotkey.lock().is_some() {
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            continue;
+        }
+
+        let app = match inner.app.lock().clone() {
+            Some(a) => a,
+            None => {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                continue;
+            }
+        };
+
+        let (tx, rx) = mpsc::channel::<ComboHotkeyEvent>();
+        let (init_tx, init_rx) =
+            mpsc::sync_channel::<Result<ComboHotkeyMonitor, ComboHotkeyError>>(1);
+        let binding_for_main = binding.clone();
+        let _ = app.run_on_main_thread(move || {
+            let result = ComboHotkeyMonitor::start(binding_for_main, tx);
+            let _ = init_tx.send(result);
+        });
+
+        let init_result = match init_rx.recv_timeout(std::time::Duration::from_secs(5)) {
+            Ok(r) => r,
+            Err(_) => {
+                attempts += 1;
+                std::thread::sleep(std::time::Duration::from_secs(3));
+                continue;
+            }
+        };
+
+        match init_result {
+            Ok(monitor) => {
+                *inner.translation_hotkey.lock() = Some(monitor);
+                let inner_clone = Arc::clone(&inner);
+                std::thread::Builder::new()
+                    .name("openless-translation-hotkey-bridge".into())
+                    .spawn(move || translation_hotkey_bridge_loop(inner_clone, rx))
+                    .ok();
+                attempts = 0;
+            }
+            Err(e) => {
+                attempts += 1;
+                if attempts <= 3 || attempts % 10 == 0 {
+                    log::warn!(
+                        "[coord] translation hotkey 第 {attempts} 次注册失败: {e}; 3s 后重试"
+                    );
+                }
+                std::thread::sleep(std::time::Duration::from_secs(3));
+            }
+        }
+    }
+}
+
+fn update_translation_hotkey_on_main_thread(
+    inner: Arc<Inner>,
+    binding: crate::types::ShortcutBinding,
+) -> Result<(), ComboHotkeyError> {
+    if let Some(monitor) = inner.translation_hotkey.lock().as_ref() {
+        return monitor.update_binding(binding);
+    }
+    let (tx, rx) = mpsc::channel::<ComboHotkeyEvent>();
+    let monitor = ComboHotkeyMonitor::start(binding, tx)?;
+    *inner.translation_hotkey.lock() = Some(monitor);
+    let bridge_inner = Arc::clone(&inner);
+    std::thread::Builder::new()
+        .name("openless-translation-hotkey-bridge".into())
+        .spawn(move || translation_hotkey_bridge_loop(bridge_inner, rx))
+        .map_err(|e| ComboHotkeyError::RegisterFailed(format!("spawn bridge thread: {e}")))?;
+    Ok(())
+}
+
+fn translation_hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<ComboHotkeyEvent>) {
+    while let Ok(evt) = rx.recv() {
+        if inner.shortcut_recording_active.load(Ordering::SeqCst) {
+            continue;
+        }
+        if matches!(evt, ComboHotkeyEvent::Pressed) {
+            mark_translation_modifier_seen(&inner);
+        }
+    }
+}
+
+fn action_hotkey_supervisor_loop(inner: Arc<Inner>, kind: ActionHotkeyKind) {
+    let mut attempts: u32 = 0;
+    loop {
+        let binding = action_hotkey_binding(&inner, kind);
+        if is_modifier_only_shortcut(&binding) {
+            take_action_hotkey_on_main_thread(&inner, kind);
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            continue;
+        }
+
+        if action_hotkey_slot(&inner, kind).lock().is_some() {
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            continue;
+        }
+
+        let app = match inner.app.lock().clone() {
+            Some(a) => a,
+            None => {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                continue;
+            }
+        };
+
+        let (tx, rx) = mpsc::channel::<ComboHotkeyEvent>();
+        let (init_tx, init_rx) =
+            mpsc::sync_channel::<Result<ComboHotkeyMonitor, ComboHotkeyError>>(1);
+        let binding_for_main = binding.clone();
+        let _ = app.run_on_main_thread(move || {
+            let result = ComboHotkeyMonitor::start(binding_for_main, tx);
+            let _ = init_tx.send(result);
+        });
+
+        let init_result = match init_rx.recv_timeout(std::time::Duration::from_secs(5)) {
+            Ok(r) => r,
+            Err(_) => {
+                attempts += 1;
+                if attempts <= 3 || attempts % 10 == 0 {
+                    log::warn!(
+                        "[coord] action hotkey {kind:?} 第 {attempts} 次注册超时；3s 后重试"
+                    );
+                }
+                std::thread::sleep(std::time::Duration::from_secs(3));
+                continue;
+            }
+        };
+
+        match init_result {
+            Ok(monitor) => {
+                *action_hotkey_slot(&inner, kind).lock() = Some(monitor);
+                log::info!(
+                    "[coord] action hotkey {kind:?} listener installed after {} attempt(s)",
+                    attempts + 1
+                );
+                let inner_clone = Arc::clone(&inner);
+                std::thread::Builder::new()
+                    .name(action_hotkey_bridge_thread_name(kind).into())
+                    .spawn(move || action_hotkey_bridge_loop(inner_clone, rx, kind))
+                    .ok();
+                attempts = 0;
+            }
+            Err(e) => {
+                attempts += 1;
+                if attempts <= 3 || attempts % 10 == 0 {
+                    log::warn!(
+                        "[coord] action hotkey {kind:?} 第 {attempts} 次注册失败: {e}; 3s 后重试"
+                    );
+                }
+                std::thread::sleep(std::time::Duration::from_secs(3));
+            }
+        }
+    }
+}
+
+fn action_hotkey_bridge_loop(
+    inner: Arc<Inner>,
+    rx: mpsc::Receiver<ComboHotkeyEvent>,
+    kind: ActionHotkeyKind,
+) {
+    while let Ok(evt) = rx.recv() {
+        if inner.shortcut_recording_active.load(Ordering::SeqCst) {
+            continue;
+        }
+        if matches!(evt, ComboHotkeyEvent::Pressed) {
+            handle_action_hotkey_pressed(&inner, kind);
+        }
+    }
+}
+
+fn handle_action_hotkey_pressed(inner: &Arc<Inner>, kind: ActionHotkeyKind) {
+    match kind {
+        ActionHotkeyKind::SwitchStyle => switch_to_previous_style(inner),
+        ActionHotkeyKind::OpenApp => {
+            if let Some(app) = inner.app.lock().clone() {
+                let app_for_main = app.clone();
+                let _ = app.run_on_main_thread(move || {
+                    crate::show_main_window(&app_for_main);
+                });
+            }
+        }
+    }
+}
+
+fn switch_to_previous_style(inner: &Arc<Inner>) {
+    let mut prefs = inner.prefs.get();
+    let order = [
+        PolishMode::Raw,
+        PolishMode::Light,
+        PolishMode::Structured,
+        PolishMode::Formal,
+    ];
+    let enabled: Vec<PolishMode> = order
+        .into_iter()
+        .filter(|mode| prefs.enabled_modes.contains(mode))
+        .collect();
+    if enabled.len() <= 1 {
+        log::info!("[coord] switch style hotkey ignored: enabled style count <= 1");
+        return;
+    }
+    let current_index = enabled
+        .iter()
+        .position(|mode| *mode == prefs.default_mode)
+        .unwrap_or(0);
+    let next_index = if current_index == 0 {
+        enabled.len() - 1
+    } else {
+        current_index - 1
+    };
+    prefs.default_mode = enabled[next_index];
+    if let Err(e) = inner.prefs.set(prefs.clone()) {
+        log::warn!("[coord] switch style hotkey 保存失败: {e}");
+    } else {
+        log::info!(
+            "[coord] switch style hotkey changed default mode to {}",
+            prefs.default_mode.display_name()
+        );
+    }
+}
+
+fn take_combo_hotkey_on_main_thread(inner: &Arc<Inner>) {
+    let app = inner.app.lock().clone();
+    if let Some(app) = app {
+        let inner = Arc::clone(inner);
+        let _ = app.run_on_main_thread(move || {
+            inner.combo_hotkey.lock().take();
+        });
+    } else {
+        inner.combo_hotkey.lock().take();
+    }
+}
+
+fn take_translation_hotkey_on_main_thread(inner: &Arc<Inner>) {
+    let app = inner.app.lock().clone();
+    if let Some(app) = app {
+        let inner = Arc::clone(inner);
+        let _ = app.run_on_main_thread(move || {
+            inner.translation_hotkey.lock().take();
+        });
+    } else {
+        inner.translation_hotkey.lock().take();
+    }
+}
+
+fn take_action_hotkey_on_main_thread(inner: &Arc<Inner>, kind: ActionHotkeyKind) {
+    let app = inner.app.lock().clone();
+    if let Some(app) = app {
+        let inner = Arc::clone(inner);
+        let _ = app.run_on_main_thread(move || {
+            action_hotkey_slot(&inner, kind).lock().take();
+        });
+    } else {
+        action_hotkey_slot(inner, kind).lock().take();
+    }
+}
+
+fn action_hotkey_slot(
+    inner: &Arc<Inner>,
+    kind: ActionHotkeyKind,
+) -> &Mutex<Option<ComboHotkeyMonitor>> {
+    match kind {
+        ActionHotkeyKind::SwitchStyle => &inner.switch_style_hotkey,
+        ActionHotkeyKind::OpenApp => &inner.open_app_hotkey,
+    }
+}
+
+fn action_hotkey_binding(
+    inner: &Arc<Inner>,
+    kind: ActionHotkeyKind,
+) -> crate::types::ShortcutBinding {
+    let prefs = inner.prefs.get();
+    match kind {
+        ActionHotkeyKind::SwitchStyle => prefs.switch_style_hotkey,
+        ActionHotkeyKind::OpenApp => prefs.open_app_hotkey,
+    }
+}
+
+fn is_modifier_only_shortcut(binding: &crate::types::ShortcutBinding) -> bool {
+    binding.modifiers.is_empty()
+        && (binding.primary.eq_ignore_ascii_case("shift")
+            || crate::shortcut_binding::legacy_modifier_trigger(binding).is_some())
+}
+
+fn is_unconfigured_shortcut(binding: &crate::types::ShortcutBinding) -> bool {
+    binding.primary.trim().is_empty()
+}
+
+fn action_hotkey_bridge_thread_name(kind: ActionHotkeyKind) -> &'static str {
+    match kind {
+        ActionHotkeyKind::SwitchStyle => "openless-switch-style-hotkey-bridge",
+        ActionHotkeyKind::OpenApp => "openless-open-app-hotkey-bridge",
+    }
+}
+
+fn is_builtin_translation_shift(binding: &crate::types::ShortcutBinding) -> bool {
+    binding.modifiers.is_empty() && binding.primary.eq_ignore_ascii_case("shift")
+}
+
+fn modifier_shortcut_triggers(
+    inner: &Arc<Inner>,
+) -> (
+    Option<crate::types::HotkeyTrigger>,
+    Option<crate::types::HotkeyTrigger>,
+) {
+    let prefs = inner.prefs.get();
+    let qa_trigger = prefs
+        .qa_hotkey
+        .as_ref()
+        .and_then(crate::shortcut_binding::legacy_modifier_trigger);
+    let translation_trigger = if is_builtin_translation_shift(&prefs.translation_hotkey) {
+        None
+    } else {
+        crate::shortcut_binding::legacy_modifier_trigger(&prefs.translation_hotkey)
+    };
+    (qa_trigger, translation_trigger)
+}
+
+fn mark_translation_modifier_seen(inner: &Arc<Inner>) {
+    let phase = inner.state.lock().phase;
+    if matches!(phase, SessionPhase::Starting | SessionPhase::Listening) {
+        inner
+            .translation_modifier_seen
+            .store(true, Ordering::SeqCst);
+        log::info!("[coord] translation modifier seen during {phase:?}");
     }
 }
 
@@ -744,6 +1489,9 @@ fn close_qa_panel(inner: &Arc<Inner>) {
 
 fn hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEvent>) {
     while let Ok(evt) = rx.recv() {
+        if inner.shortcut_recording_active.load(Ordering::SeqCst) {
+            continue;
+        }
         let inner_cloned = Arc::clone(&inner);
         match evt {
             HotkeyEvent::Pressed => {
@@ -756,16 +1504,56 @@ fn hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEvent>) {
                 cancel_session(&inner_cloned);
             }
             HotkeyEvent::TranslationModifierPressed => {
-                // 仅在 Starting / Listening 阶段把 Shift 边沿计入"翻译模式触发"。
-                // Idle 阶段按 Shift 不应该影响下一段录音；Processing/Inserting 已经过了
-                // 决定走哪条管线的检查点，再 set 也没意义。
-                let phase = inner_cloned.state.lock().phase;
-                if matches!(phase, SessionPhase::Starting | SessionPhase::Listening) {
-                    inner_cloned
-                        .translation_modifier_seen
-                        .store(true, Ordering::SeqCst);
-                    log::info!("[coord] translation modifier seen during {phase:?}");
+                let translation_hotkey = inner_cloned.prefs.get().translation_hotkey;
+                if is_builtin_translation_shift(&translation_hotkey)
+                    || crate::shortcut_binding::legacy_modifier_trigger(&translation_hotkey)
+                        .is_some()
+                {
+                    mark_translation_modifier_seen(&inner_cloned);
                 }
+            }
+            HotkeyEvent::QaShortcutPressed => {
+                async_runtime::spawn(async move { handle_qa_hotkey_pressed(&inner_cloned).await });
+            }
+        }
+    }
+}
+
+fn reset_shortcut_held_state(inner: &Arc<Inner>) {
+    inner.hotkey_trigger_held.store(false, Ordering::SeqCst);
+    if let Some(monitor) = inner.hotkey.lock().as_ref() {
+        monitor.reset_held_state();
+    }
+    let prefs = inner.prefs.get();
+    if let Some(binding) = prefs.qa_hotkey.as_ref() {
+        if crate::shortcut_binding::legacy_modifier_trigger(binding).is_none() {
+            if let Some(monitor) = inner.qa_hotkey.lock().as_ref() {
+                if let Err(e) = monitor.update_binding(binding.clone()) {
+                    log::warn!("[coord] reset QA hotkey latch failed: {e}");
+                }
+            }
+        }
+    }
+    if !is_builtin_translation_shift(&prefs.translation_hotkey)
+        && crate::shortcut_binding::legacy_modifier_trigger(&prefs.translation_hotkey).is_none()
+    {
+        if let Some(monitor) = inner.translation_hotkey.lock().as_ref() {
+            if let Err(e) = monitor.update_binding(prefs.translation_hotkey.clone()) {
+                log::warn!("[coord] reset translation hotkey latch failed: {e}");
+            }
+        }
+    }
+    if !is_modifier_only_shortcut(&prefs.switch_style_hotkey) {
+        if let Some(monitor) = inner.switch_style_hotkey.lock().as_ref() {
+            if let Err(e) = monitor.update_binding(prefs.switch_style_hotkey.clone()) {
+                log::warn!("[coord] reset switch-style hotkey latch failed: {e}");
+            }
+        }
+    }
+    if !is_modifier_only_shortcut(&prefs.open_app_hotkey) {
+        if let Some(monitor) = inner.open_app_hotkey.lock().as_ref() {
+            if let Err(e) = monitor.update_binding(prefs.open_app_hotkey.clone()) {
+                log::warn!("[coord] reset open-app hotkey latch failed: {e}");
             }
         }
     }
@@ -974,6 +1762,9 @@ async fn handle_window_hotkey_event(
     code: String,
     repeat: bool,
 ) -> Result<(), String> {
+    if inner.shortcut_recording_active.load(Ordering::SeqCst) {
+        return Ok(());
+    }
     if event_type == "keydown" && key == "Escape" {
         // Esc 路由（issue #161）：QA 浮窗可见时优先取消 QA（不动 dictation）；
         // 否则走 dictation 取消通路。之前无条件 cancel_session 导致 QA 浮窗
@@ -1007,7 +1798,11 @@ async fn handle_window_hotkey_event(
             return Ok(());
         }
 
-        let trigger = inner.prefs.get().hotkey.trigger;
+        let Some(trigger) =
+            crate::shortcut_binding::legacy_modifier_trigger(&inner.prefs.get().dictation_hotkey)
+        else {
+            return Ok(());
+        };
         if !window_key_matches_trigger(trigger, &key, &code) {
             return Ok(());
         }
@@ -1049,6 +1844,8 @@ fn window_key_matches_trigger(trigger: crate::types::HotkeyTrigger, key: &str, c
         HotkeyTrigger::LeftOption => (key == "Alt" || key == "AltGraph") && code == "AltRight",
         HotkeyTrigger::RightCommand => key == "Meta" && code == "MetaRight",
         HotkeyTrigger::Fn => key == "Control" && code == "ControlRight",
+        // Custom 走 global-hotkey crate，不走 window hotkey fallback
+        HotkeyTrigger::Custom => false,
     }
 }
 
@@ -2234,7 +3031,9 @@ fn schedule_local_asr_release(inner: &Arc<Inner>) {
 }
 
 #[cfg(target_os = "macos")]
-async fn build_local_qwen3(inner: &Arc<Inner>) -> anyhow::Result<Arc<crate::asr::local::LocalQwenAsr>> {
+async fn build_local_qwen3(
+    inner: &Arc<Inner>,
+) -> anyhow::Result<Arc<crate::asr::local::LocalQwenAsr>> {
     let prefs = inner.prefs.get();
     let model_id = crate::asr::local::ModelId::from_str(&prefs.local_asr_active_model)
         .ok_or_else(|| anyhow::anyhow!("未知本地模型 id: {}", prefs.local_asr_active_model))?;
@@ -3174,6 +3973,19 @@ mod tests {
             SessionPhase::Listening
         );
         assert!(coordinator.inner.hotkey_trigger_held.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn enabling_shortcut_recording_clears_dictation_hold_latch() {
+        let coordinator = Coordinator::new();
+        coordinator
+            .inner
+            .hotkey_trigger_held
+            .store(true, Ordering::SeqCst);
+
+        coordinator.set_shortcut_recording_active(true);
+
+        assert!(!coordinator.inner.hotkey_trigger_held.load(Ordering::SeqCst));
     }
 
     #[test]

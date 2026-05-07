@@ -12,8 +12,10 @@
 
 mod asr;
 mod audio_mute;
+mod combo_hotkey;
 mod commands;
 mod coordinator;
+mod global_hotkey_runtime;
 mod hotkey;
 mod insertion;
 mod permissions;
@@ -22,6 +24,7 @@ mod polish;
 mod qa_hotkey;
 mod recorder;
 mod selection;
+mod shortcut_binding;
 mod types;
 mod windows_ime_ipc;
 mod windows_ime_profile;
@@ -183,8 +186,8 @@ pub fn run() {
             let app_handle = app.handle().clone();
             coordinator.bind_app(app_handle);
             coordinator.start_hotkey_listener();
-            // 同步启动 QA hotkey listener。和 dictation hotkey 平行，互不抢状态。
-            coordinator.start_qa_hotkey_listener();
+            // QA / custom combo hotkeys use `global-hotkey` (Carbon on macOS).
+            // Start those after RunEvent::Ready, when the AppKit event loop is live.
             if std::env::var("OPENLESS_SHOW_MAIN_ON_START").ok().as_deref() == Some("1") {
                 show_main_window(app.handle());
             }
@@ -196,6 +199,7 @@ pub fn run() {
             commands::set_settings,
             commands::get_hotkey_status,
             commands::get_hotkey_capability,
+            commands::set_shortcut_recording_active,
             commands::get_windows_ime_status,
             commands::get_credentials,
             commands::set_credential,
@@ -228,8 +232,15 @@ pub fn run() {
             commands::set_active_llm_provider,
             commands::get_qa_hotkey_label,
             commands::set_qa_hotkey,
+            commands::validate_shortcut_binding,
+            commands::set_dictation_hotkey,
+            commands::set_translation_hotkey,
+            commands::set_switch_style_hotkey,
+            commands::set_open_app_hotkey,
             commands::qa_window_dismiss,
             commands::qa_window_pin,
+            commands::validate_combo_hotkey,
+            commands::set_combo_hotkey,
             commands::validate_provider_credentials,
             commands::list_provider_models,
             commands::local_asr_get_settings,
@@ -251,6 +262,16 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| match event {
+            RunEvent::Ready => {
+                let coordinator = app.state::<Arc<coordinator::Coordinator>>();
+                // 同步启动 QA hotkey listener。和 dictation hotkey 平行，互不抢状态。
+                coordinator.start_qa_hotkey_listener();
+                // 启动自定义组合键监听器。当 trigger == Custom 时替代 modifier-only 监听器。
+                coordinator.start_combo_hotkey_listener();
+                coordinator.start_translation_hotkey_listener();
+                coordinator.start_switch_style_hotkey_listener();
+                coordinator.start_open_app_hotkey_listener();
+            }
             #[cfg(target_os = "macos")]
             RunEvent::Reopen { .. } => show_main_window(app),
             RunEvent::WindowEvent { label, event, .. } => {
@@ -275,6 +296,10 @@ pub fn run() {
                 let coordinator = app.state::<Arc<coordinator::Coordinator>>();
                 coordinator.stop_hotkey_listener();
                 coordinator.stop_qa_hotkey_listener();
+                coordinator.stop_combo_hotkey_listener();
+                coordinator.stop_translation_hotkey_listener();
+                coordinator.stop_switch_style_hotkey_listener();
+                coordinator.stop_open_app_hotkey_listener();
             }
             _ => {}
         });

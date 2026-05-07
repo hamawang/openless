@@ -134,13 +134,20 @@ fn keep_file(path: &str) -> bool {
         return false;
     }
     let lower = path.to_ascii_lowercase();
-    if lower.ends_with(".md") || lower.ends_with(".png") || lower.ends_with(".jpg")
-        || lower.ends_with(".jpeg") || lower.ends_with(".gif") || lower.ends_with(".svg")
+    if lower.ends_with(".md")
+        || lower.ends_with(".png")
+        || lower.ends_with(".jpg")
+        || lower.ends_with(".jpeg")
+        || lower.ends_with(".gif")
+        || lower.ends_with(".svg")
     {
         return false;
     }
     let ext = lower.rsplit('.').next().unwrap_or("");
-    matches!(ext, "json" | "safetensors" | "txt" | "bin" | "model" | "tiktoken")
+    matches!(
+        ext,
+        "json" | "safetensors" | "txt" | "bin" | "model" | "tiktoken"
+    )
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -205,7 +212,10 @@ impl DownloadManager {
             flag.store(true, Ordering::SeqCst);
             log::info!("[local-asr] cancel requested for {}", model_id.as_str());
         } else {
-            log::info!("[local-asr] cancel requested for {} but no active download", model_id.as_str());
+            log::info!(
+                "[local-asr] cancel requested for {} but no active download",
+                model_id.as_str()
+            );
         }
     }
 
@@ -289,9 +299,8 @@ async fn run_download(
         }
     }
 
-    let in_flight_bytes: Arc<Vec<AtomicU64>> = Arc::new(
-        info.files.iter().map(|_| AtomicU64::new(0)).collect()
-    );
+    let in_flight_bytes: Arc<Vec<AtomicU64>> =
+        Arc::new(info.files.iter().map(|_| AtomicU64::new(0)).collect());
     let already_done_bytes: u64 = info
         .files
         .iter()
@@ -480,7 +489,13 @@ async fn download_one(
     // 远端文件 ≤ 一个 chunk 大小：直接单 chunk，不走 sparse + idx
     if total_size <= CHUNK_SIZE {
         let result = chunk_with_retry(
-            client, url, &partial, 0, total_size - 1, &cancel, &on_progress,
+            client,
+            url,
+            &partial,
+            0,
+            total_size - 1,
+            &cancel,
+            &on_progress,
         )
         .await;
         if cancel.load(Ordering::SeqCst) {
@@ -499,7 +514,8 @@ async fn download_one(
     let done_set = read_idx(&idx_path);
 
     // 3. 预先把 .partial 撑到最终大小（sparse 文件，holes = 零字节）
-    if !partial.exists() || std::fs::metadata(&partial).map(|m| m.len()).unwrap_or(0) != total_size {
+    if !partial.exists() || std::fs::metadata(&partial).map(|m| m.len()).unwrap_or(0) != total_size
+    {
         let f = std::fs::OpenOptions::new()
             .write(true)
             .create(true)
@@ -630,7 +646,10 @@ fn read_idx(path: &Path) -> HashSet<usize> {
 
 fn append_idx(path: &Path, idx: usize) -> std::io::Result<()> {
     use std::io::Write;
-    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
     writeln!(f, "{idx}")
 }
 
@@ -657,7 +676,17 @@ async fn chunk_with_retry(
         if cancel.load(Ordering::SeqCst) {
             anyhow::bail!("cancelled");
         }
-        match try_download_range_append(client, url, partial, range_start, range_end, cancel, on_progress).await {
+        match try_download_range_append(
+            client,
+            url,
+            partial,
+            range_start,
+            range_end,
+            cancel,
+            on_progress,
+        )
+        .await
+        {
             Ok(()) => return Ok(()),
             Err(e) => {
                 let msg = format!("{e:#}");
@@ -673,7 +702,8 @@ async fn chunk_with_retry(
             }
         }
     }
-    Err(last_err.unwrap_or_else(|| anyhow::anyhow!("chunk failed after {PER_CHUNK_ATTEMPTS} attempts")))
+    Err(last_err
+        .unwrap_or_else(|| anyhow::anyhow!("chunk failed after {PER_CHUNK_ATTEMPTS} attempts")))
 }
 
 async fn try_download_range_append(
@@ -687,12 +717,19 @@ async fn try_download_range_append(
 ) -> Result<()> {
     let mut req = client.get(url);
     req = req.header("Range", format!("bytes={range_start}-{range_end}"));
-    let resp = req.send().await.with_context(|| format!("HTTP GET {url} failed"))?;
+    let resp = req
+        .send()
+        .await
+        .with_context(|| format!("HTTP GET {url} failed"))?;
     let status = resp.status();
     if status.as_u16() != 200 && status.as_u16() != 206 {
         anyhow::bail!("HTTP {status} for {url}");
     }
-    let effective_start = if status.as_u16() == 200 { 0 } else { range_start };
+    let effective_start = if status.as_u16() == 200 {
+        0
+    } else {
+        range_start
+    };
 
     // 截断 partial 到本次 attempt 的起点，再 seek 写入。
     // 老 append 实现的 bug：若上一次 attempt 已写了部分字节后失败，retry 拿到的还是
@@ -744,7 +781,18 @@ async fn chunk_with_retry_seek(
         if cancel.load(Ordering::SeqCst) {
             anyhow::bail!("cancelled");
         }
-        match try_download_range_seek(client, url, partial, range_start, range_end, cancel, bytes_in_file, on_progress).await {
+        match try_download_range_seek(
+            client,
+            url,
+            partial,
+            range_start,
+            range_end,
+            cancel,
+            bytes_in_file,
+            on_progress,
+        )
+        .await
+        {
             Ok(()) => return Ok(()),
             Err(e) => {
                 let msg = format!("{e:#}");
@@ -760,7 +808,11 @@ async fn chunk_with_retry_seek(
             }
         }
     }
-    Err(last_err.unwrap_or_else(|| anyhow::anyhow!("chunk [{range_start}-{range_end}] failed after {PER_CHUNK_ATTEMPTS} attempts")))
+    Err(last_err.unwrap_or_else(|| {
+        anyhow::anyhow!(
+            "chunk [{range_start}-{range_end}] failed after {PER_CHUNK_ATTEMPTS} attempts"
+        )
+    }))
 }
 
 async fn try_download_range_seek(
@@ -806,7 +858,8 @@ async fn try_download_range_seek(
         }
         let bytes = chunk.context("read stream chunk failed")?;
         file.write_all(&bytes).await.context("write chunk failed")?;
-        let new_total = bytes_in_file.fetch_add(bytes.len() as u64, Ordering::Relaxed) + bytes.len() as u64;
+        let new_total =
+            bytes_in_file.fetch_add(bytes.len() as u64, Ordering::Relaxed) + bytes.len() as u64;
         on_progress(new_total);
     }
     file.flush().await.ok();

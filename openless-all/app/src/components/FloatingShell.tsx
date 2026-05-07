@@ -23,6 +23,7 @@ import {
   HOTKEY_MODE_MIGRATION_DEFERRED_KEY,
   shouldShowHotkeyModeMigrationPrompt,
 } from '../lib/hotkeyMigration';
+import { formatComboLabel } from '../lib/hotkey';
 import { applyFontScale, readFontScale } from '../lib/fontScale';
 import { getCredentials, openExternal } from '../lib/ipc';
 import {
@@ -30,6 +31,7 @@ import {
   shouldShowProviderSetupPrompt,
 } from '../lib/providerSetup';
 import { NAVIGATE_LOCAL_ASR_EVENT, type SettingsSectionId } from '../pages/Settings';
+import { useHotkeySettings } from '../state/HotkeySettingsContext';
 import { useAppState, type AppTab } from '../state/useAppState';
 
 interface NavItem {
@@ -74,6 +76,7 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
   const [providerPromptOpen, setProviderPromptOpen] = useState(false);
   const [hotkeyModePromptOpen, setHotkeyModePromptOpen] = useState(false);
   const [helpPopoverOpen, setHelpPopoverOpen] = useState(false);
+  const { prefs } = useHotkeySettings();
 
   // tab 切换的 cross-fade：旧页 blur+fade out（180ms），结束后挂载新页（走 ol-page-slide enter）。
   // displayTab 是实际渲染的 tab，currentTab 是用户点中的目标 tab。
@@ -161,6 +164,18 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
     setSettingsOpen(true);
   };
 
+  // ⌘, 打开设置页面
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.metaKey && e.key === ',') {
+        e.preventDefault();
+        openSettings();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
+  }, []);
+
   const openProviderSettings = () => {
     rememberProviderPrompt();
     openSettings('providers');
@@ -240,6 +255,21 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
           </nav>
 
           <div style={{ flex: 1 }} />
+
+          {/* shortcut hint — 不要 dashed 边框，否则会切断"整片磨砂玻璃"的视觉 */}
+          <div style={{ padding: '10px 10px 6px', marginTop: 6 }}>
+            <div style={{ fontSize: 10.5, color: 'var(--ol-ink-4)', marginBottom: 6, letterSpacing: '0.02em' }}>{t('shell.shortcutLabel')}</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--ol-ink-2)' }}>
+              <kbd style={{
+              padding: '2px 7px', fontSize: 10.5,
+                background: 'rgba(255,255,255,0.7)', borderRadius: 5,
+                border: '0.5px solid var(--ol-line-strong)',
+                fontFamily: 'var(--ol-font-mono)', color: 'var(--ol-ink)',
+                boxShadow: '0 1px 0 rgba(0,0,0,.04)',
+              }}>{prefs ? formatComboLabel(prefs.dictationHotkey) : ''}</kbd>
+              <span style={{ color: 'var(--ol-ink-4)' }}>{t('shell.shortcutHint')}</span>
+            </div>
+          </div>
 
           {/* BETA 区域 — 去掉描边和实色背景，让它和底部 footer 一起浮在磨砂玻璃上 */}
           <div style={{ marginTop: 8, padding: '10px 10px 4px' }}>

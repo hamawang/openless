@@ -12,8 +12,8 @@ use crate::permissions::{self, PermissionStatus};
 use crate::persistence::{CredentialAccount, CredentialsSnapshot, CredentialsVault};
 use crate::polish::{LLMError, OpenAICompatibleConfig, OpenAICompatibleLLMProvider};
 use crate::types::{
-    ChineseScriptPreference, CredentialsStatus, DictationSession, DictionaryEntry,
-    HotkeyCapability, HotkeyStatus, OutputLanguagePreference, PolishMode, QaHotkeyBinding,
+    ChineseScriptPreference, ComboBinding, CredentialsStatus, DictationSession, DictionaryEntry,
+    HotkeyCapability, HotkeyStatus, OutputLanguagePreference, PolishMode, ShortcutBinding,
     UserPreferences, VocabPresetStore, WindowsImeStatus,
 };
 
@@ -30,6 +30,10 @@ trait SettingsWriter {
     fn write_settings(&self, prefs: UserPreferences) -> Result<(), String>;
     fn refresh_dictation_hotkey(&self);
     fn refresh_qa_hotkey(&self);
+    fn refresh_combo_hotkey(&self);
+    fn refresh_translation_hotkey(&self);
+    fn refresh_switch_style_hotkey(&self);
+    fn refresh_open_app_hotkey(&self);
 }
 
 impl SettingsWriter for Coordinator {
@@ -43,6 +47,22 @@ impl SettingsWriter for Coordinator {
 
     fn refresh_qa_hotkey(&self) {
         self.update_qa_hotkey_binding();
+    }
+
+    fn refresh_combo_hotkey(&self) {
+        self.update_combo_hotkey_binding();
+    }
+
+    fn refresh_translation_hotkey(&self) {
+        self.update_translation_hotkey_binding();
+    }
+
+    fn refresh_switch_style_hotkey(&self) {
+        self.update_switch_style_hotkey_binding();
+    }
+
+    fn refresh_open_app_hotkey(&self) {
+        self.update_open_app_hotkey_binding();
     }
 }
 
@@ -58,12 +78,37 @@ impl SettingsWriter for Arc<Coordinator> {
     fn refresh_qa_hotkey(&self) {
         self.update_qa_hotkey_binding();
     }
+
+    fn refresh_combo_hotkey(&self) {
+        self.update_combo_hotkey_binding();
+    }
+
+    fn refresh_translation_hotkey(&self) {
+        self.update_translation_hotkey_binding();
+    }
+
+    fn refresh_switch_style_hotkey(&self) {
+        self.update_switch_style_hotkey_binding();
+    }
+
+    fn refresh_open_app_hotkey(&self) {
+        self.update_open_app_hotkey_binding();
+    }
 }
 
-fn persist_settings<T: SettingsWriter>(coord: &T, prefs: UserPreferences) -> Result<(), String> {
+fn persist_settings<T: SettingsWriter>(
+    coord: &T,
+    mut prefs: UserPreferences,
+) -> Result<(), String> {
+    sync_dictation_hotkey_legacy_fields(&mut prefs);
+    reject_hotkey_collisions(&prefs)?;
     coord.write_settings(prefs)?;
     coord.refresh_dictation_hotkey();
     coord.refresh_qa_hotkey();
+    coord.refresh_combo_hotkey();
+    coord.refresh_translation_hotkey();
+    coord.refresh_switch_style_hotkey();
+    coord.refresh_open_app_hotkey();
     Ok(())
 }
 
@@ -89,6 +134,11 @@ pub fn get_hotkey_status(coord: CoordinatorState<'_>) -> HotkeyStatus {
 #[tauri::command]
 pub fn get_hotkey_capability(coord: CoordinatorState<'_>) -> HotkeyCapability {
     coord.hotkey_capability()
+}
+
+#[tauri::command]
+pub fn set_shortcut_recording_active(coord: CoordinatorState<'_>, active: bool) {
+    coord.set_shortcut_recording_active(active);
 }
 
 #[tauri::command]
@@ -154,7 +204,10 @@ pub fn set_credential(window: Window, account: String, value: String) -> Result<
 }
 
 #[tauri::command]
-pub fn set_active_asr_provider(coord: CoordinatorState<'_>, provider: String) -> Result<(), String> {
+pub fn set_active_asr_provider(
+    coord: CoordinatorState<'_>,
+    provider: String,
+) -> Result<(), String> {
     CredentialsVault::set_active_asr_provider(&provider).map_err(|e| e.to_string())?;
     if provider == crate::asr::local::PROVIDER_ID {
         // 切到本地 ASR → 后台预加载模型，下次按 hotkey 时不必等数秒。
@@ -728,9 +781,24 @@ pub fn get_qa_hotkey_label(coord: CoordinatorState<'_>) -> String {
 /// 传入 `None` 形式的字段不在这里支持——前端用 `binding == null` 时调下面的
 /// "disable" 写法（写 prefs.qa_hotkey = None）即可。
 #[tauri::command]
-pub fn set_qa_hotkey(coord: CoordinatorState<'_>, binding: QaHotkeyBinding) -> Result<(), String> {
+pub fn set_qa_hotkey(
+    coord: CoordinatorState<'_>,
+    binding: Option<ShortcutBinding>,
+) -> Result<(), String> {
+    if let Some(binding) = binding.as_ref() {
+        crate::shortcut_binding::validate_binding(binding).map_err(|e| e.to_string())?;
+        if binding.modifiers.is_empty() && binding.primary.eq_ignore_ascii_case("shift") {
+            return Err("Shift 单键目前只能用于翻译快捷键".into());
+        }
+    }
     let mut prefs = coord.prefs().get();
-    prefs.qa_hotkey = Some(binding);
+    if let Some(binding) = binding.as_ref() {
+        reject_dictation_qa_hotkey_overlap(&prefs.dictation_hotkey, binding)?;
+        reject_qa_translation_hotkey_overlap(binding, &prefs.translation_hotkey)?;
+        reject_qa_switch_style_hotkey_overlap(binding, &prefs.switch_style_hotkey)?;
+        reject_qa_open_app_hotkey_overlap(binding, &prefs.open_app_hotkey)?;
+    }
+    prefs.qa_hotkey = binding;
     coord.prefs().set(prefs).map_err(|e| e.to_string())?;
     coord.update_qa_hotkey_binding();
     Ok(())
@@ -746,6 +814,293 @@ pub fn qa_window_dismiss(coord: CoordinatorState<'_>) {
 #[tauri::command]
 pub fn qa_window_pin(coord: CoordinatorState<'_>, pinned: bool) {
     coord.qa_window_pin(pinned);
+}
+
+// ─────────────────────────── 自定义组合键 ───────────────────────────
+
+/// 测试一个组合键是否可以注册（验证格式，不实际注册）。
+#[tauri::command]
+pub fn validate_shortcut_binding(binding: ShortcutBinding) -> Result<(), String> {
+    crate::shortcut_binding::validate_binding(&binding).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn set_dictation_hotkey(
+    coord: CoordinatorState<'_>,
+    binding: ShortcutBinding,
+) -> Result<(), String> {
+    crate::shortcut_binding::validate_binding(&binding).map_err(|e| e.to_string())?;
+    reject_bare_shift_dictation_shortcut(&binding)?;
+    let mut prefs = coord.prefs().get();
+    if let Some(qa_hotkey) = prefs.qa_hotkey.as_ref() {
+        reject_dictation_qa_hotkey_overlap(&binding, qa_hotkey)?;
+    }
+    reject_dictation_translation_hotkey_overlap(&binding, &prefs.translation_hotkey)?;
+    reject_dictation_switch_style_hotkey_overlap(&binding, &prefs.switch_style_hotkey)?;
+    reject_dictation_open_app_hotkey_overlap(&binding, &prefs.open_app_hotkey)?;
+    prefs.dictation_hotkey = binding;
+    sync_dictation_hotkey_legacy_fields(&mut prefs);
+    coord.prefs().set(prefs).map_err(|e| e.to_string())?;
+    coord.update_hotkey_binding();
+    coord.update_combo_hotkey_binding();
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_translation_hotkey(
+    coord: CoordinatorState<'_>,
+    binding: ShortcutBinding,
+) -> Result<(), String> {
+    crate::shortcut_binding::validate_binding(&binding).map_err(|e| e.to_string())?;
+    let previous = coord.prefs().get();
+    reject_dictation_translation_hotkey_overlap(&previous.dictation_hotkey, &binding)?;
+    if let Some(qa_hotkey) = previous.qa_hotkey.as_ref() {
+        reject_qa_translation_hotkey_overlap(qa_hotkey, &binding)?;
+    }
+    reject_translation_switch_style_hotkey_overlap(&binding, &previous.switch_style_hotkey)?;
+    reject_translation_open_app_hotkey_overlap(&binding, &previous.open_app_hotkey)?;
+    let mut prefs = previous.clone();
+    prefs.translation_hotkey = binding;
+    coord.prefs().set(prefs).map_err(|e| e.to_string())?;
+    if let Err(e) = coord.try_update_translation_hotkey_binding() {
+        if let Err(rollback_err) = coord.prefs().set(previous) {
+            log::warn!("[commands] 回滚翻译快捷键失败: {rollback_err}");
+        }
+        coord.update_translation_hotkey_binding();
+        return Err(e);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_switch_style_hotkey(
+    coord: CoordinatorState<'_>,
+    binding: ShortcutBinding,
+) -> Result<(), String> {
+    crate::shortcut_binding::validate_binding(&binding).map_err(|e| e.to_string())?;
+    reject_modifier_only_action_shortcut(&binding)?;
+    let mut prefs = coord.prefs().get();
+    reject_dictation_switch_style_hotkey_overlap(&prefs.dictation_hotkey, &binding)?;
+    reject_translation_switch_style_hotkey_overlap(&prefs.translation_hotkey, &binding)?;
+    if let Some(qa_hotkey) = prefs.qa_hotkey.as_ref() {
+        reject_qa_switch_style_hotkey_overlap(qa_hotkey, &binding)?;
+    }
+    reject_switch_style_open_app_hotkey_overlap(&binding, &prefs.open_app_hotkey)?;
+    prefs.switch_style_hotkey = binding;
+    coord.prefs().set(prefs).map_err(|e| e.to_string())?;
+    coord.update_switch_style_hotkey_binding();
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_open_app_hotkey(
+    coord: CoordinatorState<'_>,
+    binding: ShortcutBinding,
+) -> Result<(), String> {
+    crate::shortcut_binding::validate_binding(&binding).map_err(|e| e.to_string())?;
+    reject_modifier_only_action_shortcut(&binding)?;
+    let mut prefs = coord.prefs().get();
+    reject_dictation_open_app_hotkey_overlap(&prefs.dictation_hotkey, &binding)?;
+    reject_translation_open_app_hotkey_overlap(&prefs.translation_hotkey, &binding)?;
+    if let Some(qa_hotkey) = prefs.qa_hotkey.as_ref() {
+        reject_qa_open_app_hotkey_overlap(qa_hotkey, &binding)?;
+    }
+    reject_switch_style_open_app_hotkey_overlap(&prefs.switch_style_hotkey, &binding)?;
+    prefs.open_app_hotkey = binding;
+    coord.prefs().set(prefs).map_err(|e| e.to_string())?;
+    coord.update_open_app_hotkey_binding();
+    Ok(())
+}
+
+fn reject_modifier_only_action_shortcut(binding: &ShortcutBinding) -> Result<(), String> {
+    if binding.modifiers.is_empty()
+        && (binding.primary.eq_ignore_ascii_case("shift")
+            || crate::shortcut_binding::legacy_modifier_trigger(binding).is_some())
+    {
+        return Err("该快捷键需要使用组合键或非修饰主键".into());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn validate_combo_hotkey(binding: ComboBinding) -> Result<(), String> {
+    let shortcut = ShortcutBinding {
+        primary: binding.primary,
+        modifiers: binding.modifiers,
+    };
+    reject_bare_shift_dictation_shortcut(&shortcut)?;
+    crate::combo_hotkey::validate_binding(&shortcut).map_err(|e| e.to_string())
+}
+
+/// 设置自定义录音组合键并热更新 monitor。
+#[tauri::command]
+pub fn set_combo_hotkey(coord: CoordinatorState<'_>, binding: ComboBinding) -> Result<(), String> {
+    let mut prefs = coord.prefs().get();
+    let shortcut = ShortcutBinding {
+        primary: binding.primary.clone(),
+        modifiers: binding.modifiers.clone(),
+    };
+    reject_bare_shift_dictation_shortcut(&shortcut)?;
+    crate::combo_hotkey::validate_binding(&shortcut).map_err(|e| e.to_string())?;
+    if let Some(qa_hotkey) = prefs.qa_hotkey.as_ref() {
+        reject_dictation_qa_hotkey_overlap(&shortcut, qa_hotkey)?;
+    }
+    reject_dictation_translation_hotkey_overlap(&shortcut, &prefs.translation_hotkey)?;
+    reject_dictation_switch_style_hotkey_overlap(&shortcut, &prefs.switch_style_hotkey)?;
+    reject_dictation_open_app_hotkey_overlap(&shortcut, &prefs.open_app_hotkey)?;
+    prefs.custom_combo_hotkey = Some(binding);
+    prefs.dictation_hotkey = shortcut;
+    sync_dictation_hotkey_legacy_fields(&mut prefs);
+    coord.prefs().set(prefs).map_err(|e| e.to_string())?;
+    coord.update_hotkey_binding();
+    coord.update_combo_hotkey_binding();
+    Ok(())
+}
+
+fn reject_bare_shift_dictation_shortcut(binding: &ShortcutBinding) -> Result<(), String> {
+    if binding.modifiers.is_empty() && binding.primary.eq_ignore_ascii_case("shift") {
+        return Err("Shift 单键目前只能用于翻译快捷键".into());
+    }
+    Ok(())
+}
+
+fn sync_dictation_hotkey_legacy_fields(prefs: &mut UserPreferences) {
+    if let Some(trigger) = crate::shortcut_binding::legacy_modifier_trigger(&prefs.dictation_hotkey)
+    {
+        prefs.hotkey.trigger = trigger;
+        prefs.custom_combo_hotkey = None;
+        return;
+    }
+    prefs.hotkey.trigger = crate::types::HotkeyTrigger::Custom;
+    prefs.custom_combo_hotkey = if prefs.dictation_hotkey.primary.trim().is_empty() {
+        None
+    } else {
+        Some(ComboBinding {
+            primary: prefs.dictation_hotkey.primary.clone(),
+            modifiers: prefs.dictation_hotkey.modifiers.clone(),
+        })
+    };
+}
+
+fn reject_dictation_qa_hotkey_overlap(
+    dictation: &ShortcutBinding,
+    qa: &ShortcutBinding,
+) -> Result<(), String> {
+    if shortcut_bindings_overlap(dictation, qa) {
+        return Err("QA 快捷键不能和听写快捷键相同".into());
+    }
+    Ok(())
+}
+
+fn reject_hotkey_overlap(
+    left: &ShortcutBinding,
+    right: &ShortcutBinding,
+    message: &'static str,
+) -> Result<(), String> {
+    if shortcut_bindings_overlap(left, right) {
+        return Err(message.into());
+    }
+    Ok(())
+}
+
+fn reject_hotkey_collisions(prefs: &UserPreferences) -> Result<(), String> {
+    if let Some(qa_hotkey) = prefs.qa_hotkey.as_ref() {
+        reject_dictation_qa_hotkey_overlap(&prefs.dictation_hotkey, qa_hotkey)?;
+        reject_qa_translation_hotkey_overlap(qa_hotkey, &prefs.translation_hotkey)?;
+        reject_qa_switch_style_hotkey_overlap(qa_hotkey, &prefs.switch_style_hotkey)?;
+        reject_qa_open_app_hotkey_overlap(qa_hotkey, &prefs.open_app_hotkey)?;
+    }
+    reject_dictation_translation_hotkey_overlap(&prefs.dictation_hotkey, &prefs.translation_hotkey)?;
+    reject_dictation_switch_style_hotkey_overlap(&prefs.dictation_hotkey, &prefs.switch_style_hotkey)?;
+    reject_dictation_open_app_hotkey_overlap(&prefs.dictation_hotkey, &prefs.open_app_hotkey)?;
+    reject_translation_switch_style_hotkey_overlap(
+        &prefs.translation_hotkey,
+        &prefs.switch_style_hotkey,
+    )?;
+    reject_translation_open_app_hotkey_overlap(&prefs.translation_hotkey, &prefs.open_app_hotkey)?;
+    reject_switch_style_open_app_hotkey_overlap(&prefs.switch_style_hotkey, &prefs.open_app_hotkey)?;
+    Ok(())
+}
+
+fn reject_dictation_translation_hotkey_overlap(
+    dictation: &ShortcutBinding,
+    translation: &ShortcutBinding,
+) -> Result<(), String> {
+    reject_hotkey_overlap(dictation, translation, "翻译快捷键不能和听写快捷键相同")
+}
+
+fn reject_dictation_switch_style_hotkey_overlap(
+    dictation: &ShortcutBinding,
+    switch_style: &ShortcutBinding,
+) -> Result<(), String> {
+    reject_hotkey_overlap(dictation, switch_style, "切换风格快捷键不能和听写快捷键相同")
+}
+
+fn reject_dictation_open_app_hotkey_overlap(
+    dictation: &ShortcutBinding,
+    open_app: &ShortcutBinding,
+) -> Result<(), String> {
+    reject_hotkey_overlap(dictation, open_app, "打开应用快捷键不能和听写快捷键相同")
+}
+
+fn reject_qa_translation_hotkey_overlap(
+    qa: &ShortcutBinding,
+    translation: &ShortcutBinding,
+) -> Result<(), String> {
+    reject_hotkey_overlap(qa, translation, "翻译快捷键不能和 QA 快捷键相同")
+}
+
+fn reject_qa_switch_style_hotkey_overlap(
+    qa: &ShortcutBinding,
+    switch_style: &ShortcutBinding,
+) -> Result<(), String> {
+    reject_hotkey_overlap(qa, switch_style, "切换风格快捷键不能和 QA 快捷键相同")
+}
+
+fn reject_qa_open_app_hotkey_overlap(
+    qa: &ShortcutBinding,
+    open_app: &ShortcutBinding,
+) -> Result<(), String> {
+    reject_hotkey_overlap(qa, open_app, "打开应用快捷键不能和 QA 快捷键相同")
+}
+
+fn reject_translation_switch_style_hotkey_overlap(
+    translation: &ShortcutBinding,
+    switch_style: &ShortcutBinding,
+) -> Result<(), String> {
+    reject_hotkey_overlap(translation, switch_style, "切换风格快捷键不能和翻译快捷键相同")
+}
+
+fn reject_translation_open_app_hotkey_overlap(
+    translation: &ShortcutBinding,
+    open_app: &ShortcutBinding,
+) -> Result<(), String> {
+    reject_hotkey_overlap(translation, open_app, "打开应用快捷键不能和翻译快捷键相同")
+}
+
+fn reject_switch_style_open_app_hotkey_overlap(
+    switch_style: &ShortcutBinding,
+    open_app: &ShortcutBinding,
+) -> Result<(), String> {
+    reject_hotkey_overlap(switch_style, open_app, "打开应用快捷键不能和切换风格快捷键相同")
+}
+
+fn shortcut_bindings_overlap(left: &ShortcutBinding, right: &ShortcutBinding) -> bool {
+    let left_legacy = crate::shortcut_binding::legacy_modifier_trigger(left);
+    let right_legacy = crate::shortcut_binding::legacy_modifier_trigger(right);
+    match (left_legacy, right_legacy) {
+        (Some(left), Some(right)) => left == right,
+        (Some(_), None) | (None, Some(_)) => false,
+        (None, None) => {
+            let Ok(left) = crate::shortcut_binding::parse_global_hotkey(left) else {
+                return false;
+            };
+            let Ok(right) = crate::shortcut_binding::parse_global_hotkey(right) else {
+                return false;
+            };
+            left == right
+        }
+    }
 }
 
 // ─────────────────────────── local ASR (Qwen3-ASR) ───────────────────────────
@@ -777,7 +1132,10 @@ pub fn local_asr_get_settings(coord: CoordinatorState<'_>) -> LocalAsrSettings {
 }
 
 #[tauri::command]
-pub fn local_asr_set_active_model(coord: CoordinatorState<'_>, model_id: String) -> Result<(), String> {
+pub fn local_asr_set_active_model(
+    coord: CoordinatorState<'_>,
+    model_id: String,
+) -> Result<(), String> {
     if ModelId::from_str(&model_id).is_none() {
         return Err(format!("unknown model id: {model_id}"));
     }
@@ -924,7 +1282,7 @@ mod tests {
     };
     use crate::persistence::CredentialsSnapshot;
     use crate::types::{
-        HotkeyBinding, HotkeyMode, HotkeyTrigger, QaHotkeyBinding, UserPreferences,
+        ComboBinding, HotkeyBinding, HotkeyMode, HotkeyTrigger, ShortcutBinding, UserPreferences,
     };
     use std::io::{Read, Write};
     use std::net::TcpListener;
@@ -936,6 +1294,7 @@ mod tests {
         saved: Mutex<Option<UserPreferences>>,
         dictation_refreshes: Mutex<u32>,
         qa_refreshes: Mutex<u32>,
+        combo_refreshes: Mutex<u32>,
     }
 
     fn snapshot() -> CredentialsSnapshot {
@@ -1010,6 +1369,14 @@ mod tests {
         fn refresh_qa_hotkey(&self) {
             *self.qa_refreshes.lock().unwrap() += 1;
         }
+
+        fn refresh_combo_hotkey(&self) {
+            *self.combo_refreshes.lock().unwrap() += 1;
+        }
+
+        fn refresh_translation_hotkey(&self) {}
+        fn refresh_switch_style_hotkey(&self) {}
+        fn refresh_open_app_hotkey(&self) {}
     }
 
     #[test]
@@ -1064,7 +1431,7 @@ mod tests {
                 trigger: HotkeyTrigger::RightControl,
                 mode: HotkeyMode::Toggle,
             },
-            qa_hotkey: Some(QaHotkeyBinding {
+            qa_hotkey: Some(ShortcutBinding {
                 primary: ";".to_string(),
                 modifiers: vec!["ctrl".to_string(), "shift".to_string()],
             }),
@@ -1079,7 +1446,7 @@ mod tests {
             .unwrap()
             .clone()
             .expect("settings saved");
-        assert_eq!(saved.hotkey.trigger, prefs.hotkey.trigger);
+        assert_eq!(saved.hotkey.trigger, HotkeyTrigger::RightOption);
         assert_eq!(saved.hotkey.mode, prefs.hotkey.mode);
         assert_eq!(
             saved.qa_hotkey.unwrap().primary,
@@ -1087,6 +1454,253 @@ mod tests {
         );
         assert_eq!(*writer.dictation_refreshes.lock().unwrap(), 1);
         assert_eq!(*writer.qa_refreshes.lock().unwrap(), 1);
+        assert_eq!(*writer.combo_refreshes.lock().unwrap(), 1);
+    }
+
+    #[test]
+    fn sync_dictation_hotkey_sets_modifier_trigger_and_clears_combo() {
+        let mut prefs = UserPreferences {
+            hotkey: HotkeyBinding {
+                trigger: HotkeyTrigger::Custom,
+                mode: HotkeyMode::Toggle,
+            },
+            custom_combo_hotkey: Some(ComboBinding {
+                primary: "D".into(),
+                modifiers: vec!["cmd".into(), "shift".into()],
+            }),
+            dictation_hotkey: ShortcutBinding {
+                primary: "RightControl".into(),
+                modifiers: vec![],
+            },
+            ..Default::default()
+        };
+
+        super::sync_dictation_hotkey_legacy_fields(&mut prefs);
+
+        assert_eq!(prefs.hotkey.trigger, HotkeyTrigger::RightControl);
+        assert!(prefs.custom_combo_hotkey.is_none());
+    }
+
+    #[test]
+    fn sync_dictation_hotkey_sets_custom_trigger_and_combo_binding() {
+        let mut prefs = UserPreferences {
+            hotkey: HotkeyBinding {
+                trigger: HotkeyTrigger::RightControl,
+                mode: HotkeyMode::Toggle,
+            },
+            dictation_hotkey: ShortcutBinding {
+                primary: "D".into(),
+                modifiers: vec!["cmd".into(), "shift".into()],
+            },
+            ..Default::default()
+        };
+
+        super::sync_dictation_hotkey_legacy_fields(&mut prefs);
+
+        assert_eq!(prefs.hotkey.trigger, HotkeyTrigger::Custom);
+        let combo = prefs.custom_combo_hotkey.expect("combo binding saved");
+        assert_eq!(combo.primary, "D");
+        assert_eq!(
+            combo.modifiers,
+            vec!["cmd".to_string(), "shift".to_string()]
+        );
+    }
+
+    #[test]
+    fn sync_dictation_hotkey_clears_empty_custom_binding() {
+        let mut prefs = UserPreferences {
+            hotkey: HotkeyBinding {
+                trigger: HotkeyTrigger::RightControl,
+                mode: HotkeyMode::Toggle,
+            },
+            custom_combo_hotkey: Some(ComboBinding {
+                primary: "D".into(),
+                modifiers: vec!["cmd".into(), "shift".into()],
+            }),
+            dictation_hotkey: ShortcutBinding {
+                primary: " ".into(),
+                modifiers: vec!["cmd".into()],
+            },
+            ..Default::default()
+        };
+
+        super::sync_dictation_hotkey_legacy_fields(&mut prefs);
+
+        assert_eq!(prefs.hotkey.trigger, HotkeyTrigger::Custom);
+        assert!(prefs.custom_combo_hotkey.is_none());
+    }
+
+    #[test]
+    fn validate_combo_hotkey_rejects_bare_shift() {
+        let result = super::validate_combo_hotkey(ComboBinding {
+            primary: "Shift".into(),
+            modifiers: vec![],
+        });
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn combo_hotkey_bare_shift_rejection_matches_dictation_setter() {
+        let binding = ShortcutBinding {
+            primary: "Shift".into(),
+            modifiers: vec![],
+        };
+
+        assert_eq!(
+            super::reject_bare_shift_dictation_shortcut(&binding),
+            Err("Shift 单键目前只能用于翻译快捷键".into())
+        );
+    }
+
+    #[test]
+    fn dictation_qa_overlap_rejects_same_modifier_only_binding() {
+        let binding = ShortcutBinding {
+            primary: "RightControl".into(),
+            modifiers: vec![],
+        };
+
+        assert_eq!(
+            super::reject_dictation_qa_hotkey_overlap(&binding, &binding),
+            Err("QA 快捷键不能和听写快捷键相同".into())
+        );
+    }
+
+    #[test]
+    fn dictation_qa_overlap_rejects_same_combo_binding() {
+        let dictation = ShortcutBinding {
+            primary: ";".into(),
+            modifiers: vec!["ctrl".into(), "shift".into()],
+        };
+        let qa = ShortcutBinding {
+            primary: ";".into(),
+            modifiers: vec!["control".into(), "shift".into()],
+        };
+
+        assert_eq!(
+            super::reject_dictation_qa_hotkey_overlap(&dictation, &qa),
+            Err("QA 快捷键不能和听写快捷键相同".into())
+        );
+    }
+
+    #[test]
+    fn dictation_qa_overlap_allows_distinct_bindings() {
+        let dictation = ShortcutBinding {
+            primary: "RightControl".into(),
+            modifiers: vec![],
+        };
+        let qa = ShortcutBinding {
+            primary: ";".into(),
+            modifiers: vec!["ctrl".into(), "shift".into()],
+        };
+
+        assert!(super::reject_dictation_qa_hotkey_overlap(&dictation, &qa).is_ok());
+    }
+
+    #[test]
+    fn dictation_translation_overlap_rejects_same_modifier_only_binding() {
+        let binding = ShortcutBinding {
+            primary: "RightControl".into(),
+            modifiers: vec![],
+        };
+
+        assert_eq!(
+            super::reject_dictation_translation_hotkey_overlap(&binding, &binding),
+            Err("翻译快捷键不能和听写快捷键相同".into())
+        );
+    }
+
+    #[test]
+    fn dictation_translation_overlap_rejects_same_combo_binding() {
+        let dictation = ShortcutBinding {
+            primary: "T".into(),
+            modifiers: vec!["ctrl".into(), "shift".into()],
+        };
+        let translation = ShortcutBinding {
+            primary: "T".into(),
+            modifiers: vec!["control".into(), "shift".into()],
+        };
+
+        assert_eq!(
+            super::reject_dictation_translation_hotkey_overlap(&dictation, &translation),
+            Err("翻译快捷键不能和听写快捷键相同".into())
+        );
+    }
+
+    #[test]
+    fn dictation_translation_overlap_allows_distinct_bindings() {
+        let dictation = ShortcutBinding {
+            primary: "RightControl".into(),
+            modifiers: vec![],
+        };
+        let translation = ShortcutBinding {
+            primary: "Shift".into(),
+            modifiers: vec![],
+        };
+
+        assert!(
+            super::reject_dictation_translation_hotkey_overlap(&dictation, &translation).is_ok()
+        );
+    }
+
+    #[test]
+    fn persist_settings_rejects_dictation_translation_overlap() {
+        let writer = FakeSettingsWriter::default();
+        let binding = ShortcutBinding {
+            primary: "RightControl".into(),
+            modifiers: vec![],
+        };
+        let prefs = UserPreferences {
+            dictation_hotkey: binding.clone(),
+            translation_hotkey: binding,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            persist_settings(&writer, prefs),
+            Err("翻译快捷键不能和听写快捷键相同".into())
+        );
+        assert!(writer.saved.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn persist_settings_rejects_translation_switch_style_overlap() {
+        let writer = FakeSettingsWriter::default();
+        let binding = ShortcutBinding {
+            primary: "T".into(),
+            modifiers: vec!["cmd".into(), "shift".into()],
+        };
+        let prefs = UserPreferences {
+            translation_hotkey: binding.clone(),
+            switch_style_hotkey: binding,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            persist_settings(&writer, prefs),
+            Err("切换风格快捷键不能和翻译快捷键相同".into())
+        );
+        assert!(writer.saved.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn persist_settings_rejects_switch_style_open_app_overlap() {
+        let writer = FakeSettingsWriter::default();
+        let binding = ShortcutBinding {
+            primary: "K".into(),
+            modifiers: vec!["cmd".into(), "shift".into()],
+        };
+        let prefs = UserPreferences {
+            switch_style_hotkey: binding.clone(),
+            open_app_hotkey: binding,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            persist_settings(&writer, prefs),
+            Err("打开应用快捷键不能和切换风格快捷键相同".into())
+        );
+        assert!(writer.saved.lock().unwrap().is_none());
     }
 
     #[tokio::test]
