@@ -38,6 +38,8 @@ use std::sync::Arc;
 #[cfg(target_os = "macos")]
 use std::time::Duration;
 
+const LOG_ROTATE_LIMIT_BYTES: u64 = 10 * 1024 * 1024;
+
 /// 第一次 show 时把 QA 浮窗摆到屏幕底部居中；之后的 show 不再 reposition，
 /// 让用户拖动后的位置在 hide → show 之间得以保持。详见 issue #118 v2。
 static QA_WINDOW_POSITIONED: AtomicBool = AtomicBool::new(false);
@@ -47,14 +49,11 @@ use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, RunEvent,
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    init_file_logger();
-    log::info!("=== OpenLess 启动 ===");
-
     let foundry_local_runtime = Arc::new(asr::local::FoundryLocalRuntime::new());
     #[cfg(target_os = "windows")]
-    let coordinator = Arc::new(coordinator::Coordinator::new_with_foundry_runtime(Arc::clone(
-        &foundry_local_runtime,
-    )));
+    let coordinator = Arc::new(coordinator::Coordinator::new_with_foundry_runtime(
+        Arc::clone(&foundry_local_runtime),
+    ));
     #[cfg(not(target_os = "windows"))]
     let coordinator = Arc::new(coordinator::Coordinator::new());
     let local_asr_download_manager = Arc::new(asr::local::DownloadManager::new());
@@ -83,6 +82,9 @@ pub fn run() {
         .manage(local_asr_download_manager.clone())
         .manage(foundry_local_runtime.clone())
         .setup(move |app| {
+            init_file_logger();
+            log::info!("=== OpenLess 启动 ===");
+
             // Capsule 启动时定位到屏幕底部居中并隐藏；coordinator 按需显示。
             // 与 Swift `CapsuleWindowController.repositionToBottomCenter` 同语义。
             if let Some(capsule) = app.get_webview_window("capsule") {
@@ -444,6 +446,9 @@ fn init_file_logger() {
     let log_dir = log_dir_path();
     let _ = std::fs::create_dir_all(&log_dir);
     let log_file = log_dir.join("openless.log");
+    if let Err(e) = rotate_log_if_too_large(&log_file) {
+        eprintln!("[logger] WARN 日志轮转失败: {e}");
+    }
     let config = ConfigBuilder::new().set_time_format_rfc3339().build();
     let mut loggers: Vec<Box<dyn simplelog::SharedLogger>> = vec![TermLogger::new(
         LevelFilter::Info,
@@ -459,6 +464,23 @@ fn init_file_logger() {
         loggers.push(WriteLogger::new(LevelFilter::Info, config, file));
     }
     let _ = CombinedLogger::init(loggers);
+}
+
+fn rotate_log_if_too_large(path: &std::path::Path) -> std::io::Result<()> {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return Ok(());
+    };
+    if metadata.len() <= LOG_ROTATE_LIMIT_BYTES {
+        return Ok(());
+    }
+
+    let archive = path.with_file_name("openless.log.1");
+    match std::fs::remove_file(&archive) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
+    }
+    std::fs::rename(path, archive)
 }
 
 pub fn log_dir_path() -> std::path::PathBuf {
@@ -851,7 +873,11 @@ fn capsule_height_for_qa() -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{capsule_height_for_qa, capsule_visual_height, capsule_window_bounds};
+    use super::{
+        capsule_height_for_qa, capsule_visual_height, capsule_window_bounds,
+        rotate_log_if_too_large, LOG_ROTATE_LIMIT_BYTES,
+    };
+    use std::io::Write;
 
     #[test]
     fn capsule_window_bounds_leave_room_for_windows_shadow() {
@@ -901,5 +927,63 @@ mod tests {
 
         #[cfg(not(target_os = "windows"))]
         assert_eq!(capsule_height_for_qa(), 96.0);
+    }
+
+    #[test]
+    fn oversized_log_rotates_to_single_archive() {
+        let dir = std::env::temp_dir().join(format!("openless-log-rotate-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("openless.log");
+        let archive = dir.join("openless.log.1");
+
+        {
+            let mut file = std::fs::File::create(&log).unwrap();
+            file.set_len(LOG_ROTATE_LIMIT_BYTES + 1).unwrap();
+            file.write_all(b"x").unwrap();
+        }
+        std::fs::write(&archive, b"old").unwrap();
+
+        rotate_log_if_too_large(&log).unwrap();
+
+        assert!(!log.exists());
+        assert!(archive.exists());
+        assert!(std::fs::metadata(&archive).unwrap().len() > LOG_ROTATE_LIMIT_BYTES);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn small_log_does_not_rotate() {
+        let dir = std::env::temp_dir().join(format!("openless-log-small-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("openless.log");
+        let archive = dir.join("openless.log.1");
+        std::fs::write(&log, b"small").unwrap();
+
+        rotate_log_if_too_large(&log).unwrap();
+
+        assert!(log.exists());
+        assert!(!archive.exists());
+        assert_eq!(std::fs::read(&log).unwrap(), b"small");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn missing_log_does_not_rotate() {
+        let dir = std::env::temp_dir().join(format!("openless-log-missing-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("openless.log");
+        let archive = dir.join("openless.log.1");
+
+        rotate_log_if_too_large(&log).unwrap();
+
+        assert!(!log.exists());
+        assert!(!archive.exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
