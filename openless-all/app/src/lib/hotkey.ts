@@ -87,17 +87,22 @@ export function getHotkeyBindingLabel(binding: HotkeyBinding | null | undefined)
 
 export function getHotkeyCodeLabel(code: string): string {
   const zh = i18n.language.toLowerCase().startsWith('zh');
+  const isMac = currentPlatform().isMac;
+  // Alt 在 macOS 是 Option（⌥），Meta 在 macOS 是 Command（⌘），Linux 上 Meta 是 Super。
+  // 之前对所有平台一律返回 "Alt" / "Win"，QA 浮窗里 macOS 用户的"右 Option" 被显示成
+  // "右 Alt"，"左 Cmd" 被显示成 "左 Win"——平台错配。下面按平台分流。
+  // 用 ⌥/⌘ 与 formatPrimary 的输出（"Right ⌥" 等）保持一致。
   const labels: Record<string, string> = {
     ControlLeft: zh ? '左Ctrl' : 'Left Ctrl',
     ControlRight: zh ? '右Ctrl' : 'Right Ctrl',
-    AltLeft: zh ? '左Alt' : 'Left Alt',
-    AltRight: zh ? '右Alt' : 'Right Alt',
+    AltLeft: isMac ? (zh ? '左 ⌥' : 'Left ⌥') : (zh ? '左Alt' : 'Left Alt'),
+    AltRight: isMac ? (zh ? '右 ⌥' : 'Right ⌥') : (zh ? '右Alt' : 'Right Alt'),
     ShiftLeft: zh ? '左Shift' : 'Left Shift',
     ShiftRight: zh ? '右Shift' : 'Right Shift',
-    MetaLeft: zh ? '左Win' : 'Left Win',
-    MetaRight: zh ? '右Win' : 'Right Win',
-    OSLeft: zh ? '左Win' : 'Left Win',
-    OSRight: zh ? '右Win' : 'Right Win',
+    MetaLeft: isMac ? (zh ? '左 ⌘' : 'Left ⌘') : (zh ? '左Win' : 'Left Win'),
+    MetaRight: isMac ? (zh ? '右 ⌘' : 'Right ⌘') : (zh ? '右Win' : 'Right Win'),
+    OSLeft: isMac ? (zh ? '左 ⌘' : 'Left ⌘') : (zh ? '左Win' : 'Left Win'),
+    OSRight: isMac ? (zh ? '右 ⌘' : 'Right ⌘') : (zh ? '右Win' : 'Right Win'),
     Fn: 'Fn',
     FnLock: 'FnLock',
     CapsLock: 'CapsLock',
