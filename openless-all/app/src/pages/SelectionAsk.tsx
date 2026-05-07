@@ -58,36 +58,18 @@ export function SelectionAsk() {
 
         {/* 1. 触发快捷键 */}
         <Card>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-            <div style={{ fontSize: 13, fontWeight: 600 }}>{t('selectionAsk.hotkey.title')}</div>
-            <span
-              style={{
-                padding: '2px 8px',
-                fontSize: 10.5,
-                fontWeight: 600,
-                letterSpacing: '0.04em',
-                borderRadius: 999,
-                background: enabled ? 'rgba(37,99,235,0.10)' : 'rgba(0,0,0,0.05)',
-                color: enabled ? 'var(--ol-blue)' : 'var(--ol-ink-4)',
-                textTransform: 'uppercase',
-              }}
-            >
-              {enabled ? t('selectionAsk.statusEnabled') : t('selectionAsk.statusDisabled')}
-            </span>
-          </div>
-          <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', marginBottom: 12, lineHeight: 1.55 }}>
-            {t('selectionAsk.hotkey.desc', { recordHotkey: recordHotkeyLabel })}
-          </div>
-          <button
-            onClick={async () => {
+          <CardHeaderToggle
+            title={t('selectionAsk.hotkey.title')}
+            checked={enabled}
+            onToggle={async () => {
               const nextHotkey = enabled ? null : defaultQaHotkey;
               await setQaHotkey(nextHotkey);
               await savePrefs({ ...prefs, qaHotkey: nextHotkey });
             }}
-            style={{ fontSize: 12, padding: '5px 14px', background: enabled ? 'rgba(0,0,0,0.06)' : 'var(--ol-blue)', color: enabled ? 'var(--ol-ink-2)' : '#fff', border: 0, borderRadius: 6, fontFamily: 'inherit', fontWeight: 500, cursor: 'default', marginBottom: 10 }}
-          >
-            {enabled ? t('selectionAsk.hotkey.optionDisabled') : t('selectionAsk.statusEnabled')}
-          </button>
+          />
+          <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', marginBottom: prefs.qaHotkey ? 12 : 0, lineHeight: 1.55 }}>
+            {t('selectionAsk.hotkey.desc', { recordHotkey: recordHotkeyLabel })}
+          </div>
           {prefs.qaHotkey && (
             <ShortcutRecorder
               value={prefs.qaHotkey}
@@ -101,38 +83,14 @@ export function SelectionAsk() {
 
         {/* 2. 历史保存 */}
         <Card>
-          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>{t('selectionAsk.history.title')}</div>
-          <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', marginBottom: 12, lineHeight: 1.55 }}>
+          <CardHeaderToggle
+            title={t('selectionAsk.history.title')}
+            checked={prefs.qaSaveHistory}
+            onToggle={() => onSaveHistoryChange(!prefs.qaSaveHistory)}
+          />
+          <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.55 }}>
             {t('selectionAsk.history.desc')}
           </div>
-          <button
-            onClick={() => onSaveHistoryChange(!prefs.qaSaveHistory)}
-            style={{
-              position: 'relative',
-              width: 44,
-              height: 24,
-              borderRadius: 999,
-              border: 0,
-              background: prefs.qaSaveHistory ? 'var(--ol-blue)' : 'rgba(0,0,0,0.18)',
-              cursor: 'default',
-              transition: 'background 0.16s var(--ol-motion-quick)',
-              padding: 0,
-            }}
-          >
-            <span
-              style={{
-                position: 'absolute',
-                top: 2,
-                left: prefs.qaSaveHistory ? 22 : 2,
-                width: 20,
-                height: 20,
-                borderRadius: 999,
-                background: '#fff',
-                boxShadow: '0 1px 2px rgba(0,0,0,.18)',
-                transition: 'left .16s var(--ol-motion-spring)',
-              }}
-            />
-          </button>
         </Card>
 
         {/* 3. 使用方法 */}
@@ -179,5 +137,51 @@ export function SelectionAsk() {
         </Card>
       </div>
     </>
+  );
+}
+
+// 卡片标题行右侧开关：与 Style 页面顶栏的 36×20 toggle 同款，保持全局视觉一致。
+function CardHeaderToggle({
+  title,
+  checked,
+  onToggle,
+}: {
+  title: string;
+  checked: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+      <div style={{ fontSize: 13, fontWeight: 600 }}>{title}</div>
+      <button
+        onClick={onToggle}
+        aria-pressed={checked}
+        style={{
+          position: 'relative',
+          width: 36,
+          height: 20,
+          borderRadius: 999,
+          border: 0,
+          background: checked ? 'var(--ol-blue)' : 'rgba(0,0,0,0.15)',
+          cursor: 'default',
+          transition: 'background 0.16s var(--ol-motion-quick)',
+          padding: 0,
+        }}
+      >
+        <span
+          style={{
+            position: 'absolute',
+            top: 2,
+            left: checked ? 18 : 2,
+            width: 16,
+            height: 16,
+            borderRadius: 999,
+            background: '#fff',
+            boxShadow: '0 1px 2px rgba(0,0,0,.2)',
+            transition: 'left .16s var(--ol-motion-spring)',
+          }}
+        />
+      </button>
+    </div>
   );
 }
