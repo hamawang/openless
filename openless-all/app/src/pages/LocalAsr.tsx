@@ -74,6 +74,7 @@ export function LocalAsr() {
   const refreshTimer = useRef<number | null>(null);
   const foundryRefreshTimer = useRef<number | null>(null);
   const engineStatusTimer = useRef<number | null>(null);
+  const foundrySelectionDirty = useRef(false);
 
   const refreshEngineStatus = async () => {
     try {
@@ -88,7 +89,7 @@ export function LocalAsr() {
     try {
       const status = await getFoundryLocalAsrStatus();
       setFoundryStatus(status);
-      if (isFoundryAlias(status.activeModel)) {
+      if (!foundrySelectionDirty.current && isFoundryAlias(status.activeModel)) {
         setSelectedFoundryAlias(status.activeModel);
       }
     } catch (err) {
@@ -296,6 +297,7 @@ export function LocalAsr() {
       await setFoundryLocalAsrModel(selectedFoundryAlias);
       await setActiveAsrProvider('foundry-local-whisper');
       await syncFoundryPrefs(selectedFoundryAlias, true);
+      foundrySelectionDirty.current = false;
       await refreshFoundryStatus();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -320,6 +322,7 @@ export function LocalAsr() {
       await setFoundryLocalAsrModel(selectedFoundryAlias);
       await syncFoundryPrefs(selectedFoundryAlias, false);
       await prepareFoundryLocalAsr(selectedFoundryAlias);
+      foundrySelectionDirty.current = false;
       await refreshFoundryStatus();
       await refreshFoundryCatalog();
     } catch (e) {
@@ -512,7 +515,10 @@ export function LocalAsr() {
                 {t('localAsr.foundrySelectedModel')}
                 <select
                   value={selectedFoundryAlias}
-                  onChange={e => setSelectedFoundryAlias(e.target.value as FoundryLocalAsrModelAlias)}
+                  onChange={e => {
+                    foundrySelectionDirty.current = true;
+                    setSelectedFoundryAlias(e.target.value as FoundryLocalAsrModelAlias);
+                  }}
                   disabled={foundryBusy !== null}
                   style={{
                     fontSize: 13,

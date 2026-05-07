@@ -1739,6 +1739,7 @@ mod tests {
             hotkey: HotkeyBinding {
                 trigger: HotkeyTrigger::RightControl,
                 mode: HotkeyMode::Toggle,
+                ..Default::default()
             },
             qa_hotkey: Some(ShortcutBinding {
                 primary: ";".to_string(),
@@ -1772,6 +1773,7 @@ mod tests {
             hotkey: HotkeyBinding {
                 trigger: HotkeyTrigger::Custom,
                 mode: HotkeyMode::Toggle,
+                keys: None,
             },
             custom_combo_hotkey: Some(ComboBinding {
                 primary: "D".into(),
@@ -1796,6 +1798,7 @@ mod tests {
             hotkey: HotkeyBinding {
                 trigger: HotkeyTrigger::RightControl,
                 mode: HotkeyMode::Toggle,
+                keys: None,
             },
             dictation_hotkey: ShortcutBinding {
                 primary: "D".into(),
@@ -1821,6 +1824,7 @@ mod tests {
             hotkey: HotkeyBinding {
                 trigger: HotkeyTrigger::RightControl,
                 mode: HotkeyMode::Toggle,
+                keys: None,
             },
             custom_combo_hotkey: Some(ComboBinding {
                 primary: "D".into(),

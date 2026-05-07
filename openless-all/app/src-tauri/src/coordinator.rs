@@ -725,6 +725,7 @@ impl Coordinator {
         let binding = crate::types::HotkeyBinding {
             trigger: dictation_trigger.unwrap_or(crate::types::HotkeyTrigger::Custom),
             mode: prefs.hotkey.mode,
+            keys: None,
         };
         if dictation_trigger.is_some() {
             take_combo_hotkey_on_main_thread(&self.inner);
@@ -874,6 +875,7 @@ fn hotkey_supervisor_loop(inner: Arc<Inner>) {
         let binding = crate::types::HotkeyBinding {
             trigger,
             mode: prefs.hotkey.mode,
+            keys: None,
         };
         match HotkeyMonitor::start(binding, tx) {
             Ok(monitor) => {
@@ -4227,6 +4229,7 @@ mod tests {
                 hotkey: crate::types::HotkeyBinding {
                     trigger: HotkeyTrigger::RightControl,
                     mode: HotkeyMode::Hold,
+                    keys: None,
                 },
                 ..Default::default()
             })
