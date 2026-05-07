@@ -6,6 +6,7 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 #[cfg(target_os = "windows")]
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(target_os = "windows")]
 use std::sync::Arc;
 
@@ -28,6 +29,7 @@ pub struct FoundryLocalWhisperAsr {
     model_alias: String,
     language_hint: Option<String>,
     buffer: Mutex<Vec<u8>>,
+    cancel_generation: AtomicU64,
 }
 
 impl FoundryLocalWhisperAsr {
@@ -42,6 +44,7 @@ impl FoundryLocalWhisperAsr {
             model_alias,
             language_hint: normalize_language_hint(language_hint),
             buffer: Mutex::new(Vec::new()),
+            cancel_generation: AtomicU64::new(0),
         }
     }
 
@@ -51,6 +54,7 @@ impl FoundryLocalWhisperAsr {
             model_alias,
             language_hint: normalize_language_hint(language_hint),
             buffer: Mutex::new(Vec::new()),
+            cancel_generation: AtomicU64::new(0),
         }
     }
 
@@ -63,6 +67,7 @@ impl FoundryLocalWhisperAsr {
     }
 
     pub async fn transcribe(&self, audio_timeout: std::time::Duration) -> Result<RawTranscript> {
+        let cancel_generation = self.cancel_generation.load(Ordering::SeqCst);
         let pcm = self.buffer.lock().clone();
         if pcm.is_empty() {
             return Ok(RawTranscript {
@@ -72,6 +77,9 @@ impl FoundryLocalWhisperAsr {
         }
 
         let result = self.transcribe_inner(&pcm, audio_timeout).await;
+        if self.cancel_generation.load(Ordering::SeqCst) != cancel_generation {
+            anyhow::bail!("Foundry Local Whisper transcription cancelled");
+        }
         if result.is_ok() {
             self.buffer.lock().clear();
         }
@@ -121,6 +129,7 @@ impl FoundryLocalWhisperAsr {
     }
 
     pub fn cancel(&self) {
+        self.cancel_generation.fetch_add(1, Ordering::SeqCst);
         self.buffer.lock().clear();
     }
 }
@@ -298,6 +307,12 @@ mod tests {
         provider.cancel();
 
         assert!(provider.buffer.lock().is_empty());
+        assert_eq!(
+            provider
+                .cancel_generation
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
         assert_eq!(provider.model_alias(), "whisper-small");
         assert_eq!(provider.language_hint(), Some("zh"));
     }

@@ -2522,6 +2522,15 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
                     r
                 }
                 Err(e) => {
+                    if inner.state.lock().cancelled {
+                        log::info!(
+                            "[coord] Foundry Local Whisper transcribe cancelled — discarding transcript"
+                        );
+                        schedule_foundry_local_asr_release(inner, current_session_id);
+                        restore_prepared_windows_ime_session(inner, current_session_id);
+                        set_phase_idle_if_session_matches(inner, current_session_id);
+                        return Ok(());
+                    }
                     log::error!("[coord] Foundry Local Whisper transcribe failed: {e:#}");
                     emit_capsule(
                         inner,
@@ -3180,6 +3189,11 @@ fn foundry_local_asr_release_keep_secs(inner: &Arc<Inner>) -> u32 {
 }
 
 #[cfg(target_os = "windows")]
+fn foundry_release_session_is_current(inner: &Arc<Inner>, session_id: u64) -> bool {
+    inner.state.lock().session_id == session_id
+}
+
+#[cfg(target_os = "windows")]
 fn schedule_foundry_local_asr_release(inner: &Arc<Inner>, session_id: u64) {
     let keep_secs = foundry_local_asr_release_keep_secs(inner);
     let runtime = Arc::clone(&inner.foundry_local_runtime);
@@ -3187,9 +3201,9 @@ fn schedule_foundry_local_asr_release(inner: &Arc<Inner>, session_id: u64) {
     tauri::async_runtime::spawn(async move {
         if keep_secs > 0 {
             tokio::time::sleep(std::time::Duration::from_secs(keep_secs as u64)).await;
-            if inner.state.lock().session_id != session_id {
-                return;
-            }
+        }
+        if !foundry_release_session_is_current(&inner, session_id) {
+            return;
         }
         if let Err(error) = runtime.release_now().await {
             log::warn!("[foundry-asr] scheduled release failed: {error:#}");
@@ -4062,6 +4076,26 @@ mod tests {
         coordinator.inner.prefs.set(prefs).unwrap();
 
         assert_eq!(foundry_local_asr_release_keep_secs(&coordinator.inner), 7);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn foundry_release_guard_rejects_stale_session() {
+        let runtime = Arc::new(crate::asr::local::FoundryLocalRuntime::new());
+        let coordinator = Coordinator::new_with_foundry_runtime(runtime);
+        let old_session_id = coordinator.inner.state.lock().session_id;
+
+        assert!(foundry_release_session_is_current(
+            &coordinator.inner,
+            old_session_id
+        ));
+
+        coordinator.inner.state.lock().session_id = old_session_id.wrapping_add(1);
+
+        assert!(!foundry_release_session_is_current(
+            &coordinator.inner,
+            old_session_id
+        ));
     }
 
     #[test]
