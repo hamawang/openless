@@ -99,6 +99,11 @@ mod imp {
             self.cancel_prepare.store(true, Ordering::SeqCst);
         }
 
+        #[cfg(test)]
+        pub(crate) fn cancel_prepare_requested_for_tests(&self) -> bool {
+            self.cancel_prepare.load(Ordering::SeqCst)
+        }
+
         pub async fn catalog_snapshot(&self) -> Result<Vec<FoundryCatalogModel>> {
             let _lifecycle = self.lifecycle.lock().await;
             let manager = self.manager()?;

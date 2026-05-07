@@ -130,6 +130,8 @@ impl FoundryLocalWhisperAsr {
 
     pub fn cancel(&self) {
         self.cancel_generation.fetch_add(1, Ordering::SeqCst);
+        #[cfg(target_os = "windows")]
+        self.runtime.request_cancel_prepare();
         self.buffer.lock().clear();
     }
 }
@@ -241,13 +243,20 @@ mod tests {
     use crate::recorder::AudioConsumer;
 
     #[cfg(target_os = "windows")]
-    fn test_provider() -> super::FoundryLocalWhisperAsr {
+    fn test_provider() -> (
+        super::FoundryLocalWhisperAsr,
+        std::sync::Arc<super::FoundryLocalRuntime>,
+    ) {
         use std::sync::Arc;
 
-        super::FoundryLocalWhisperAsr::new(
-            Arc::new(super::FoundryLocalRuntime::new()),
-            "whisper-small".into(),
-            Some(" zh ".into()),
+        let runtime = Arc::new(super::FoundryLocalRuntime::new());
+        (
+            super::FoundryLocalWhisperAsr::new(
+                Arc::clone(&runtime),
+                "whisper-small".into(),
+                Some(" zh ".into()),
+            ),
+            runtime,
         )
     }
 
@@ -301,6 +310,9 @@ mod tests {
 
     #[test]
     fn foundry_provider_cancel_clears_buffer() {
+        #[cfg(target_os = "windows")]
+        let (provider, _) = test_provider();
+        #[cfg(not(target_os = "windows"))]
         let provider = test_provider();
 
         provider.consume_pcm_chunk(&[1, 0, 2, 0]);
@@ -315,5 +327,15 @@ mod tests {
         );
         assert_eq!(provider.model_alias(), "whisper-small");
         assert_eq!(provider.language_hint(), Some("zh"));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn foundry_provider_cancel_requests_runtime_prepare_cancel() {
+        let (provider, runtime) = test_provider();
+
+        provider.cancel();
+
+        assert!(runtime.cancel_prepare_requested_for_tests());
     }
 }
