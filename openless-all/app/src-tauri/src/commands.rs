@@ -8,6 +8,11 @@ use serde::Serialize;
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager, State, Window};
 
+use crate::asr::local::foundry::{
+    model_alias_is_known, FoundryCatalogModel, FoundryPrepareProgressPayload, FoundryRuntimeStatus,
+    DEFAULT_MODEL_ALIAS, PROVIDER_ID as FOUNDRY_LOCAL_PROVIDER_ID,
+};
+use crate::asr::local::FoundryLocalRuntime;
 use crate::coordinator::Coordinator;
 use crate::permissions::{self, PermissionStatus};
 use crate::persistence::{CredentialAccount, CredentialsSnapshot, CredentialsVault};
@@ -250,7 +255,7 @@ fn asr_configured_for_provider(provider: &str, snap: &CredentialsSnapshot) -> bo
     if provider == "volcengine" {
         return volcengine_configured(snap);
     }
-    if provider == crate::asr::local::PROVIDER_ID {
+    if provider == crate::asr::local::PROVIDER_ID || active_foundry_asr_is_supported(provider) {
         // 本地 ASR 不依赖云端凭据。
         return true;
     }
@@ -268,6 +273,31 @@ fn configured(field: &Option<String>) -> bool {
         .unwrap_or(false)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LocalAsrReleasePlan {
+    qwen: bool,
+    foundry: bool,
+}
+
+fn local_asr_release_plan_for_provider(provider: &str) -> LocalAsrReleasePlan {
+    LocalAsrReleasePlan {
+        qwen: provider != crate::asr::local::PROVIDER_ID,
+        foundry: provider != FOUNDRY_LOCAL_PROVIDER_ID,
+    }
+}
+
+async fn release_foundry_runtime_if_inactive(
+    runtime: &Arc<FoundryLocalRuntime>,
+    release_foundry: bool,
+) {
+    if release_foundry {
+        runtime.request_cancel_prepare();
+        if let Err(error) = runtime.release_now().await {
+            log::warn!("[foundry-asr] release inactive runtime failed: {error:#}");
+        }
+    }
+}
+
 #[tauri::command]
 pub fn set_credential(window: Window, account: String, value: String) -> Result<(), String> {
     ensure_main_window(&window)?;
@@ -280,20 +310,27 @@ pub fn set_credential(window: Window, account: String, value: String) -> Result<
 }
 
 #[tauri::command]
-pub fn set_active_asr_provider(
+pub async fn set_active_asr_provider(
     coord: CoordinatorState<'_>,
+    runtime: State<'_, Arc<FoundryLocalRuntime>>,
     provider: String,
 ) -> Result<(), String> {
+    if provider == FOUNDRY_LOCAL_PROVIDER_ID && !active_foundry_asr_is_supported(&provider) {
+        return Err("Foundry Local Whisper is only available on Windows".to_string());
+    }
     CredentialsVault::set_active_asr_provider(&provider).map_err(|e| e.to_string())?;
+    let release_plan = local_asr_release_plan_for_provider(&provider);
     if provider == crate::asr::local::PROVIDER_ID {
         // 切到本地 ASR → 后台预加载模型，下次按 hotkey 时不必等数秒。
         coord.preload_local_asr_in_background();
-    } else {
+    }
+    if release_plan.qwen {
         // 切回云端 → 用户已不需要本地引擎，立刻释放 1.2GB+ RAM；不释放的话只会等到
         // schedule_local_asr_release 的下一次 dictation 才触发，而切回云端后根本不会
         // 再走 local 路径，引擎会驻留到进程退出。
         coord.release_local_asr_engine();
     }
+    release_foundry_runtime_if_inactive(runtime.inner(), release_plan.foundry).await;
     Ok(())
 }
 
@@ -419,12 +456,33 @@ async fn validate_llm_provider() -> Result<(), String> {
 }
 
 async fn validate_asr_provider() -> Result<(), String> {
+    let active_asr = CredentialsVault::get_active_asr();
+    if active_asr_is_keyless_for_validation(&active_asr) {
+        return Ok(());
+    }
+
     let config = read_openai_provider_config("asr")?;
     let model = CredentialsVault::get(CredentialAccount::AsrModel)
         .map_err(|e| e.to_string())?
         .filter(|s| !s.trim().is_empty())
         .ok_or_else(|| "asrModelMissing".to_string())?;
     validate_asr_transcription(&config, model.trim()).await
+}
+
+fn active_asr_is_keyless_for_validation(provider: &str) -> bool {
+    provider == crate::asr::local::PROVIDER_ID || active_foundry_asr_is_supported(provider)
+}
+
+fn active_foundry_asr_is_supported(provider: &str) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        provider == FOUNDRY_LOCAL_PROVIDER_ID
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = provider;
+        false
+    }
 }
 
 async fn validate_asr_transcription(config: &ProviderConfig, model: &str) -> Result<(), String> {
@@ -1086,15 +1144,24 @@ fn reject_hotkey_collisions(prefs: &UserPreferences) -> Result<(), String> {
         reject_qa_switch_style_hotkey_overlap(qa_hotkey, &prefs.switch_style_hotkey)?;
         reject_qa_open_app_hotkey_overlap(qa_hotkey, &prefs.open_app_hotkey)?;
     }
-    reject_dictation_translation_hotkey_overlap(&prefs.dictation_hotkey, &prefs.translation_hotkey)?;
-    reject_dictation_switch_style_hotkey_overlap(&prefs.dictation_hotkey, &prefs.switch_style_hotkey)?;
+    reject_dictation_translation_hotkey_overlap(
+        &prefs.dictation_hotkey,
+        &prefs.translation_hotkey,
+    )?;
+    reject_dictation_switch_style_hotkey_overlap(
+        &prefs.dictation_hotkey,
+        &prefs.switch_style_hotkey,
+    )?;
     reject_dictation_open_app_hotkey_overlap(&prefs.dictation_hotkey, &prefs.open_app_hotkey)?;
     reject_translation_switch_style_hotkey_overlap(
         &prefs.translation_hotkey,
         &prefs.switch_style_hotkey,
     )?;
     reject_translation_open_app_hotkey_overlap(&prefs.translation_hotkey, &prefs.open_app_hotkey)?;
-    reject_switch_style_open_app_hotkey_overlap(&prefs.switch_style_hotkey, &prefs.open_app_hotkey)?;
+    reject_switch_style_open_app_hotkey_overlap(
+        &prefs.switch_style_hotkey,
+        &prefs.open_app_hotkey,
+    )?;
     Ok(())
 }
 
@@ -1109,7 +1176,11 @@ fn reject_dictation_switch_style_hotkey_overlap(
     dictation: &ShortcutBinding,
     switch_style: &ShortcutBinding,
 ) -> Result<(), String> {
-    reject_hotkey_overlap(dictation, switch_style, "切换风格快捷键不能和听写快捷键相同")
+    reject_hotkey_overlap(
+        dictation,
+        switch_style,
+        "切换风格快捷键不能和听写快捷键相同",
+    )
 }
 
 fn reject_dictation_open_app_hotkey_overlap(
@@ -1144,7 +1215,11 @@ fn reject_translation_switch_style_hotkey_overlap(
     translation: &ShortcutBinding,
     switch_style: &ShortcutBinding,
 ) -> Result<(), String> {
-    reject_hotkey_overlap(translation, switch_style, "切换风格快捷键不能和翻译快捷键相同")
+    reject_hotkey_overlap(
+        translation,
+        switch_style,
+        "切换风格快捷键不能和翻译快捷键相同",
+    )
 }
 
 fn reject_translation_open_app_hotkey_overlap(
@@ -1158,7 +1233,11 @@ fn reject_switch_style_open_app_hotkey_overlap(
     switch_style: &ShortcutBinding,
     open_app: &ShortcutBinding,
 ) -> Result<(), String> {
-    reject_hotkey_overlap(switch_style, open_app, "打开应用快捷键不能和切换风格快捷键相同")
+    reject_hotkey_overlap(
+        switch_style,
+        open_app,
+        "打开应用快捷键不能和切换风格快捷键相同",
+    )
 }
 
 fn shortcut_bindings_overlap(left: &ShortcutBinding, right: &ShortcutBinding) -> bool {
@@ -1269,10 +1348,7 @@ pub fn local_asr_cancel_download(
 }
 
 #[tauri::command]
-pub fn local_asr_delete_model(
-    coord: CoordinatorState<'_>,
-    model_id: String,
-) -> Result<(), String> {
+pub fn local_asr_delete_model(coord: CoordinatorState<'_>, model_id: String) -> Result<(), String> {
     let id = ModelId::from_str(&model_id).ok_or_else(|| format!("unknown model id: {model_id}"))?;
     // 如果内存里加载的就是要删的这个模型，先释放：否则 mmap 残留指向已 unlink 的文件，
     // 且 RAM 直到下次切模型 / 用户手动按"释放"才回收。
@@ -1330,6 +1406,130 @@ pub fn local_asr_set_keep_loaded_secs(
     coord.prefs().set(prefs).map_err(|e| e.to_string())
 }
 
+// ───────────────────── Windows local ASR (Foundry Local Whisper) ─────────────────────
+
+fn active_foundry_model_from_prefs(prefs: &UserPreferences) -> String {
+    if model_alias_is_known(&prefs.foundry_local_asr_model) {
+        prefs.foundry_local_asr_model.clone()
+    } else {
+        DEFAULT_MODEL_ALIAS.to_string()
+    }
+}
+
+fn validate_foundry_model_alias(model_alias: &str) -> Result<(), String> {
+    if model_alias_is_known(model_alias) {
+        Ok(())
+    } else {
+        Err(format!(
+            "unknown Foundry Whisper model alias: {model_alias}"
+        ))
+    }
+}
+
+fn normalize_foundry_language_hint(language_hint: &str) -> Result<String, String> {
+    let normalized = language_hint.trim().to_string();
+    if normalized.is_empty()
+        || (normalized.len() == 2 && normalized.bytes().all(|b| b.is_ascii_lowercase()))
+    {
+        Ok(normalized)
+    } else {
+        Err("language hint must be empty or ISO 639-1 lowercase code".to_string())
+    }
+}
+
+#[tauri::command]
+pub fn foundry_local_asr_status(
+    coord: CoordinatorState<'_>,
+    runtime: State<'_, Arc<FoundryLocalRuntime>>,
+) -> FoundryRuntimeStatus {
+    let prefs = coord.prefs().get();
+    let active_model = active_foundry_model_from_prefs(&prefs);
+    runtime.status_snapshot(&active_model)
+}
+
+#[tauri::command]
+pub async fn foundry_local_asr_catalog(
+    runtime: State<'_, Arc<FoundryLocalRuntime>>,
+) -> Result<Vec<FoundryCatalogModel>, String> {
+    runtime
+        .catalog_snapshot()
+        .await
+        .map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+pub fn foundry_local_asr_set_model(
+    coord: CoordinatorState<'_>,
+    model_alias: String,
+) -> Result<(), String> {
+    validate_foundry_model_alias(&model_alias)?;
+    let mut prefs = coord.prefs().get();
+    prefs.foundry_local_asr_model = model_alias;
+    coord.prefs().set(prefs).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn foundry_local_asr_set_language_hint(
+    coord: CoordinatorState<'_>,
+    language_hint: String,
+) -> Result<(), String> {
+    let normalized = normalize_foundry_language_hint(&language_hint)?;
+    let mut prefs = coord.prefs().get();
+    prefs.foundry_local_asr_language_hint = normalized;
+    coord.prefs().set(prefs).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn foundry_local_asr_prepare(
+    app: AppHandle,
+    runtime: State<'_, Arc<FoundryLocalRuntime>>,
+    model_alias: String,
+) -> Result<String, String> {
+    validate_foundry_model_alias(&model_alias)?;
+    let progress_app = app.clone();
+    let result = runtime
+        .ensure_loaded_with_progress(&model_alias, move |payload| {
+            emit_foundry_prepare_progress(&progress_app, payload);
+        })
+        .await;
+    match result {
+        Ok(model_id) => Ok(model_id),
+        Err(error) => {
+            let message = format!("{error:#}");
+            emit_foundry_prepare_progress(
+                &app,
+                FoundryPrepareProgressPayload::failed(
+                    model_alias,
+                    "Foundry Local Whisper prepare failed",
+                    message.clone(),
+                ),
+            );
+            Err(message)
+        }
+    }
+}
+
+#[tauri::command]
+pub fn foundry_local_asr_cancel_prepare(
+    runtime: State<'_, Arc<FoundryLocalRuntime>>,
+) -> Result<(), String> {
+    runtime.request_cancel_prepare();
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn foundry_local_asr_release(
+    runtime: State<'_, Arc<FoundryLocalRuntime>>,
+) -> Result<(), String> {
+    runtime.release_now().await.map_err(|e| format!("{e:#}"))
+}
+
+fn emit_foundry_prepare_progress(app: &AppHandle, payload: FoundryPrepareProgressPayload) {
+    if let Err(error) = app.emit("foundry-local-asr-prepare-progress", payload) {
+        log::warn!("[foundry-asr] emit prepare progress failed: {error}");
+    }
+}
+
 /// 把当前会话的 openless.log 复制到用户选择的位置（前端用 plugin-dialog 拿 target_path）。
 /// 路径来自 lib::log_dir_path() —— mac: ~/Library/Logs/OpenLess/openless.log，
 /// windows: %LOCALAPPDATA%\OpenLess\Logs\openless.log。
@@ -1352,9 +1552,12 @@ fn _ensure_snapshot_used(_: CredentialsSnapshot) {}
 #[cfg(test)]
 mod tests {
     use super::{
+        active_asr_is_keyless_for_validation, active_foundry_model_from_prefs,
         asr_configured_for_provider, asr_transcriptions_url, fetch_provider_models,
-        llm_configured_for_snapshot, models_url, parse_model_ids, persist_settings,
-        ProviderConfig, SettingsWriter,
+        llm_configured_for_snapshot, local_asr_release_plan_for_provider, models_url,
+        normalize_foundry_language_hint, parse_model_ids, persist_settings,
+        release_foundry_runtime_if_inactive, validate_foundry_model_alias, ProviderConfig,
+        SettingsWriter,
     };
     use crate::persistence::CredentialsSnapshot;
     use crate::types::{
@@ -1407,6 +1610,112 @@ mod tests {
             crate::asr::local::PROVIDER_ID,
             &snapshot()
         ));
+        #[cfg(target_os = "windows")]
+        assert!(asr_configured_for_provider(
+            crate::asr::local::foundry::PROVIDER_ID,
+            &snapshot()
+        ));
+        #[cfg(not(target_os = "windows"))]
+        assert!(!asr_configured_for_provider(
+            crate::asr::local::foundry::PROVIDER_ID,
+            &snapshot()
+        ));
+    }
+
+    #[test]
+    fn credentials_status_treats_foundry_local_asr_as_configured() {
+        #[cfg(target_os = "windows")]
+        {
+            assert!(asr_configured_for_provider(
+                crate::asr::local::foundry::PROVIDER_ID,
+                &CredentialsSnapshot::default()
+            ));
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            assert!(!asr_configured_for_provider(
+                crate::asr::local::foundry::PROVIDER_ID,
+                &CredentialsSnapshot::default()
+            ));
+        }
+    }
+
+    #[test]
+    fn local_asr_providers_skip_external_validation() {
+        assert!(active_asr_is_keyless_for_validation(
+            crate::asr::local::PROVIDER_ID
+        ));
+        #[cfg(target_os = "windows")]
+        assert!(active_asr_is_keyless_for_validation(
+            crate::asr::local::foundry::PROVIDER_ID
+        ));
+        #[cfg(not(target_os = "windows"))]
+        assert!(!active_asr_is_keyless_for_validation(
+            crate::asr::local::foundry::PROVIDER_ID
+        ));
+        assert!(!active_asr_is_keyless_for_validation("volcengine"));
+        assert!(!active_asr_is_keyless_for_validation("whisper"));
+    }
+
+    #[test]
+    fn provider_switch_release_plan_covers_inactive_local_runtimes() {
+        let qwen = local_asr_release_plan_for_provider(crate::asr::local::PROVIDER_ID);
+        assert!(!qwen.qwen);
+        assert!(qwen.foundry);
+
+        let foundry = local_asr_release_plan_for_provider(crate::asr::local::foundry::PROVIDER_ID);
+        assert!(foundry.qwen);
+        assert!(!foundry.foundry);
+
+        let cloud = local_asr_release_plan_for_provider("volcengine");
+        assert!(cloud.qwen);
+        assert!(cloud.foundry);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[tokio::test]
+    async fn provider_switch_release_requests_foundry_prepare_cancel_first() {
+        let runtime = std::sync::Arc::new(crate::asr::local::FoundryLocalRuntime::new());
+
+        release_foundry_runtime_if_inactive(&runtime, true).await;
+
+        assert!(runtime.cancel_prepare_requested_for_tests());
+    }
+
+    #[test]
+    fn foundry_language_hint_accepts_empty_and_lowercase_iso_639_1() {
+        assert_eq!(normalize_foundry_language_hint("").unwrap(), "");
+        assert_eq!(normalize_foundry_language_hint("   ").unwrap(), "");
+        assert_eq!(normalize_foundry_language_hint("zh").unwrap(), "zh");
+        assert_eq!(normalize_foundry_language_hint(" en ").unwrap(), "en");
+    }
+
+    #[test]
+    fn foundry_language_hint_rejects_non_lowercase_iso_639_1() {
+        assert!(normalize_foundry_language_hint("ZH").is_err());
+        assert!(normalize_foundry_language_hint("zho").is_err());
+        assert!(normalize_foundry_language_hint("z1").is_err());
+    }
+
+    #[test]
+    fn foundry_model_alias_validation_rejects_unknown_alias() {
+        assert!(
+            validate_foundry_model_alias(crate::asr::local::foundry::DEFAULT_MODEL_ALIAS).is_ok()
+        );
+        assert!(validate_foundry_model_alias("whisper-large").is_err());
+    }
+
+    #[test]
+    fn foundry_active_model_pref_falls_back_to_default_for_unknown_alias() {
+        let prefs = UserPreferences {
+            foundry_local_asr_model: "whisper-large".to_string(),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            active_foundry_model_from_prefs(&prefs),
+            crate::asr::local::foundry::DEFAULT_MODEL_ALIAS
+        );
     }
 
     #[test]
@@ -1506,6 +1815,7 @@ mod tests {
             hotkey: HotkeyBinding {
                 trigger: HotkeyTrigger::RightControl,
                 mode: HotkeyMode::Toggle,
+                ..Default::default()
             },
             qa_hotkey: Some(ShortcutBinding {
                 primary: ";".to_string(),
@@ -1539,6 +1849,7 @@ mod tests {
             hotkey: HotkeyBinding {
                 trigger: HotkeyTrigger::Custom,
                 mode: HotkeyMode::Toggle,
+                keys: None,
             },
             custom_combo_hotkey: Some(ComboBinding {
                 primary: "D".into(),
@@ -1563,6 +1874,7 @@ mod tests {
             hotkey: HotkeyBinding {
                 trigger: HotkeyTrigger::RightControl,
                 mode: HotkeyMode::Toggle,
+                keys: None,
             },
             dictation_hotkey: ShortcutBinding {
                 primary: "D".into(),
@@ -1588,6 +1900,7 @@ mod tests {
             hotkey: HotkeyBinding {
                 trigger: HotkeyTrigger::RightControl,
                 mode: HotkeyMode::Toggle,
+                keys: None,
             },
             custom_combo_hotkey: Some(ComboBinding {
                 primary: "D".into(),

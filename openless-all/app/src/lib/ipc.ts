@@ -44,7 +44,7 @@ export async function invokeOrMock<T>(
 
 // ── Mock fixtures ──────────────────────────────────────────────────────
 const mockSettings: UserPreferences = {
-  hotkey: { trigger: 'rightControl', mode: 'toggle' },
+  hotkey: { trigger: 'rightControl', mode: 'toggle', keys: [{ code: 'ControlRight' }] },
   dictationHotkey: { primary: 'RightControl', modifiers: [] },
   defaultMode: 'structured',
   enabledModes: ['raw', 'light', 'structured', 'formal'],
@@ -52,7 +52,7 @@ const mockSettings: UserPreferences = {
   showCapsule: true,
   muteDuringRecording: false,
   microphoneDeviceName: '',
-  activeAsrProvider: 'volcengine',
+  activeAsrProvider: 'foundry-local-whisper',
   activeLlmProvider: 'ark',
   restoreClipboardAfterPaste: true,
   allowNonTsfInsertionFallback: true,
@@ -69,6 +69,9 @@ const mockSettings: UserPreferences = {
   localAsrActiveModel: 'qwen3-asr-0.6b',
   localAsrMirror: 'huggingface',
   localAsrKeepLoadedSecs: 300,
+  foundryLocalAsrModel: 'whisper-small',
+  foundryLocalAsrLanguageHint: '',
+  foundryLocalAsrKeepLoadedSecs: 300,
 };
 
 const mockHotkeyCapability: HotkeyCapability = {
@@ -78,11 +81,11 @@ const mockHotkeyCapability: HotkeyCapability = {
   supportsModifierOnlyTrigger: true,
   supportsSideSpecificModifiers: true,
   explicitFallbackAvailable: false,
-  statusHint: '默认建议使用“右 Control + 切换式说话”；若更习惯按住说话，可在录音设置里切回。若无响应，可在权限页查看 hook 安装状态。',
+  statusHint: '默认建议使用“右Ctrl + 单击”；若更习惯按住说话，可在录音设置里切回“按住”。若无响应，可在权限页查看 hook 安装状态。',
 };
 
 const mockCredentialsStatus: CredentialsStatus = {
-  activeAsrProvider: 'volcengine',
+  activeAsrProvider: 'foundry-local-whisper',
   activeLlmProvider: 'ark',
   asrConfigured: true,
   llmConfigured: true,

@@ -4,6 +4,7 @@
 use anyhow::{Context, Result};
 use parking_lot::Mutex;
 
+use crate::asr::wav::encode_wav_16k_mono;
 use crate::asr::RawTranscript;
 
 pub struct WhisperBatchASR {
@@ -56,7 +57,11 @@ impl WhisperBatchASR {
             anyhow::bail!("Whisper API key missing");
         }
 
-        let wav = encode_wav_16k_mono(pcm);
+        let samples: Vec<i16> = pcm
+            .chunks_exact(2)
+            .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]))
+            .collect();
+        let wav = encode_wav_16k_mono(&samples);
         let base_url = self.base_url.trim_end_matches('/');
         let url = format!("{}/audio/transcriptions", base_url);
 
@@ -98,31 +103,4 @@ impl crate::recorder::AudioConsumer for WhisperBatchASR {
     fn consume_pcm_chunk(&self, pcm: &[u8]) {
         self.buffer.lock().extend_from_slice(pcm);
     }
-}
-
-fn encode_wav_16k_mono(pcm: &[u8]) -> Vec<u8> {
-    let sample_rate: u32 = 16_000;
-    let num_channels: u16 = 1;
-    let bits_per_sample: u16 = 16;
-    let byte_rate = sample_rate * num_channels as u32 * (bits_per_sample as u32 / 8);
-    let block_align = num_channels * (bits_per_sample / 8);
-    let data_size = pcm.len() as u32;
-    let chunk_size = 36 + data_size;
-
-    let mut wav = Vec::with_capacity(44 + pcm.len());
-    wav.extend_from_slice(b"RIFF");
-    wav.extend_from_slice(&chunk_size.to_le_bytes());
-    wav.extend_from_slice(b"WAVE");
-    wav.extend_from_slice(b"fmt ");
-    wav.extend_from_slice(&16u32.to_le_bytes());
-    wav.extend_from_slice(&1u16.to_le_bytes()); // PCM
-    wav.extend_from_slice(&num_channels.to_le_bytes());
-    wav.extend_from_slice(&sample_rate.to_le_bytes());
-    wav.extend_from_slice(&byte_rate.to_le_bytes());
-    wav.extend_from_slice(&block_align.to_le_bytes());
-    wav.extend_from_slice(&bits_per_sample.to_le_bytes());
-    wav.extend_from_slice(b"data");
-    wav.extend_from_slice(&data_size.to_le_bytes());
-    wav.extend_from_slice(pcm);
-    wav
 }

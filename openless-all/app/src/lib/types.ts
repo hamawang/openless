@@ -51,11 +51,16 @@ export type HotkeyTrigger =
   | 'rightAlt'
   | 'custom';
 
-export type HotkeyMode = 'toggle' | 'hold';
+export type HotkeyMode = 'toggle' | 'hold' | 'doubleClick';
+
+export interface HotkeyKey {
+  code: string;
+}
 
 export interface HotkeyBinding {
   trigger: HotkeyTrigger;
   mode: HotkeyMode;
+  keys?: HotkeyKey[] | null;
 }
 
 export type HotkeyAdapterKind = 'macEventTap' | 'windowsLowLevel' | 'rdev';
@@ -154,6 +159,12 @@ export interface UserPreferences {
   /** 本地 ASR 引擎在内存中的保留时长（秒）。0 = 说完话即释放；
    *  300 = 默认 5 分钟；86400 ≈ 不释放（保持加载）。 */
   localAsrKeepLoadedSecs: number;
+  /** Windows Foundry Local Whisper 当前激活的模型 alias。 */
+  foundryLocalAsrModel: string;
+  /** Windows Foundry Local Whisper 语言 hint。空字符串表示自动检测。 */
+  foundryLocalAsrLanguageHint: string;
+  /** Windows Foundry Local Whisper 模型在 runtime 中保持加载的秒数。 */
+  foundryLocalAsrKeepLoadedSecs: number;
 }
 
 export interface MicrophoneDevice {

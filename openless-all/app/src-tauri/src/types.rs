@@ -186,6 +186,15 @@ pub struct UserPreferences {
     /// 默认 300（5 分钟）：兼顾连续听写不重加载、长时间不用释放 1.2GB+ RAM。
     #[serde(default = "default_local_asr_keep_loaded_secs")]
     pub local_asr_keep_loaded_secs: u32,
+    /// Windows Foundry Local Whisper 当前激活的模型 alias。
+    #[serde(default = "default_foundry_local_asr_model")]
+    pub foundry_local_asr_model: String,
+    /// Windows Foundry Local Whisper 语言 hint。空字符串 = 自动检测。
+    #[serde(default)]
+    pub foundry_local_asr_language_hint: String,
+    /// Windows Foundry Local Whisper 模型在 runtime 中保持加载多久。
+    #[serde(default = "default_local_asr_keep_loaded_secs")]
+    pub foundry_local_asr_keep_loaded_secs: u32,
 }
 
 fn default_local_asr_model() -> String {
@@ -198,6 +207,21 @@ fn default_local_asr_mirror() -> String {
 
 fn default_local_asr_keep_loaded_secs() -> u32 {
     300
+}
+
+fn default_foundry_local_asr_model() -> String {
+    crate::asr::local::foundry::DEFAULT_MODEL_ALIAS.into()
+}
+
+fn default_active_asr_provider() -> String {
+    #[cfg(target_os = "windows")]
+    {
+        return crate::asr::local::foundry::PROVIDER_ID.into();
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        "volcengine".into()
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -234,6 +258,12 @@ struct UserPreferencesWire {
     local_asr_mirror: String,
     #[serde(default = "default_local_asr_keep_loaded_secs")]
     local_asr_keep_loaded_secs: u32,
+    #[serde(default = "default_foundry_local_asr_model")]
+    foundry_local_asr_model: String,
+    #[serde(default)]
+    foundry_local_asr_language_hint: String,
+    #[serde(default = "default_local_asr_keep_loaded_secs")]
+    foundry_local_asr_keep_loaded_secs: u32,
 }
 
 impl Default for UserPreferencesWire {
@@ -265,6 +295,9 @@ impl Default for UserPreferencesWire {
             local_asr_active_model: prefs.local_asr_active_model,
             local_asr_mirror: prefs.local_asr_mirror,
             local_asr_keep_loaded_secs: prefs.local_asr_keep_loaded_secs,
+            foundry_local_asr_model: prefs.foundry_local_asr_model,
+            foundry_local_asr_language_hint: prefs.foundry_local_asr_language_hint,
+            foundry_local_asr_keep_loaded_secs: prefs.foundry_local_asr_keep_loaded_secs,
         }
     }
 }
@@ -310,6 +343,9 @@ impl<'de> Deserialize<'de> for UserPreferences {
             local_asr_active_model: wire.local_asr_active_model,
             local_asr_mirror: wire.local_asr_mirror,
             local_asr_keep_loaded_secs: wire.local_asr_keep_loaded_secs,
+            foundry_local_asr_model: wire.foundry_local_asr_model,
+            foundry_local_asr_language_hint: wire.foundry_local_asr_language_hint,
+            foundry_local_asr_keep_loaded_secs: wire.foundry_local_asr_keep_loaded_secs,
         })
     }
 }
@@ -394,7 +430,7 @@ impl Default for UserPreferences {
             show_capsule: true,
             mute_during_recording: false,
             microphone_device_name: String::new(),
-            active_asr_provider: "volcengine".into(),
+            active_asr_provider: default_active_asr_provider(),
             active_llm_provider: "ark".into(),
             restore_clipboard_after_paste: true,
             allow_non_tsf_insertion_fallback: true,
@@ -411,6 +447,9 @@ impl Default for UserPreferences {
             local_asr_active_model: default_local_asr_model(),
             local_asr_mirror: default_local_asr_mirror(),
             local_asr_keep_loaded_secs: default_local_asr_keep_loaded_secs(),
+            foundry_local_asr_model: default_foundry_local_asr_model(),
+            foundry_local_asr_language_hint: String::new(),
+            foundry_local_asr_keep_loaded_secs: default_local_asr_keep_loaded_secs(),
         }
     }
 }
@@ -608,6 +647,7 @@ impl HotkeyTrigger {
 pub enum HotkeyMode {
     Toggle,
     Hold,
+    DoubleClick,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -628,11 +668,140 @@ impl HotkeyAdapterKind {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct HotkeyKey {
+    pub code: String,
+}
+
+impl HotkeyKey {
+    pub fn new(code: impl Into<String>) -> Self {
+        Self { code: code.into() }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase")]
 pub struct HotkeyBinding {
     pub trigger: HotkeyTrigger,
     pub mode: HotkeyMode,
+    pub keys: Option<Vec<HotkeyKey>>,
+}
+
+impl HotkeyBinding {
+    pub fn effective_codes(&self) -> Vec<String> {
+        let Some(keys) = &self.keys else {
+            let code = legacy_trigger_code(self.trigger);
+            return if code.is_empty() {
+                Vec::new()
+            } else {
+                vec![code.to_string()]
+            };
+        };
+        keys.iter()
+            .map(|key| key.code.trim().to_string())
+            .filter(|code| !code.is_empty())
+            .collect()
+    }
+
+    pub fn display_label(&self) -> String {
+        let codes = self.effective_codes();
+        if codes.is_empty() {
+            return "未设置".to_string();
+        }
+        codes
+            .iter()
+            .map(|code| display_hotkey_code(code))
+            .collect::<Vec<_>>()
+            .join("+")
+    }
+}
+
+fn legacy_trigger_code(trigger: HotkeyTrigger) -> &'static str {
+    match trigger {
+        HotkeyTrigger::RightOption | HotkeyTrigger::RightAlt => "AltRight",
+        HotkeyTrigger::LeftOption => "AltLeft",
+        HotkeyTrigger::RightControl => "ControlRight",
+        HotkeyTrigger::LeftControl => "ControlLeft",
+        HotkeyTrigger::RightCommand => "MetaRight",
+        #[cfg(target_os = "windows")]
+        HotkeyTrigger::Fn => "ControlRight",
+        #[cfg(not(target_os = "windows"))]
+        HotkeyTrigger::Fn => "Fn",
+        HotkeyTrigger::Custom => "",
+    }
+}
+
+fn display_hotkey_code(code: &str) -> String {
+    let label = match code {
+        "ControlLeft" => "左Ctrl",
+        "ControlRight" => "右 Control",
+        "AltLeft" => "左Alt",
+        "AltRight" => "右Alt",
+        "ShiftLeft" => "左Shift",
+        "ShiftRight" => "右Shift",
+        "MetaLeft" | "OSLeft" => "左Win",
+        "MetaRight" | "OSRight" => "右Win",
+        "Fn" => "Fn",
+        "FnLock" => "FnLock",
+        "CapsLock" => "CapsLock",
+        "ScrollLock" => "ScrLock",
+        "Pause" => "Pause",
+        "PrintScreen" => "PrtSc",
+        "Backspace" => "Backspace",
+        "Tab" => "Tab",
+        "Enter" => "Enter",
+        "Space" => "Space",
+        "Insert" => "Insert",
+        "Delete" => "Delete",
+        "Home" => "Home",
+        "End" => "End",
+        "PageUp" => "PageUp",
+        "PageDown" => "PageDown",
+        "ArrowUp" => "Up",
+        "ArrowDown" => "Down",
+        "ArrowLeft" => "Left",
+        "ArrowRight" => "Right",
+        "NumpadAdd" => "Num+",
+        "NumpadSubtract" => "Num-",
+        "NumpadMultiply" => "Num*",
+        "NumpadDivide" => "Num/",
+        "NumpadDecimal" => "Num.",
+        "NumpadEnter" => "NumEnter",
+        "Mouse4" => "Mouse4",
+        "Mouse5" => "Mouse5",
+        "Backquote" => "`",
+        "Minus" => "-",
+        "Equal" => "=",
+        "BracketLeft" => "[",
+        "BracketRight" => "]",
+        "Backslash" => "\\",
+        "Semicolon" => ";",
+        "Quote" => "'",
+        "Comma" => ",",
+        "Period" => ".",
+        "Slash" => "/",
+        _ => "",
+    };
+    if !label.is_empty() {
+        return label.to_string();
+    }
+    if let Some(letter) = code.strip_prefix("Key") {
+        if letter.len() == 1 {
+            return letter.to_string();
+        }
+    }
+    if let Some(digit) = code.strip_prefix("Digit") {
+        if digit.len() == 1 {
+            return digit.to_string();
+        }
+    }
+    if let Some(num) = code.strip_prefix("Numpad") {
+        if num.len() == 1 && num.as_bytes()[0].is_ascii_digit() {
+            return format!("Num{num}");
+        }
+    }
+    code.to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -686,7 +855,7 @@ impl HotkeyCapability {
                 supports_side_specific_modifiers: true,
                 explicit_fallback_available: false,
                 status_hint: Some(
-                    "默认建议使用“右 Control + 切换式说话”；若更习惯按住说话，可在录音设置里切回。若无响应，可在权限页查看 hook 安装状态。"
+                    "默认建议使用“右Ctrl + 单击”；若更习惯按住说话，可在录音设置里切回“按住”。若无响应，可在权限页查看 hook 安装状态。"
                         .into(),
                 ),
             };
@@ -780,6 +949,7 @@ impl Default for HotkeyBinding {
             Self {
                 trigger: HotkeyTrigger::RightControl,
                 mode: HotkeyMode::Toggle,
+                keys: Some(vec![HotkeyKey::new("ControlRight")]),
             }
         }
 
@@ -788,6 +958,7 @@ impl Default for HotkeyBinding {
             Self {
                 trigger: HotkeyTrigger::RightOption,
                 mode: HotkeyMode::Toggle,
+                keys: Some(vec![HotkeyKey::new("AltRight")]),
             }
         }
     }
@@ -907,5 +1078,58 @@ mod tests {
 
         assert_eq!(prefs.dictation_hotkey.primary, "Space");
         assert_eq!(prefs.dictation_hotkey.modifiers, vec!["ctrl"]);
+    }
+
+    #[test]
+    fn legacy_hotkey_trigger_still_produces_effective_key_codes() {
+        let binding: HotkeyBinding =
+            serde_json::from_str(r#"{"trigger":"rightControl","mode":"toggle"}"#).unwrap();
+
+        assert_eq!(binding.effective_codes(), vec!["ControlRight".to_string()]);
+        assert_eq!(binding.display_label(), "右 Control");
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn legacy_fn_trigger_uses_windows_control_right_alias() {
+        let binding: HotkeyBinding =
+            serde_json::from_str(r#"{"trigger":"fn","mode":"toggle"}"#).unwrap();
+
+        assert_eq!(binding.effective_codes(), vec!["ControlRight".to_string()]);
+    }
+
+    #[test]
+    fn hotkey_binding_supports_combo_side_keys_mouse_and_double_click_mode() {
+        let binding = HotkeyBinding {
+            trigger: HotkeyTrigger::RightControl,
+            mode: HotkeyMode::DoubleClick,
+            keys: Some(vec![
+                HotkeyKey::new("ControlLeft"),
+                HotkeyKey::new("AltLeft"),
+                HotkeyKey::new("Mouse4"),
+            ]),
+        };
+
+        assert_eq!(
+            binding.effective_codes(),
+            vec![
+                "ControlLeft".to_string(),
+                "AltLeft".to_string(),
+                "Mouse4".to_string()
+            ]
+        );
+        assert_eq!(binding.display_label(), "左Ctrl+左Alt+Mouse4");
+
+        let json = serde_json::to_value(&binding).unwrap();
+        assert_eq!(json["mode"], "doubleClick");
+    }
+
+    #[test]
+    fn explicit_empty_hotkey_keys_clear_the_binding() {
+        let binding: HotkeyBinding =
+            serde_json::from_str(r#"{"trigger":"rightControl","mode":"toggle","keys":[]}"#)
+                .unwrap();
+
+        assert!(binding.effective_codes().is_empty());
     }
 }

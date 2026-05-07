@@ -1,4 +1,4 @@
-// localAsr.ts — IPC + 事件类型 for 本地 Qwen3-ASR 引擎与模型管理。
+// localAsr.ts — IPC + 事件类型 for 本地 ASR 引擎与模型管理。
 //
 // 后端命令定义：openless-all/app/src-tauri/src/commands.rs `local_asr_*`
 // 事件：local-asr-download-progress / local-asr-token
@@ -54,6 +54,85 @@ export interface LocalAsrDownloadProgress {
   phase: LocalAsrDownloadPhase;
   error: string | null;
 }
+
+export interface FoundryLocalAsrStatus {
+  providerId: string;
+  available: boolean;
+  activeModel: string;
+  loadedModelId: string | null;
+  endpoint: string | null;
+  error: string | null;
+}
+
+export type FoundryLocalAsrModelAlias = 'whisper-small' | 'whisper-base' | 'whisper-tiny';
+export type FoundryLocalAsrLanguageHint = '' | 'zh' | 'en';
+
+export interface FoundryLocalAsrCatalogModel {
+  alias: FoundryLocalAsrModelAlias;
+  displayName: string;
+  cached: boolean;
+  fileSizeMb: number | null;
+}
+
+export type FoundryPreparePhase =
+  | 'runtime'
+  | 'model'
+  | 'load'
+  | 'finished'
+  | 'failed';
+
+export interface FoundryPrepareProgress {
+  phase: FoundryPreparePhase;
+  modelAlias: string;
+  label: string;
+  percent: number | null;
+  error: string | null;
+}
+
+export interface FoundryLocalAsrModelOption {
+  alias: FoundryLocalAsrModelAlias;
+  labelKey: string;
+  descKey: string;
+}
+
+export const FOUNDRY_LOCAL_ASR_MODELS: FoundryLocalAsrModelOption[] = [
+  {
+    alias: 'whisper-small',
+    labelKey: 'localAsr.foundryModelSmall',
+    descKey: 'localAsr.foundryModelSmallDesc',
+  },
+  {
+    alias: 'whisper-base',
+    labelKey: 'localAsr.foundryModelBase',
+    descKey: 'localAsr.foundryModelBaseDesc',
+  },
+  {
+    alias: 'whisper-tiny',
+    labelKey: 'localAsr.foundryModelTiny',
+    descKey: 'localAsr.foundryModelTinyDesc',
+  },
+];
+
+const MOCK_FOUNDRY_CATALOG: FoundryLocalAsrCatalogModel[] = [
+  {
+    alias: 'whisper-small',
+    displayName: 'Whisper Small',
+    cached: false,
+    fileSizeMb: 967,
+  },
+  {
+    alias: 'whisper-base',
+    displayName: 'Whisper Base',
+    cached: true,
+    fileSizeMb: 291,
+  },
+  {
+    alias: 'whisper-tiny',
+    displayName: 'Whisper Tiny',
+    cached: false,
+    fileSizeMb: 151,
+  },
+];
 
 const MOCK_SETTINGS: LocalAsrSettings = {
   providerId: 'local-qwen3',
@@ -174,4 +253,43 @@ export function preloadLocalAsr(): Promise<void> {
 
 export function setLocalAsrKeepLoadedSecs(seconds: number): Promise<void> {
   return invokeOrMock('local_asr_set_keep_loaded_secs', { seconds }, () => undefined);
+}
+
+export function getFoundryLocalAsrStatus(): Promise<FoundryLocalAsrStatus> {
+  return invokeOrMock('foundry_local_asr_status', undefined, () => ({
+    providerId: 'foundry-local-whisper',
+    available: true,
+    activeModel: 'whisper-small',
+    loadedModelId: null,
+    endpoint: null,
+    error: null,
+  }));
+}
+
+export function getFoundryLocalAsrCatalog(): Promise<FoundryLocalAsrCatalogModel[]> {
+  return invokeOrMock('foundry_local_asr_catalog', undefined, () => MOCK_FOUNDRY_CATALOG);
+}
+
+export function setFoundryLocalAsrModel(modelAlias: string): Promise<void> {
+  return invokeOrMock('foundry_local_asr_set_model', { modelAlias }, () => undefined);
+}
+
+export function setFoundryLocalAsrLanguageHint(languageHint: string): Promise<void> {
+  return invokeOrMock(
+    'foundry_local_asr_set_language_hint',
+    { languageHint },
+    () => undefined,
+  );
+}
+
+export function prepareFoundryLocalAsr(modelAlias: string): Promise<string> {
+  return invokeOrMock('foundry_local_asr_prepare', { modelAlias }, () => `mock-${modelAlias}`);
+}
+
+export function cancelFoundryLocalAsrPrepare(): Promise<void> {
+  return invokeOrMock('foundry_local_asr_cancel_prepare', undefined, () => undefined);
+}
+
+export function releaseFoundryLocalAsr(): Promise<void> {
+  return invokeOrMock('foundry_local_asr_release', undefined, () => undefined);
 }

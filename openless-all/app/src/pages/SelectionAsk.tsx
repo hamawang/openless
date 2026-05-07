@@ -18,7 +18,6 @@ export function SelectionAsk() {
   const defaultQaHotkey = defaultQaShortcut();
   const defaultHotkeyLabel = formatComboLabel(defaultQaHotkey);
   const recordHotkeyLabel = prefs ? formatComboLabel(prefs.dictationHotkey) : '快捷键';
-
   if (!prefs) {
     return (
       <>
@@ -139,7 +138,6 @@ export function SelectionAsk() {
     </>
   );
 }
-
 // 卡片标题行右侧开关：与 Style 页面顶栏的 36×20 toggle 同款，保持全局视觉一致。
 function CardHeaderToggle({
   title,

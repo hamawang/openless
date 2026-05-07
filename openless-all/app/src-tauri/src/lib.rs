@@ -51,6 +51,12 @@ use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, RunEvent,
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let foundry_local_runtime = Arc::new(asr::local::FoundryLocalRuntime::new());
+    #[cfg(target_os = "windows")]
+    let coordinator = Arc::new(coordinator::Coordinator::new_with_foundry_runtime(
+        Arc::clone(&foundry_local_runtime),
+    ));
+    #[cfg(not(target_os = "windows"))]
     let coordinator = Arc::new(coordinator::Coordinator::new());
     let local_asr_download_manager = Arc::new(asr::local::DownloadManager::new());
 
@@ -76,6 +82,7 @@ pub fn run() {
         ))
         .manage(coordinator.clone())
         .manage(local_asr_download_manager.clone())
+        .manage(foundry_local_runtime.clone())
         .manage(commands::MicrophoneMonitorState::new(None))
         .manage(commands::TrayMicrophoneMenuState::new(Vec::new()))
         .setup(move |app| {
@@ -277,6 +284,13 @@ pub fn run() {
             commands::local_asr_release_engine,
             commands::local_asr_preload,
             commands::local_asr_set_keep_loaded_secs,
+            commands::foundry_local_asr_status,
+            commands::foundry_local_asr_catalog,
+            commands::foundry_local_asr_set_model,
+            commands::foundry_local_asr_set_language_hint,
+            commands::foundry_local_asr_prepare,
+            commands::foundry_local_asr_cancel_prepare,
+            commands::foundry_local_asr_release,
             commands::export_error_log,
             restart_app,
         ])

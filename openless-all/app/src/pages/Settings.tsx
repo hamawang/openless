@@ -7,9 +7,16 @@ import { useTranslation } from 'react-i18next';
 import { Icon } from '../components/Icon';
 import { ShortcutRecorder } from '../components/ShortcutRecorder';
 import { isDialogStatus, UpdateDialog, useAutoUpdate } from '../components/AutoUpdate';
+import { detectOS } from '../components/WindowChrome';
 import { APP_VERSION_LABEL } from '../lib/appVersion';
 import { isHotkeyModeMigrationNoticeActive } from '../lib/hotkeyMigration';
-import { defaultQaShortcut } from '../lib/hotkey';
+import {
+  defaultQaShortcut,
+  getHotkeyBindingCodes,
+  getHotkeyBindingLabel,
+  getHotkeyCodeLabel,
+} from '../lib/hotkey';
+import { createHotkeyRecorderState, orderHotkeyCodes, updateHotkeyRecorderState } from '../lib/hotkeyRecorder';
 import {
   checkAccessibilityPermission,
   checkMicrophonePermission,
@@ -37,6 +44,7 @@ import {
 } from '../lib/ipc';
 import type {
   HotkeyCapability,
+  HotkeyBinding,
   HotkeyMode,
   HotkeyStatus,
   HotkeyTrigger,
@@ -69,7 +77,6 @@ interface SettingsProps {
   embedded?: boolean;
   initialSection?: SettingsSectionId;
 }
-
 // "关于" tab 已移除（内容并入外层 SettingsModal 的 About 页，避免设置内外重复入口）。
 export type SettingsSectionId = 'recording' | 'providers' | 'shortcuts' | 'permissions' | 'language';
 
@@ -433,6 +440,149 @@ function RecordingSection() {
   );
 }
 
+function HotkeyRecorder({
+  binding,
+  onCommit,
+}: {
+  binding: HotkeyBinding;
+  onCommit: (codes: string[]) => void;
+}) {
+  const { t } = useTranslation();
+  const [recording, setRecording] = useState(false);
+  const [draftCodes, setDraftCodes] = useState<string[]>([]);
+  const recorderStateRef = useRef(createHotkeyRecorderState());
+  const recordingRef = useRef(false);
+
+  const resetRecording = () => {
+    recordingRef.current = false;
+    recorderStateRef.current = createHotkeyRecorderState();
+    setDraftCodes([]);
+    setRecording(false);
+  };
+
+  const commitCodes = (codes: string[]) => {
+    const ordered = orderHotkeyCodes(codes);
+    resetRecording();
+    onCommit(ordered);
+  };
+
+  const startRecording = () => {
+    recordingRef.current = true;
+    recorderStateRef.current = createHotkeyRecorderState();
+    setDraftCodes([]);
+    setRecording(true);
+  };
+
+  useEffect(() => {
+    if (!recording) return undefined;
+
+    const stopEvent = (event: Event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    };
+
+    const applyHotkeyCode = (code: string, pressed: boolean) => {
+      if (!recordingRef.current) return;
+      const next = updateHotkeyRecorderState(recorderStateRef.current, code, pressed);
+      recorderStateRef.current = next.state;
+      setDraftCodes(next.state.draftCodes);
+      if (next.commitCodes) commitCodes(next.commitCodes);
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      stopEvent(event);
+      if (event.key === 'Escape' || event.code === 'Escape') {
+        resetRecording();
+        return;
+      }
+      const code = normalizeKeyboardHotkeyCode(event);
+      if (!code) return;
+      applyHotkeyCode(code, true);
+    };
+
+    const onKeyUp = (event: KeyboardEvent) => {
+      stopEvent(event);
+      if (!recordingRef.current) return;
+      if (event.key === 'Escape' || event.code === 'Escape') {
+        resetRecording();
+        return;
+      }
+      const code = normalizeKeyboardHotkeyCode(event);
+      if (!code) return;
+      applyHotkeyCode(code, false);
+    };
+
+    const onMouseDown = (event: MouseEvent) => {
+      const code = mouseButtonToHotkeyCode(event.button);
+      if (!code) return;
+      stopEvent(event);
+      applyHotkeyCode(code, true);
+    };
+
+    const onMouseUp = (event: MouseEvent) => {
+      const code = mouseButtonToHotkeyCode(event.button);
+      if (!code) return;
+      stopEvent(event);
+      applyHotkeyCode(code, false);
+    };
+
+    window.addEventListener('keydown', onKeyDown, true);
+    window.addEventListener('keyup', onKeyUp, true);
+    window.addEventListener('mousedown', onMouseDown, true);
+    window.addEventListener('mouseup', onMouseUp, true);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown, true);
+      window.removeEventListener('keyup', onKeyUp, true);
+      window.removeEventListener('mousedown', onMouseDown, true);
+      window.removeEventListener('mouseup', onMouseUp, true);
+    };
+  }, [recording]);
+
+  const label = recording
+    ? draftCodes.length > 0
+      ? draftCodes.map(getHotkeyCodeLabel).join('+')
+      : t('settings.recording.hotkeyRecording')
+    : getHotkeyBindingLabel(binding);
+  const hasKeys = getHotkeyBindingCodes(binding).length > 0;
+
+  return (
+    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+      <button
+        type="button"
+        onClick={startRecording}
+        style={{
+          ...hotkeyRecorderButtonStyle,
+          borderColor: recording ? 'var(--ol-blue)' : 'var(--ol-line-strong)',
+          color: recording ? 'var(--ol-blue)' : 'var(--ol-ink)',
+        }}
+      >
+        <span style={hotkeyRecorderLabelStyle}>{label}</span>
+        {!recording && hasKeys && (
+          <span
+            role="button"
+            tabIndex={0}
+            aria-label={t('settings.recording.hotkeyClear')}
+            onClick={event => {
+              event.stopPropagation();
+              onCommit([]);
+            }}
+            onKeyDown={event => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                event.stopPropagation();
+                onCommit([]);
+              }
+            }}
+            style={hotkeyClearButtonStyle}
+          >
+            <Icon name="x" size={11} strokeWidth={2} />
+          </span>
+        )}
+      </button>
+    </div>
+  );
+}
+
 function MicrophonePickerDialog({
   devices,
   selectedName,
@@ -731,6 +881,45 @@ function MicrophonePickerDialog({
   );
 }
 
+function inferLegacyTrigger(codes: string[], fallback: HotkeyTrigger): HotkeyTrigger {
+  if (codes.includes('ControlRight')) return 'rightControl';
+  if (codes.includes('ControlLeft')) return 'leftControl';
+  if (codes.includes('AltRight')) return 'rightAlt';
+  if (codes.includes('AltLeft')) return 'leftOption';
+  if (codes.includes('MetaRight')) return 'rightCommand';
+  if (codes.includes('Fn')) return 'fn';
+  return fallback;
+}
+
+function normalizeKeyboardHotkeyCode(event: KeyboardEvent): string | null {
+  if (event.key === 'Fn' || event.code === 'Fn') return 'Fn';
+  if (event.key === 'FnLock' || event.code === 'FnLock') return 'FnLock';
+  const code = event.code === 'OSLeft' ? 'MetaLeft' : event.code === 'OSRight' ? 'MetaRight' : event.code;
+  if (SUPPORTED_HOTKEY_CODES.has(code)) return code;
+  if (/^Key[A-Z]$/.test(code)) return code;
+  if (/^Digit[0-9]$/.test(code)) return code;
+  if (/^F([1-9]|1[0-9]|2[0-4])$/.test(code)) return code;
+  if (/^Numpad[0-9]$/.test(code)) return code;
+  return null;
+}
+
+function mouseButtonToHotkeyCode(button: number): string | null {
+  if (button === 3) return 'Mouse4';
+  if (button === 4) return 'Mouse5';
+  return null;
+}
+
+const SUPPORTED_HOTKEY_CODES = new Set([
+  'ControlLeft', 'ControlRight', 'AltLeft', 'AltRight', 'ShiftLeft', 'ShiftRight',
+  'MetaLeft', 'MetaRight', 'CapsLock', 'ScrollLock', 'Pause', 'PrintScreen',
+  'Backspace', 'Tab', 'Enter', 'Space', 'Insert', 'Delete', 'Home', 'End',
+  'PageUp', 'PageDown', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
+  'ContextMenu', 'NumpadAdd', 'NumpadSubtract', 'NumpadMultiply', 'NumpadDivide',
+  'NumpadDecimal', 'NumpadEnter', 'Backquote', 'Minus', 'Equal', 'BracketLeft',
+  'BracketRight', 'Backslash', 'Semicolon', 'Quote', 'Comma', 'Period', 'Slash',
+  'Fn', 'FnLock',
+]);
+
 function LevelMeter({ level }: { level: number }) {
   const amplified = Math.min(1, Math.max(0, level * 4.5));
   const bars = [0.25, 0.5, 0.75, 1, 0.75, 0.5];
@@ -866,6 +1055,7 @@ const ASR_PRESETS = [
   { id: 'zhipu',        nameKey: 'asrZhipu',        baseUrl: 'https://open.bigmodel.cn/api/paas/v4',           model: 'glm-asr-2512'                },
   { id: 'groq',         nameKey: 'asrGroq',         baseUrl: 'https://api.groq.com/openai/v1',                 model: 'whisper-large-v3-turbo'      },
   { id: 'whisper',      nameKey: 'asrWhisper',      baseUrl: 'https://api.openai.com/v1',                      model: 'whisper-1'                   },
+  { id: 'foundry-local-whisper', nameKey: 'asrFoundryLocalWhisper', baseUrl: '',                              model: ''                              },
   // 本地 Qwen3-ASR：无 baseUrl/model 配置，模型在「模型设置」页下载与切换。
   { id: 'local-qwen3',  nameKey: 'asrLocalQwen3',   baseUrl: '',                                              model: ''                              },
 ] as const;
@@ -890,6 +1080,10 @@ function ProvidersSection() {
   const asrSwitchSeqRef = useRef(0);
   const [llmModelRevision, setLlmModelRevision] = useState(0);
   const [asrModelRevision, setAsrModelRevision] = useState(0);
+  const os = detectOS();
+  const visibleAsrPresets = ASR_PRESETS.filter(
+    p => p.id !== 'foundry-local-whisper' || os === 'win',
+  );
 
   useEffect(() => {
     if (!prefs) return;
@@ -897,11 +1091,11 @@ function ProvidersSection() {
     const llmId = knownLlm ? knownLlm.id : 'custom';
     setLlmProvider(llmId);
     setCommittedLlmProvider(llmId);
-    const knownAsr = ASR_PRESETS.find(x => x.id === prefs.activeAsrProvider);
+    const knownAsr = visibleAsrPresets.find(x => x.id === prefs.activeAsrProvider);
     const asrId = knownAsr ? knownAsr.id : 'volcengine';
     setAsrProvider(asrId);
     setCommittedAsrProvider(asrId);
-  }, [prefs]);
+  }, [prefs, os]);
 
   // issue #219 / #220 P2：
   //   1. 立刻 setLlmProvider —— 受控 <select> 必须反映用户最新选择。
@@ -968,7 +1162,7 @@ function ProvidersSection() {
   // 否则受控 <select> 立刻切到新厂商，但凭据字段还在显示旧 entry，placeholder
   // 会先于实际数据切换、视觉上对不上。
   const preset = LLM_PRESETS.find(p => p.id === committedLlmProvider) ?? LLM_PRESETS[LLM_PRESETS.length - 1];
-  const asrPreset = ASR_PRESETS.find(p => p.id === committedAsrProvider);
+  const asrPreset = visibleAsrPresets.find(p => p.id === committedAsrProvider);
 
   return (
     <>
@@ -1012,7 +1206,7 @@ function ProvidersSection() {
             onChange={e => onAsrProviderChange(e.target.value as AsrPresetId)}
             style={{ ...inputStyle, maxWidth: 200 }}
           >
-            {ASR_PRESETS.map(p => (
+            {visibleAsrPresets.map(p => (
               <option key={p.id} value={p.id}>{t(`settings.providers.presets.${p.nameKey}`)}</option>
             ))}
           </select>
@@ -1043,8 +1237,8 @@ function ProvidersSection() {
               {t('settings.providers.volcengineMappingNote')}
             </div>
           </>
-        ) : committedAsrProvider === 'local-qwen3' ? (
-          <LocalAsrProviderHint />
+        ) : committedAsrProvider === 'local-qwen3' || committedAsrProvider === 'foundry-local-whisper' ? (
+          <LocalAsrProviderHint provider={committedAsrProvider} selectedProvider={asrProvider} />
         ) : (
           <>
             <CredentialField key={`${committedAsrProvider}:api_key`} label={t('settings.providers.apiKeyLabel')} account="asr.api_key" mono mask />
@@ -1366,6 +1560,79 @@ const miniBtnStyle: CSSProperties = {
   transition: 'background 0.16s var(--ol-motion-quick), border-color 0.16s var(--ol-motion-quick), color 0.16s var(--ol-motion-quick)',
 };
 
+const recordingHotkeyControlWidth = 178;
+
+const hotkeyRecorderButtonStyle: CSSProperties = {
+  width: recordingHotkeyControlWidth,
+  height: 32,
+  padding: '0 8px 0 11px',
+  border: '0.5px solid var(--ol-line-strong)',
+  borderRadius: 8,
+  background: 'var(--ol-surface-2)',
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 8,
+  fontFamily: 'var(--ol-font-mono)',
+  fontSize: 12.5,
+  cursor: 'default',
+  transition: 'background 0.16s var(--ol-motion-quick), border-color 0.16s var(--ol-motion-quick), color 0.16s var(--ol-motion-quick)',
+};
+
+const recordingHotkeySegmentedStyle: CSSProperties = {
+  width: recordingHotkeyControlWidth,
+  display: 'inline-flex',
+  padding: 2,
+  borderRadius: 8,
+  background: 'rgba(0,0,0,0.05)',
+};
+
+const recordingHotkeyGroupStyle: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'auto',
+  rowGap: 10,
+  justifyItems: 'start',
+};
+
+const recordingHotkeyLineStyle: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: '64px auto',
+  alignItems: 'center',
+  columnGap: 10,
+};
+
+const recordingHotkeyFieldLabelStyle: CSSProperties = {
+  fontSize: 12,
+  color: 'var(--ol-ink-4)',
+  textAlign: 'right',
+  whiteSpace: 'nowrap',
+};
+
+const recordingHotkeyStatusStyle: CSSProperties = {
+  marginLeft: 74,
+  fontSize: 12,
+  lineHeight: 1.3,
+};
+
+const hotkeyRecorderLabelStyle: CSSProperties = {
+  minWidth: 0,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+};
+
+const hotkeyClearButtonStyle: CSSProperties = {
+  width: 18,
+  height: 18,
+  borderRadius: 999,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  flexShrink: 0,
+  background: 'rgba(0,0,0,0.2)',
+  color: '#fff',
+};
+
 const iconBtnStyle: CSSProperties = {
   width: 32, height: 32,
   border: '0.5px solid var(--ol-line-strong)',
@@ -1683,7 +1950,7 @@ export function AboutUpdateControl({ tagline }: { tagline: string }) {
   return (
     <>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 2 }}>
-        <span style={{ fontSize: 12, color: 'var(--ol-ink-3)' }}>{tagline} · {APP_VERSION_LABEL}</span>
+        <span style={{ fontSize: 12, color: 'var(--ol-ink-3)' }}>{tagline} 路 {APP_VERSION_LABEL}</span>
         <Btn variant="ghost" size="sm" onClick={u.checkForUpdates} disabled={u.checking || u.busy}>
           {u.checking ? t('settings.about.checkingUpdate') : t('settings.about.checkUpdateBtn')}
         </Btn>
@@ -1742,44 +2009,99 @@ function adapterDisplayName(adapter: HotkeyCapability['adapter'] | HotkeyStatus[
 /// 本地 Qwen3-ASR 在 Settings → 服务商区里**不**让用户填空——展示当前激活模型
 /// 是否已下载、列出所有已下载模型 + 删除按钮，并提示性能/质量预期，引导跳到
 /// 「模型设置」页做下载。
-function LocalAsrProviderHint() {
+function LocalAsrProviderHint({
+  provider,
+  selectedProvider,
+}: {
+  provider: 'local-qwen3' | 'foundry-local-whisper';
+  selectedProvider: AsrPresetId;
+}) {
   const { t } = useTranslation();
   const [settings, setSettings] = useState<LocalAsrSettings | null>(null);
   const [models, setModels] = useState<LocalAsrModelStatus[]>([]);
   const [loading, setLoading] = useState(true);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const refreshSeqRef = useRef(0);
+  const providerStateRef = useRef({ provider, selectedProvider });
+  providerStateRef.current = { provider, selectedProvider };
 
-  const refresh = async () => {
+  const qwenReadyForFetch = () => {
+    const state = providerStateRef.current;
+    return state.provider === 'local-qwen3' && state.selectedProvider === 'local-qwen3';
+  };
+
+  const refresh = async (seq: number) => {
     try {
       const [s, list] = await Promise.all([getLocalAsrSettings(), listLocalAsrModels()]);
+      if (seq !== refreshSeqRef.current) {
+        return;
+      }
       setSettings(s);
       setModels(list);
     } catch (err) {
+      if (seq !== refreshSeqRef.current) {
+        return;
+      }
       console.warn('[settings] load local asr status failed', err);
     } finally {
-      setLoading(false);
+      if (seq === refreshSeqRef.current) {
+        setLoading(false);
+      }
     }
   };
 
+  const beginRefresh = () => {
+    const seq = ++refreshSeqRef.current;
+    setSettings(null);
+    setModels([]);
+    setDeletingId(null);
+    if (provider !== selectedProvider) {
+      setLoading(true);
+      return;
+    }
+    if (provider === 'foundry-local-whisper') {
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    void refresh(seq);
+  };
+
   useEffect(() => {
-    void refresh();
-  }, []);
+    beginRefresh();
+    return () => {
+      refreshSeqRef.current += 1;
+    };
+  }, [provider, selectedProvider]);
 
   const goToLocalAsr = () => {
     window.dispatchEvent(new CustomEvent(NAVIGATE_LOCAL_ASR_EVENT));
   };
 
   const handleDelete = async (modelId: string) => {
+    const seq = refreshSeqRef.current;
+    if (!qwenReadyForFetch()) {
+      return;
+    }
     setDeletingId(modelId);
     try {
       await deleteLocalAsrModel(modelId);
-      await refresh();
+      if (seq !== refreshSeqRef.current || !qwenReadyForFetch()) {
+        return;
+      }
+      beginRefresh();
     } catch (err) {
       console.warn('[settings] delete local model failed', err);
     } finally {
-      setDeletingId(null);
+      if (seq === refreshSeqRef.current && provider === 'local-qwen3') {
+        setDeletingId(null);
+      }
     }
   };
+
+  const hintKey = provider === 'foundry-local-whisper'
+    ? 'settings.providers.foundryLocalAsrHint'
+    : 'settings.providers.localAsrHint';
 
   if (loading) {
     return (
@@ -1792,6 +2114,21 @@ function LocalAsrProviderHint() {
   const active = models.find(m => m.id === settings?.activeModel);
   const isReady = active?.isDownloaded ?? false;
   const downloaded = models.filter(m => m.isDownloaded);
+
+  if (provider === 'foundry-local-whisper') {
+    return (
+      <div style={{ padding: '8px 0 4px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={{ fontSize: 12.5, color: 'var(--ol-ink-3)', lineHeight: 1.6 }}>
+          {t(hintKey)}
+        </div>
+        <div>
+          <Btn variant="ghost" size="sm" onClick={goToLocalAsr}>
+            {t('settings.providers.localAsrManage')}
+          </Btn>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={{ padding: '8px 0 4px', display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -1809,7 +2146,7 @@ function LocalAsrProviderHint() {
       </div>
 
       <div style={{ fontSize: 12.5, color: 'var(--ol-ink-3)', lineHeight: 1.6 }}>
-        {t('settings.providers.localAsrHint')}
+        {t(hintKey)}
       </div>
 
       {/* 当前激活模型状态 + 跳转按钮 */}
