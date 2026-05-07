@@ -204,7 +204,6 @@ function RecordingSection() {
   const choices: Array<[HotkeyMode, string]> = [
     ['toggle', t('settings.recording.modeToggle')],
     ['hold', t('settings.recording.modeHold')],
-    ['doubleClick', t('settings.recording.modeDoubleClick')],
   ];
   const hotkeyDesc = capability.requiresAccessibilityPermission
     ? t('settings.recording.hotkeyDescAcc')
@@ -897,7 +896,7 @@ function providerErrorMessage(error: unknown, t: ReturnType<typeof useTranslatio
   if (message === 'providerRequestTimeout') return t('settings.providers.requestTimeout');
   if (message.includes('API Key')) return t('settings.providers.apiKeyMissing');
   if (message.includes('Endpoint')) return t('settings.providers.endpointMissing');
-  if (message.includes('timeout') || message.includes('瓒呮椂')) return t('settings.providers.requestTimeout');
+  if (message.includes('timeout') || message.includes('超时')) return t('settings.providers.requestTimeout');
   return t('common.operationFailed');
 }
 
