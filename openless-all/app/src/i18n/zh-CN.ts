@@ -206,6 +206,12 @@ export const zhCN = {
       desc: '选了某个语言后，录音过程中任意时刻按一下 Shift，停止后就会把转写翻译成该语言再插入到光标位置。选「不启用」则 Shift 没有任何效果，走普通润色管线。',
       disabled: '不启用（Shift 按下不触发翻译）',
     },
+    save: {
+      workingFailed: '工作语言保存失败，请重试。',
+      targetFailed: '翻译目标语言保存失败，请重试。',
+      hotkeyRegisterFailed: '翻译快捷键注册失败，未继续保存。',
+      hotkeySaveFailed: '翻译快捷键保存失败，请重试。',
+    },
     howto: {
       title: '使用方法',
       step1: '在另一个 app 的输入框里聚焦光标（备忘录、邮件、聊天窗口都行）。',

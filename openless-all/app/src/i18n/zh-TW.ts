@@ -208,6 +208,12 @@ export const zhTW: typeof zhCN = {
       desc: '選了某個語言後，錄音過程中任意時刻按一下 Shift，停止後就會把轉寫翻譯成該語言再插入到光標位置。選「不啓用」則 Shift 沒有任何效果，走普通潤色管線。',
       disabled: '不啓用（Shift 按下不觸發翻譯）',
     },
+    save: {
+      workingFailed: '工作語言保存失敗，請重試。',
+      targetFailed: '翻譯目標語言保存失敗，請重試。',
+      hotkeyRegisterFailed: '翻譯快捷鍵註冊失敗，未繼續保存。',
+      hotkeySaveFailed: '翻譯快捷鍵保存失敗，請重試。',
+    },
     howto: {
       title: '使用方法',
       step1: '在另一個 app 的輸入框裏聚焦光標（備忘錄、郵件、聊天窗口都行）。',

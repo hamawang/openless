@@ -208,6 +208,12 @@ export const en: typeof zhCN = {
       desc: 'Pick a language and pressing Shift any time during recording will translate the transcript into it before insertion. Pick "Disabled" to make Shift a no-op (regular polish runs instead).',
       disabled: 'Disabled (Shift does nothing)',
     },
+    save: {
+      workingFailed: 'Failed to save working languages. Please try again.',
+      targetFailed: 'Failed to save translation target. Please try again.',
+      hotkeyRegisterFailed: 'Failed to register the translation shortcut. The preference was not saved.',
+      hotkeySaveFailed: 'Failed to save the translation shortcut. Please try again.',
+    },
     howto: {
       title: 'How to use',
       step1: 'Place the text cursor in another app (Notes, mail, chat — anything with a text field).',
