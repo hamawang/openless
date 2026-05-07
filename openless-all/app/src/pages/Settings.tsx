@@ -1033,11 +1033,66 @@ function Toggle({ on, onToggle }: { on: boolean; onToggle?: (next: boolean) => v
 }
 
 const LLM_PRESETS = [
-  { id: 'ark',          nameKey: 'ark',         baseUrl: 'https://ark.cn-beijing.volces.com/api/v3', modelPlaceholder: 'deepseek-v3-2' },
-  { id: 'deepseek',     nameKey: 'deepseek',    baseUrl: 'https://api.deepseek.com/v1',             modelPlaceholder: 'deepseek-v4-flash' },
-  { id: 'siliconflow',  nameKey: 'siliconflow', baseUrl: 'https://api.siliconflow.cn/v1',           modelPlaceholder: 'Qwen/Qwen2.5-7B-Instruct' },
-  { id: 'openai',       nameKey: 'openai',      baseUrl: 'https://api.openai.com/v1',               modelPlaceholder: 'gpt-4o' },
-  { id: 'custom',       nameKey: 'custom',      baseUrl: '',                                        modelPlaceholder: '' },
+  {
+    id: 'ark',
+    nameKey: 'ark',
+    baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+    modelPlaceholder: 'deepseek-v3-2',
+  },
+  {
+    id: 'deepseek',
+    nameKey: 'deepseek',
+    baseUrl: 'https://api.deepseek.com/v1',
+    modelPlaceholder: 'deepseek-v4-flash',
+  },
+  {
+    id: 'siliconflow',
+    nameKey: 'siliconflow',
+    baseUrl: 'https://api.siliconflow.cn/v1',
+    modelPlaceholder: 'Qwen/Qwen2.5-7B-Instruct',
+  },
+  {
+    id: 'openai',
+    nameKey: 'openai',
+    baseUrl: 'https://api.openai.com/v1',
+    modelPlaceholder: 'gpt-4o',
+  },
+  {
+    id: 'mimo',
+    nameKey: 'mimo',
+    baseUrl: 'https://api.xiaomimimo.com/v1',
+    modelPlaceholder: 'xiaomi/mimo-v2-flash',
+  },
+  {
+    id: 'cometapi',
+    nameKey: 'cometapi',
+    baseUrl: 'https://api.cometapi.com/v1',
+    modelPlaceholder: 'gpt-4o',
+  },
+  {
+    id: 'openrouterFree',
+    nameKey: 'openrouterFree',
+    baseUrl: 'https://openrouter.ai/api/v1',
+    modelPlaceholder: 'qwen/qwen3-coder:free',
+  },
+  {
+    id: 'alibabaCoding',
+    nameKey: 'alibabaCoding',
+    baseUrl: 'https://coding-intl.dashscope.aliyuncs.com/v1',
+    modelPlaceholder: 'qwen3-coder-plus',
+  },
+  {
+    id: 'codingPlanX',
+    nameKey: 'codingPlanX',
+    baseUrl: 'https://api.codingplanx.ai/v1',
+    modelPlaceholder: 'gpt-5-mini',
+  },
+  {
+    id: 'custom',
+    nameKey: 'custom',
+    baseUrl: '',
+    modelPlaceholder: '',
+  },
 ] as const;
 
 type LlmPresetId = typeof LLM_PRESETS[number]['id'];
@@ -1119,6 +1174,14 @@ function ProvidersSection() {
       if (seq !== llmSwitchSeqRef.current) return;
       if (!existing) {
         await setCredential('ark.endpoint', preset.baseUrl);
+        if (seq !== llmSwitchSeqRef.current) return;
+      }
+    }
+    if (preset?.modelPlaceholder) {
+      const existing = await readCredential('ark.model_id');
+      if (seq !== llmSwitchSeqRef.current) return;
+      if (!existing) {
+        await setCredential('ark.model_id', preset.modelPlaceholder);
         if (seq !== llmSwitchSeqRef.current) return;
       }
     }

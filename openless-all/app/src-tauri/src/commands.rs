@@ -234,7 +234,7 @@ pub fn get_credentials() -> CredentialsStatus {
     let active_llm_provider = CredentialsVault::get_active_llm();
     let volcengine_configured = volcengine_configured(&snap);
     let asr_configured = asr_configured_for_provider(&active_asr_provider, &snap);
-    let llm_configured = llm_configured_for_snapshot(&snap);
+    let llm_configured = llm_configured_for_provider(&active_llm_provider, &snap);
     CredentialsStatus {
         active_asr_provider,
         active_llm_provider,
@@ -262,8 +262,43 @@ fn asr_configured_for_provider(provider: &str, snap: &CredentialsSnapshot) -> bo
     configured(&snap.asr_endpoint) && configured(&snap.asr_model)
 }
 
-fn llm_configured_for_snapshot(snap: &CredentialsSnapshot) -> bool {
-    configured(&snap.ark_endpoint) && configured(&snap.ark_model_id)
+fn llm_configured_for_provider(provider: &str, snap: &CredentialsSnapshot) -> bool {
+    let endpoint = snap.ark_endpoint.as_deref().unwrap_or_default();
+    let endpoint_and_model = configured(&snap.ark_endpoint) && configured(&snap.ark_model_id);
+    if endpoint_and_model
+        && llm_provider_default_endpoint(provider)
+            .map(|default| same_llm_endpoint(endpoint, default))
+            .unwrap_or(false)
+    {
+        return configured(&snap.ark_api_key);
+    }
+    endpoint_and_model
+}
+
+fn llm_provider_default_endpoint(provider: &str) -> Option<&'static str> {
+    match provider {
+        "ark" => Some("https://ark.cn-beijing.volces.com/api/v3"),
+        "deepseek" => Some("https://api.deepseek.com/v1"),
+        "siliconflow" => Some("https://api.siliconflow.cn/v1"),
+        "openai" => Some("https://api.openai.com/v1"),
+        "mimo" => Some("https://api.xiaomimimo.com/v1"),
+        "cometapi" => Some("https://api.cometapi.com/v1"),
+        "openrouterFree" => Some("https://openrouter.ai/api/v1"),
+        "alibabaCoding" => Some("https://coding-intl.dashscope.aliyuncs.com/v1"),
+        "codingPlanX" => Some("https://api.codingplanx.ai/v1"),
+        _ => None,
+    }
+}
+
+fn same_llm_endpoint(a: &str, b: &str) -> bool {
+    fn normalize(value: &str) -> &str {
+        value
+            .trim()
+            .trim_end_matches('/')
+            .trim_end_matches("/chat/completions")
+            .trim_end_matches('/')
+    }
+    normalize(a).eq_ignore_ascii_case(normalize(b))
 }
 
 fn configured(field: &Option<String>) -> bool {
@@ -1554,7 +1589,7 @@ mod tests {
     use super::{
         active_asr_is_keyless_for_validation, active_foundry_model_from_prefs,
         asr_configured_for_provider, asr_transcriptions_url, fetch_provider_models,
-        llm_configured_for_snapshot, local_asr_release_plan_for_provider, models_url,
+        llm_configured_for_provider, local_asr_release_plan_for_provider, models_url,
         normalize_foundry_language_hint, parse_model_ids, persist_settings,
         release_foundry_runtime_if_inactive, validate_foundry_model_alias, ProviderConfig,
         SettingsWriter,
@@ -1719,26 +1754,43 @@ mod tests {
     }
 
     #[test]
-    fn credentials_status_accepts_keyless_llm_with_endpoint_and_model() {
+    fn credentials_status_accepts_keyless_custom_llm_only() {
         let keyless_ready = CredentialsSnapshot {
             ark_endpoint: Some("http://localhost:11434/v1".into()),
             ark_model_id: Some("qwen".into()),
             ..snapshot()
         };
-        assert!(llm_configured_for_snapshot(&keyless_ready));
+        assert!(llm_configured_for_provider("custom", &keyless_ready));
+        assert!(llm_configured_for_provider("self-hosted", &keyless_ready));
+        assert!(llm_configured_for_provider("openrouterFree", &keyless_ready));
+
+        let hosted_keyless = CredentialsSnapshot {
+            ark_endpoint: Some("https://openrouter.ai/api/v1".into()),
+            ark_model_id: Some("qwen/qwen3-coder:free".into()),
+            ..snapshot()
+        };
+        assert!(!llm_configured_for_provider("openrouterFree", &hosted_keyless));
+
+        let hosted_ready = CredentialsSnapshot {
+            ark_api_key: Some("key".into()),
+            ark_endpoint: Some("https://openrouter.ai/api/v1/chat/completions".into()),
+            ark_model_id: Some("qwen/qwen3-coder:free".into()),
+            ..snapshot()
+        };
+        assert!(llm_configured_for_provider("openrouterFree", &hosted_ready));
 
         let key_without_endpoint = CredentialsSnapshot {
             ark_api_key: Some("key".into()),
             ark_model_id: Some("qwen".into()),
             ..snapshot()
         };
-        assert!(!llm_configured_for_snapshot(&key_without_endpoint));
+        assert!(!llm_configured_for_provider("custom", &key_without_endpoint));
 
         let endpoint_without_model = CredentialsSnapshot {
             ark_endpoint: Some("http://localhost:11434/v1".into()),
             ..snapshot()
         };
-        assert!(!llm_configured_for_snapshot(&endpoint_without_model));
+        assert!(!llm_configured_for_provider("custom", &endpoint_without_model));
     }
 
     impl SettingsWriter for FakeSettingsWriter {

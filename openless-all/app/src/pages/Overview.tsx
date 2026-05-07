@@ -38,6 +38,11 @@ const LLM_NAME_KEY_BY_ID: Record<string, string> = {
   deepseek: 'deepseek',
   siliconflow: 'siliconflow',
   openai: 'openai',
+  mimo: 'mimo',
+  cometapi: 'cometapi',
+  openrouterFree: 'openrouterFree',
+  alibabaCoding: 'alibabaCoding',
+  codingPlanX: 'codingPlanX',
   custom: 'custom',
 };
 
