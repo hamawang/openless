@@ -2537,6 +2537,7 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
                         return Ok(());
                     }
                     log::error!("[coord] Foundry Local Whisper transcribe failed: {e:#}");
+                    schedule_foundry_local_asr_release(inner, current_session_id);
                     emit_capsule(
                         inner,
                         CapsuleState::Error,

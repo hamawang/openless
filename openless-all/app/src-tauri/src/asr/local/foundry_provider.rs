@@ -80,7 +80,7 @@ impl FoundryLocalWhisperAsr {
         if self.cancel_generation.load(Ordering::SeqCst) != cancel_generation {
             anyhow::bail!("Foundry Local Whisper transcription cancelled");
         }
-        if result.is_ok() {
+        if foundry_transcribe_attempt_consumes_buffer(&result) {
             self.buffer.lock().clear();
         }
         result
@@ -238,6 +238,11 @@ fn trim_transcript_text(text: &str) -> String {
     text.trim().to_string()
 }
 
+fn foundry_transcribe_attempt_consumes_buffer<T>(result: &Result<T>) -> bool {
+    let _ = result;
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use crate::recorder::AudioConsumer;
@@ -306,6 +311,13 @@ mod tests {
         );
         assert_eq!(super::normalize_language_hint(Some(" ".into())), None);
         assert_eq!(super::trim_transcript_text("  hello\r\n"), "hello");
+    }
+
+    #[test]
+    fn foundry_transcribe_attempt_consumes_buffer_even_on_error() {
+        let result: anyhow::Result<()> = Err(anyhow::anyhow!("transient runtime error"));
+
+        assert!(super::foundry_transcribe_attempt_consumes_buffer(&result));
     }
 
     #[test]
