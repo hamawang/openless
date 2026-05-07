@@ -44,7 +44,13 @@ import {
   type LocalAsrTestResult,
 } from '../lib/localAsr';
 import { useHotkeySettings } from '../state/HotkeySettingsContext';
+import { detectOS } from '../components/WindowChrome';
 import { Btn, Card, PageHeader, Pill } from './_atoms';
+
+// Foundry Local Whisper 后端只在 Windows 编译实体（foundry_local_sdk 仅 Windows），
+// 非 Windows 平台 runtime 是 stub 永远 unavailable。前端这一页对应的卡片、状态拉取、
+// 事件订阅都必须按 OS 隔离，避免 macOS / Linux 用户看到 Windows 专属的 UI。
+const IS_WINDOWS = detectOS() === 'win';
 
 interface RemoteSize {
   totalBytes: number;
@@ -121,8 +127,10 @@ export function LocalAsr() {
       setSettings(s);
       setModels(list);
       void refreshEngineStatus();
-      void refreshFoundryStatus();
-      void refreshFoundryCatalog();
+      if (IS_WINDOWS) {
+        void refreshFoundryStatus();
+        void refreshFoundryCatalog();
+      }
       // 拉远端真实尺寸（每个模型一次，结果留缓存）
       void Promise.all(
         list.map(async m => {
@@ -224,7 +232,7 @@ export function LocalAsr() {
   }, []);
 
   useEffect(() => {
-    if (!isTauri) return;
+    if (!isTauri || !IS_WINDOWS) return;
     let unlisten: undefined | (() => void);
     let cancelled = false;
     (async () => {
@@ -491,6 +499,7 @@ export function LocalAsr() {
         </div>
       </Card>
 
+      {IS_WINDOWS && (
       <Card style={{ marginBottom: 16 }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
@@ -638,6 +647,7 @@ export function LocalAsr() {
           </div>
         </div>
       </Card>
+      )}
 
       {!engineAvailable && (
         <Card style={{ marginBottom: 16, background: 'rgba(255, 235, 200, 0.4)' }}>
