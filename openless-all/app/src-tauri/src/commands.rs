@@ -3,9 +3,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use parking_lot::Mutex;
 use serde::Serialize;
 use serde_json::Value;
-use tauri::{AppHandle, Emitter, State, Window};
+use tauri::{AppHandle, Emitter, Manager, State, Window};
 
 use crate::asr::local::foundry::{
     model_alias_is_known, FoundryCatalogModel, FoundryPrepareProgressPayload, FoundryRuntimeStatus,
@@ -16,6 +17,7 @@ use crate::coordinator::Coordinator;
 use crate::permissions::{self, PermissionStatus};
 use crate::persistence::{CredentialAccount, CredentialsSnapshot, CredentialsVault};
 use crate::polish::{LLMError, OpenAICompatibleConfig, OpenAICompatibleLLMProvider};
+use crate::recorder::{AudioConsumer, Recorder};
 use crate::types::{
     ChineseScriptPreference, ComboBinding, CredentialsStatus, DictationSession, DictionaryEntry,
     HotkeyCapability, HotkeyStatus, OutputLanguagePreference, PolishMode, ShortcutBinding,
@@ -23,6 +25,26 @@ use crate::types::{
 };
 
 type CoordinatorState<'a> = State<'a, Arc<Coordinator>>;
+pub type MicrophoneMonitorState = Mutex<Option<Recorder>>;
+pub type TrayMicrophoneMenuState = Mutex<Vec<TrayMicrophoneMenuItem>>;
+
+pub struct TrayMicrophoneMenuItem {
+    pub id: String,
+    pub device_name: String,
+    pub item: tauri::menu::CheckMenuItem<tauri::Wry>,
+}
+
+pub fn sync_tray_microphone_selection(items: &[TrayMicrophoneMenuItem], device_name: &str) {
+    for item in items {
+        let _ = item.item.set_checked(item.device_name == device_name);
+    }
+}
+
+struct LevelProbeConsumer;
+
+impl AudioConsumer for LevelProbeConsumer {
+    fn consume_pcm_chunk(&self, _pcm: &[u8]) {}
+}
 
 // ─────────────────────────── settings + credentials ───────────────────────────
 
@@ -71,33 +93,33 @@ impl SettingsWriter for Coordinator {
     }
 }
 
-impl SettingsWriter for Arc<Coordinator> {
+impl<T: SettingsWriter + ?Sized> SettingsWriter for Arc<T> {
     fn write_settings(&self, prefs: UserPreferences) -> Result<(), String> {
-        self.prefs().set(prefs).map_err(|e| e.to_string())
+        (**self).write_settings(prefs)
     }
 
     fn refresh_dictation_hotkey(&self) {
-        self.update_hotkey_binding();
+        (**self).refresh_dictation_hotkey();
     }
 
     fn refresh_qa_hotkey(&self) {
-        self.update_qa_hotkey_binding();
+        (**self).refresh_qa_hotkey();
     }
 
     fn refresh_combo_hotkey(&self) {
-        self.update_combo_hotkey_binding();
+        (**self).refresh_combo_hotkey();
     }
 
     fn refresh_translation_hotkey(&self) {
-        self.update_translation_hotkey_binding();
+        (**self).refresh_translation_hotkey();
     }
 
     fn refresh_switch_style_hotkey(&self) {
-        self.update_switch_style_hotkey_binding();
+        (**self).refresh_switch_style_hotkey();
     }
 
     fn refresh_open_app_hotkey(&self) {
-        self.update_open_app_hotkey_binding();
+        (**self).refresh_open_app_hotkey();
     }
 }
 
@@ -121,12 +143,17 @@ fn persist_settings<T: SettingsWriter>(
 pub fn set_settings(
     coord: CoordinatorState<'_>,
     app: AppHandle,
+    tray_microphones: State<'_, TrayMicrophoneMenuState>,
     prefs: UserPreferences,
 ) -> Result<(), String> {
     // 广播给所有 webview。issue #205：QaPanel 跑在独立 webview，
     // 没有 HotkeySettingsContext，必须靠事件感知录音键变化，否则面板可见时
     // 用户改键会让浮窗里的 "{recordHotkey}" 文案一直停留在旧值。
     persist_settings(&*coord, prefs.clone())?;
+    if let Err(err) = crate::refresh_tray_microphone_menu(&app) {
+        log::warn!("[tray] refresh microphone menu after settings save failed: {err}");
+        sync_tray_microphone_selection(&tray_microphones.lock(), &prefs.microphone_device_name);
+    }
     let _ = app.emit("prefs:changed", &prefs);
     Ok(())
 }
@@ -149,6 +176,55 @@ pub fn set_shortcut_recording_active(coord: CoordinatorState<'_>, active: bool) 
 #[tauri::command]
 pub fn get_windows_ime_status() -> WindowsImeStatus {
     crate::windows_ime_profile::get_windows_ime_status()
+}
+
+#[tauri::command]
+pub fn list_microphone_devices() -> Result<Vec<crate::recorder::MicrophoneDevice>, String> {
+    crate::recorder::list_input_devices().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn start_microphone_level_monitor(
+    app: AppHandle,
+    device_name: String,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<MicrophoneMonitorState>();
+        if let Some(existing) = state.lock().take() {
+            existing.stop();
+        }
+
+        let selected = device_name.trim().to_string();
+        let microphone_device_name = if selected.is_empty() {
+            None
+        } else {
+            Some(selected)
+        };
+        let consumer: Arc<dyn AudioConsumer> = Arc::new(LevelProbeConsumer);
+        let level_app = app.clone();
+        let level_handler: Arc<dyn Fn(f32) + Send + Sync> = Arc::new(move |level| {
+            let _ = level_app.emit("microphone:level", serde_json::json!({ "level": level }));
+        });
+        let (recorder, _runtime_errors) =
+            Recorder::start(microphone_device_name, consumer, level_handler)
+                .map_err(|e| e.to_string())?;
+        *state.lock() = Some(recorder);
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("start microphone monitor task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn stop_microphone_level_monitor(app: AppHandle) {
+    let _ = tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<MicrophoneMonitorState>();
+        let recorder = state.lock().take();
+        if let Some(recorder) = recorder {
+            recorder.stop();
+        }
+    })
+    .await;
 }
 
 #[tauri::command]

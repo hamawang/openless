@@ -18,6 +18,7 @@ use std::thread::{self, JoinHandle};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, StreamConfig};
 use parking_lot::Mutex;
+use serde::Serialize;
 use thiserror::Error;
 
 /// 目标采样率（与 Swift 端常量一致；不要改）。
@@ -32,6 +33,13 @@ pub trait AudioConsumer: Send + Sync {
     /// 每次拿到的是若干 Int16 样本拼成的 little-endian 字节序列。
     /// 长度一定是 2 的倍数。
     fn consume_pcm_chunk(&self, pcm: &[u8]);
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MicrophoneDevice {
+    pub name: String,
+    pub is_default: bool,
 }
 
 /// 采集器错误。
@@ -55,6 +63,7 @@ impl Recorder {
     ///
     /// 实际的 cpal Stream 在独立线程里构造、播放、最终析构——因为它 `!Send`。
     pub fn start(
+        microphone_device_name: Option<String>,
         consumer: Arc<dyn AudioConsumer>,
         level_handler: Arc<dyn Fn(f32) + Send + Sync>,
     ) -> Result<(Self, Receiver<RecorderError>), RecorderError> {
@@ -69,6 +78,7 @@ impl Recorder {
             .name("openless-recorder".into())
             .spawn(move || {
                 run_audio_thread(
+                    microphone_device_name,
                     consumer,
                     level_handler,
                     stop_for_thread,
@@ -107,23 +117,54 @@ impl Recorder {
     }
 }
 
+pub fn list_input_devices() -> Result<Vec<MicrophoneDevice>, RecorderError> {
+    let host = cpal::default_host();
+    let default_name = host
+        .default_input_device()
+        .and_then(|device| device.name().ok());
+    let devices = host
+        .input_devices()
+        .map_err(|e| RecorderError::EngineFailed(format!("input_devices: {e}")))?;
+
+    let mut result = Vec::new();
+    for device in devices {
+        let name = match device.name() {
+            Ok(name) => name,
+            Err(err) => {
+                log::warn!("[recorder] failed to read input device name: {err}");
+                continue;
+            }
+        };
+        result.push(MicrophoneDevice {
+            is_default: default_name.as_deref() == Some(name.as_str()),
+            name,
+        });
+    }
+    Ok(result)
+}
+
 /// 音频线程主体：构造 Stream → 通过 startup_tx 报告 → 循环到 stop_flag。
 fn run_audio_thread(
+    microphone_device_name: Option<String>,
     consumer: Arc<dyn AudioConsumer>,
     level_handler: Arc<dyn Fn(f32) + Send + Sync>,
     stop_flag: Arc<AtomicBool>,
     startup_tx: Sender<Result<(), RecorderError>>,
     runtime_error_tx: Sender<RecorderError>,
 ) {
-    let (stream, state) =
-        match build_input_stream(consumer, level_handler, runtime_error_tx.clone()) {
-            Ok(s) => s,
-            Err(err) => {
-                // 启动失败：通知主线程后即退出。
-                let _ = startup_tx.send(Err(err));
-                return;
-            }
-        };
+    let (stream, state) = match build_input_stream(
+        microphone_device_name,
+        consumer,
+        level_handler,
+        runtime_error_tx.clone(),
+    ) {
+        Ok(s) => s,
+        Err(err) => {
+            // 启动失败：通知主线程后即退出。
+            let _ = startup_tx.send(Err(err));
+            return;
+        }
+    };
 
     if let Err(err) = stream.play() {
         let _ = startup_tx.send(Err(RecorderError::EngineFailed(format!("play: {err}"))));
@@ -204,14 +245,13 @@ fn run_audio_thread(
 
 /// 选默认输入设备 + 默认配置 + 构造 Stream。
 fn build_input_stream(
+    microphone_device_name: Option<String>,
     consumer: Arc<dyn AudioConsumer>,
     level_handler: Arc<dyn Fn(f32) + Send + Sync>,
     runtime_error_tx: Sender<RecorderError>,
 ) -> Result<(cpal::Stream, Arc<StreamState>), RecorderError> {
     let host = cpal::default_host();
-    let device = host
-        .default_input_device()
-        .ok_or_else(|| RecorderError::EngineFailed("no default input device".into()))?;
+    let device = select_input_device(&host, microphone_device_name.as_deref())?;
 
     let supported = device
         .default_input_config()
@@ -223,7 +263,8 @@ fn build_input_stream(
     let channels = config.channels as usize;
 
     log::info!(
-        "[recorder] inputFormat sampleRate={} channels={} fmt={:?}",
+        "[recorder] inputDevice={} inputFormat sampleRate={} channels={} fmt={:?}",
+        device.name().unwrap_or_else(|_| "<unknown>".into()),
         input_sr,
         channels,
         sample_format
@@ -242,6 +283,31 @@ fn build_input_stream(
         runtime_error_tx,
     )?;
     Ok((stream, state))
+}
+
+fn select_input_device(
+    host: &cpal::Host,
+    microphone_device_name: Option<&str>,
+) -> Result<cpal::Device, RecorderError> {
+    let preferred = microphone_device_name
+        .map(str::trim)
+        .filter(|name| !name.is_empty());
+    if let Some(preferred) = preferred {
+        let devices = host
+            .input_devices()
+            .map_err(|e| RecorderError::EngineFailed(format!("input_devices: {e}")))?;
+        for device in devices {
+            if device.name().ok().as_deref() == Some(preferred) {
+                return Ok(device);
+            }
+        }
+        log::warn!(
+            "[recorder] preferred input device not found; falling back to default: {preferred}"
+        );
+    }
+
+    host.default_input_device()
+        .ok_or_else(|| RecorderError::EngineFailed("no default input device".into()))
 }
 
 /// 启动期 default_input_config 失败：依靠错误字符串关键字粗判权限问题。

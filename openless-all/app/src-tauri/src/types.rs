@@ -121,6 +121,9 @@ pub struct UserPreferences {
     /// 录音期间临时静音系统输出，停止/取消/出错后恢复原静音状态。
     #[serde(default)]
     pub mute_during_recording: bool,
+    /// 录音输入设备名称。空字符串 = 使用系统默认麦克风。
+    #[serde(default)]
+    pub microphone_device_name: String,
     pub active_asr_provider: String, // "volcengine" | "apple-speech" | ...
     pub active_llm_provider: String, // "ark" | "openai" | ...
     /// Windows/Linux 粘贴成功后是否恢复用户原剪贴板。默认 true 跟历史行为一致；
@@ -232,6 +235,8 @@ struct UserPreferencesWire {
     show_capsule: bool,
     #[serde(default)]
     mute_during_recording: bool,
+    #[serde(default)]
+    microphone_device_name: String,
     active_asr_provider: String,
     active_llm_provider: String,
     restore_clipboard_after_paste: bool,
@@ -272,6 +277,7 @@ impl Default for UserPreferencesWire {
             launch_at_login: prefs.launch_at_login,
             show_capsule: prefs.show_capsule,
             mute_during_recording: prefs.mute_during_recording,
+            microphone_device_name: prefs.microphone_device_name,
             active_asr_provider: prefs.active_asr_provider,
             active_llm_provider: prefs.active_llm_provider,
             restore_clipboard_after_paste: prefs.restore_clipboard_after_paste,
@@ -315,6 +321,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             launch_at_login: wire.launch_at_login,
             show_capsule: wire.show_capsule,
             mute_during_recording: wire.mute_during_recording,
+            microphone_device_name: wire.microphone_device_name,
             active_asr_provider: wire.active_asr_provider,
             active_llm_provider: wire.active_llm_provider,
             restore_clipboard_after_paste: wire.restore_clipboard_after_paste,
@@ -422,6 +429,7 @@ impl Default for UserPreferences {
             launch_at_login: false,
             show_capsule: true,
             mute_during_recording: false,
+            microphone_device_name: String::new(),
             active_asr_provider: default_active_asr_provider(),
             active_llm_provider: "ark".into(),
             restore_clipboard_after_paste: true,

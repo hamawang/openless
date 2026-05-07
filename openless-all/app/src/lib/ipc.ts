@@ -9,6 +9,7 @@ import type {
   DictionaryEntry,
   HotkeyCapability,
   HotkeyStatus,
+  MicrophoneDevice,
   PermissionStatus,
   PolishMode,
   QaHotkeyBinding,
@@ -50,6 +51,7 @@ const mockSettings: UserPreferences = {
   launchAtLogin: false,
   showCapsule: true,
   muteDuringRecording: false,
+  microphoneDeviceName: '',
   activeAsrProvider: 'foundry-local-whisper',
   activeLlmProvider: 'ark',
   restoreClipboardAfterPaste: true,
@@ -113,6 +115,11 @@ const mockWindowsImeStatus: WindowsImeStatus = {
   dllPath: null,
 };
 
+const mockMicrophoneDevices: MicrophoneDevice[] = [
+  { name: 'Built-in Microphone', isDefault: true },
+  { name: 'USB Microphone', isDefault: false },
+];
+
 const mockHistory: DictationSession[] = OL_DATA.history.map((h, i) => ({
   id: `mock-${i}`,
   createdAt: new Date().toISOString(),
@@ -155,6 +162,18 @@ export function getHotkeyCapability(): Promise<HotkeyCapability> {
 
 export function getWindowsImeStatus(): Promise<WindowsImeStatus> {
   return invokeOrMock('get_windows_ime_status', undefined, () => mockWindowsImeStatus);
+}
+
+export function listMicrophoneDevices(): Promise<MicrophoneDevice[]> {
+  return invokeOrMock('list_microphone_devices', undefined, () => mockMicrophoneDevices);
+}
+
+export function startMicrophoneLevelMonitor(deviceName: string): Promise<void> {
+  return invokeOrMock('start_microphone_level_monitor', { deviceName }, () => undefined);
+}
+
+export function stopMicrophoneLevelMonitor(): Promise<void> {
+  return invokeOrMock('stop_microphone_level_monitor', undefined, () => undefined);
 }
 
 // ── Credentials ────────────────────────────────────────────────────────

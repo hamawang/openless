@@ -8,7 +8,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { getHotkeyCapability, getSettings, setSettings } from '../lib/ipc';
+import { getHotkeyCapability, getSettings, isTauri, setSettings } from '../lib/ipc';
 import type { HotkeyBinding, HotkeyCapability, UserPreferences } from '../lib/types';
 import i18n, { outputPrefsForLocale, type SupportedLocale } from '../i18n';
 
@@ -55,6 +55,34 @@ export function HotkeySettingsProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    if (!isTauri) return;
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    void (async () => {
+      try {
+        const { listen } = await import('@tauri-apps/api/event');
+        const handle = await listen<UserPreferences>('prefs:changed', event => {
+          const nextPrefs = event.payload;
+          if (!nextPrefs) return;
+          latestPrefsRef.current = nextPrefs;
+          setPrefs(nextPrefs);
+        });
+        if (cancelled) {
+          handle();
+        } else {
+          unlisten = handle;
+        }
+      } catch (error) {
+        console.warn('[settings] prefs:changed listener setup failed', error);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
 
   useEffect(() => {
     latestPrefsRef.current = prefs;
