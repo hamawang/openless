@@ -210,6 +210,12 @@ export const ko: typeof zhCN = {
       desc: '하나의 언어를 선택하면 녹음 중 임의의 시점에 Shift 를 한 번 눌러 정지 후 전사를 해당 언어로 번역하여 커서 위치에 삽입합니다. "비활성화"를 선택하면 Shift 는 효과가 없으며 일반 정리 파이프라인을 따릅니다.',
       disabled: '비활성화 (Shift 로 번역 발동 안 함)',
     },
+    save: {
+      workingFailed: '작업 언어 저장에 실패했습니다. 다시 시도하세요.',
+      targetFailed: '번역 대상 언어 저장에 실패했습니다. 다시 시도하세요.',
+      hotkeyRegisterFailed: '번역 단축키 등록에 실패했습니다. 설정은 저장되지 않았습니다.',
+      hotkeySaveFailed: '번역 단축키 저장에 실패했습니다. 다시 시도하세요.',
+    },
     howto: {
       title: '사용 방법',
       step1: '다른 앱의 입력 상자에서 커서에 포커스합니다(메모, 메일, 채팅 창 모두 가능).',

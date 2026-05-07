@@ -4,6 +4,7 @@
 //   - 选一个翻译目标语言（单选；选"不启用"则 Shift 不触发翻译）
 //   - 看完整使用说明（怎么触发、按钮位置、胶囊显示）
 
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Card, PageHeader } from './_atoms';
 import { SUPPORTED_LANGUAGES } from '../lib/types';
@@ -11,10 +12,53 @@ import { useHotkeySettings } from '../state/HotkeySettingsContext';
 import { formatComboLabel } from '../lib/hotkey';
 import { ShortcutRecorder } from '../components/ShortcutRecorder';
 import { setTranslationHotkey } from '../lib/ipc';
+import type { UserPreferences, ShortcutBinding } from '../lib/types';
+
+type SaveState = 'idle' | 'saving' | 'saved' | 'failed';
 
 export function Translation() {
   const { t } = useTranslation();
-  const { prefs, updatePrefs: savePrefs } = useHotkeySettings();
+  const { prefs, refresh, updatePrefs: savePrefs } = useHotkeySettings();
+  const [saveState, setSaveState] = useState<SaveState>('idle');
+  const [saveMessage, setSaveMessage] = useState('');
+  const statusTimer = useRef<number | null>(null);
+
+  useEffect(() => () => {
+    if (statusTimer.current !== null) window.clearTimeout(statusTimer.current);
+  }, []);
+
+  const showSaveStatus = (state: SaveState, message: string, temporary = false) => {
+    if (statusTimer.current !== null) {
+      window.clearTimeout(statusTimer.current);
+      statusTimer.current = null;
+    }
+    setSaveState(state);
+    setSaveMessage(message);
+    if (temporary) {
+      statusTimer.current = window.setTimeout(() => {
+        setSaveState('idle');
+        setSaveMessage('');
+        statusTimer.current = null;
+      }, 1600);
+    }
+  };
+
+  const persistPrefs = async (
+    resolveNext: (current: UserPreferences) => UserPreferences,
+    failureMessage: string,
+  ) => {
+    showSaveStatus('saving', t('common.saving'));
+    try {
+      await savePrefs(resolveNext);
+      showSaveStatus('saved', t('common.saved'), true);
+    } catch (error) {
+      console.error('[translation] failed to save preferences', error);
+      showSaveStatus('failed', failureMessage);
+      await refresh().catch(refreshError => {
+        console.warn('[translation] failed to refresh preferences after save error', refreshError);
+      });
+    }
+  };
 
   if (!prefs) {
     return (
@@ -31,16 +75,38 @@ export function Translation() {
     );
   }
 
-  const onWorkingLanguagesChange = (workingLanguages: string[]) =>
-    savePrefs({ ...prefs, workingLanguages });
+  const onWorkingLanguagesChange = (workingLanguages: string[]) => {
+    void persistPrefs(
+      current => ({ ...current, workingLanguages }),
+      t('translation.save.workingFailed'),
+    );
+  };
   const toggleWorkingLanguage = (lang: string) => {
     const next = prefs.workingLanguages.includes(lang)
       ? prefs.workingLanguages.filter(l => l !== lang)
       : [...prefs.workingLanguages, lang];
     onWorkingLanguagesChange(next);
   };
-  const onTargetChange = (translationTargetLanguage: string) =>
-    savePrefs({ ...prefs, translationTargetLanguage });
+  const onTargetChange = (translationTargetLanguage: string) => {
+    void persistPrefs(
+      current => ({ ...current, translationTargetLanguage }),
+      t('translation.save.targetFailed'),
+    );
+  };
+  const onTranslationHotkeySave = async (binding: ShortcutBinding) => {
+    showSaveStatus('saving', t('common.saving'));
+    try {
+      await setTranslationHotkey(binding);
+    } catch (error) {
+      console.error('[translation] failed to register translation hotkey', error);
+      showSaveStatus('failed', t('translation.save.hotkeyRegisterFailed'));
+      return;
+    }
+    await persistPrefs(
+      current => ({ ...current, translationHotkey: binding }),
+      t('translation.save.hotkeySaveFailed'),
+    );
+  };
 
   const triggerLabel = formatComboLabel(prefs.dictationHotkey);
   const translationHotkeyLabel = formatComboLabel(prefs.translationHotkey);
@@ -55,6 +121,24 @@ export function Translation() {
       />
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        {saveState !== 'idle' && (
+          <div
+            role={saveState === 'failed' ? 'alert' : 'status'}
+            style={{
+              padding: '8px 12px',
+              borderRadius: 10,
+              border: saveState === 'failed'
+                ? '0.5px solid rgba(239,68,68,0.22)'
+                : '0.5px solid rgba(37,99,235,0.16)',
+              background: saveState === 'failed' ? 'rgba(239,68,68,0.07)' : 'rgba(37,99,235,0.06)',
+              color: saveState === 'failed' ? 'var(--ol-red, #ef4444)' : 'var(--ol-blue)',
+              fontSize: 11.5,
+              lineHeight: 1.5,
+            }}
+          >
+            {saveMessage}
+          </div>
+        )}
 
         {/* 1. 工作语言 */}
         <Card>
@@ -142,10 +226,7 @@ export function Translation() {
           </div>
           <ShortcutRecorder
             value={prefs.translationHotkey}
-            onSave={async binding => {
-              await setTranslationHotkey(binding);
-              await savePrefs({ ...prefs, translationHotkey: binding });
-            }}
+            onSave={onTranslationHotkeySave}
           />
         </Card>
 
