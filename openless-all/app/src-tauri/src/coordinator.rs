@@ -2216,26 +2216,25 @@ fn start_recorder_for_starting(
         Ok((rec, runtime_errors)) => {
             store_recorder_for_session(inner, session_id, rec);
             spawn_recorder_error_monitor(inner, runtime_errors);
-            // ★ 录音器实际启动后再发 Recording capsule —— 避免用户「看到录音条但
-            //   mic 还没开」的 50-200ms 窗口里开口讲话被吞（三条 ASR 路径共享）。
-            //   ASR 连接慢的间隙由 DeferredAsrBridge 缓存 PCM，按顺序后送，不丢字。
+            // 不在这里 emit Recording capsule。
+            // Recorder::start Ok 仅代表 cpal Stream::play 完成，不代表 audio
+            // 线程已经在向 consumer 推 PCM —— macOS CoreAudio AudioUnit 启动到
+            // 第一帧 process_callback 中间有 50–200 ms 间隙（Windows 类似）。
+            // 之前在这里立即 emit Recording 会让用户「看到录音条」就开口，但前几个
+            // 字落在 cpal init 窗口里被吞，反映为短录音漏首字（用户报告）。
             //
-            //   竞态保护：必须在 stop_recorder_if_pending_start_stop 之前 emit，
-            //   并且仅当 recorder 真的会继续运行（phase 仍是 Starting、无待处理的
-            //   stop / cancel）时才 emit。否则用户在 cpal init 期间松开热键时，
-            //   stop / cancel 路径可能已经发出 Transcribing / Cancelled，本行
-            //   再无条件覆盖回 Recording 会让 UI 短暂闪烁错误状态（短按尤其明显）。
-            //   Codex review (PR #289 P2) 指出。
-            let should_emit_recording = {
-                let state = inner.state.lock();
-                state.session_id == session_id
-                    && state.phase == SessionPhase::Starting
-                    && !state.pending_stop
-                    && !state.cancelled
-            };
-            if should_emit_recording {
-                emit_capsule(inner, CapsuleState::Recording, 0.0, 0, None, None);
-            }
+            // 现改为：level_handler 第一次被触发时才 emit Recording capsule。
+            // recorder.rs::process_callback 的顺序是 consume_pcm_chunk → level_handler，
+            // 所以 level_handler 第一次执行 == PCM 已经真实流到 consumer。从这一刻
+            // 起用户说什么都被录到。capsule 自然就晚 50–200 ms 出现，但出现 ==
+            // mic 真的在录，匹配「麦先录、UI 再弹」的预期。
+            //
+            // 原本的竞态保护交还给两条已有路径：
+            //   - stop_recorder_if_pending_start_stop：短按时把 capsule 切到
+            //     Transcribing；recorder 已 stop，level_handler 不会再发火。
+            //   - level_handler 内部 phase 检查：cancel / 错误使 phase 不在
+            //     {Starting, Listening} 时直接 return，不会在错误状态上盖
+            //     Recording。
             stop_recorder_if_pending_start_stop(inner);
             log::info!("[coord] recorder started (asr={active_asr}, phase=Starting)");
         }
