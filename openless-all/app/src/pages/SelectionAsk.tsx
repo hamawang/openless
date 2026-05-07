@@ -1,9 +1,9 @@
-﻿// SelectionAsk.tsx 鈥?鐙珛鐨?鍒掕瘝杩介棶"椤碉紙issue #118 / PR #119 閰嶇疆 UI 鎷嗗垎鐗堬級銆?
-// 鍔熻兘锛氱敤鎴峰湪浠绘剰 app 閫変腑涓€娈垫枃瀛?鈫?鎸?hotkey 鈫?娴獥寮瑰嚭 + 杩涘叆璇煶褰曢煶 鈫?
-// 鐢ㄦ埛鍙ｈ堪鎻愰棶 鈫?ASR + 閫夊尯 + 鎻愰棶 涓€璧烽€?LLM 鈫?绛旀浠?markdown 鏄剧ず鍦ㄦ诞绐椼€?
+// SelectionAsk.tsx — 独立的"划词追问"页（issue #118 / PR #119 配置 UI 拆分版）。
+// 功能：用户在任意 app 选中一段文字 → 按 hotkey → 浮窗弹出 + 进入语音录音 →
+// 用户口述提问 → ASR + 选区 + 提问 一起送 LLM → 答案以 markdown 显示在浮窗。
 //
-// 杩欎竴椤垫妸鍘熸湰鏁ｅ湪 Settings 鈫?褰曢煶 閲岀殑涓ゆ潯閰嶇疆锛坔otkey 棰勮 / 淇濆瓨 Q&A 鍘嗗彶锛?
-// 闆嗕腑璧锋潵 + 鍔犲畬鏁翠娇鐢ㄦ寚鍗楋紝璺?缈昏瘧"椤靛钩绾с€?
+// 这一页把原本散在 Settings → 录音 里的两条配置（hotkey 预设 / 保存 Q&A 历史）
+// 集中起来 + 加完整使用指南，跟"翻译"页平级。
 
 import { useTranslation } from 'react-i18next';
 import { Card, PageHeader } from './_atoms';
@@ -55,7 +55,7 @@ export function SelectionAsk() {
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
 
-        {/* 1. 瑙﹀彂蹇嵎閿?*/}
+        {/* 1. 触发快捷键 */}
         <Card>
           <CardHeaderToggle
             title={t('selectionAsk.hotkey.title')}
@@ -80,7 +80,7 @@ export function SelectionAsk() {
           )}
         </Card>
 
-        {/* 2. 鍘嗗彶淇濆瓨 */}
+        {/* 2. 历史保存 */}
         <Card>
           <CardHeaderToggle
             title={t('selectionAsk.history.title')}
@@ -92,7 +92,7 @@ export function SelectionAsk() {
           </div>
         </Card>
 
-        {/* 3. 浣跨敤鏂规硶 */}
+        {/* 3. 使用方法 */}
         <Card>
           <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10 }}>{t('selectionAsk.howto.title')}</div>
           <ol style={{ margin: 0, paddingLeft: 18, fontSize: 12.5, color: 'var(--ol-ink-2)', lineHeight: 1.7 }}>
@@ -138,7 +138,7 @@ export function SelectionAsk() {
     </>
   );
 }
-// 鍗＄墖鏍囬琛屽彸渚у紑鍏筹細涓?Style 椤甸潰椤舵爮鐨?36脳20 toggle 鍚屾锛屼繚鎸佸叏灞€瑙嗚涓€鑷淬€?
+// 卡片标题行右侧开关：与 Style 页面顶栏的 36×20 toggle 同款，保持全局视觉一致。
 function CardHeaderToggle({
   title,
   checked,

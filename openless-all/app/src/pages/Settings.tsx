@@ -1,4 +1,4 @@
-﻿// Settings.tsx 鈥?ported verbatim from design_handoff_openless/pages.jsx::Settings.
+// Settings.tsx — ported verbatim from design_handoff_openless/pages.jsx::Settings.
 // Internal sub-sections (Recording / Providers / Shortcuts / Permissions / Language / About)
 // keep their inline-style literals 1:1 with the source JSX.
 
@@ -69,15 +69,15 @@ import {
   type LocalAsrSettings,
 } from '../lib/localAsr';
 
-/// Settings 鈫?ASR 閫変簡 local-qwen3 鏃惰Е鍙戣烦鍒般€屾ā鍨嬭缃€嶉〉 + 鍏?Settings modal銆?
-/// FloatingShell 鐩戝惉鍚屽悕浜嬩欢鍋?setCurrentTab('localAsr') + setSettingsOpen(false)銆?
+/// Settings → ASR 选了 local-qwen3 时触发跳到「模型设置」页 + 关 Settings modal。
+/// FloatingShell 监听同名事件做 setCurrentTab('localAsr') + setSettingsOpen(false)。
 export const NAVIGATE_LOCAL_ASR_EVENT = 'openless:navigate-local-asr';
 
 interface SettingsProps {
   embedded?: boolean;
   initialSection?: SettingsSectionId;
 }
-// "鍏充簬" tab 宸茬Щ闄わ紙鍐呭骞跺叆澶栧眰 SettingsModal 鐨?About 椤碉紝閬垮厤璁剧疆鍐呭閲嶅鍏ュ彛锛夈€?
+// "关于" tab 已移除（内容并入外层 SettingsModal 的 About 页，避免设置内外重复入口）。
 export type SettingsSectionId = 'recording' | 'providers' | 'shortcuts' | 'permissions' | 'language';
 
 const SECTION_ORDER: SettingsSectionId[] = ['recording', 'providers', 'shortcuts', 'permissions', 'language'];
@@ -114,10 +114,10 @@ export function Settings({ embedded = false, initialSection = 'recording' }: Set
           desc={t('settings.desc')}
         />
       )}
-      {/* embedded锛堝湪 SettingsModal 閲岋級妯″紡涓嬶細mini-sidebar 鍥哄畾锛屼粎鍙虫爮 scroll銆?
-          澶栧眰 flex:1 minHeight:0 璁?grid 鎷垮埌纭畾楂樺害锛沢ridTemplateRows: minmax(0, 1fr)
-          寮哄埗琛岄珮绛変簬瀹瑰櫒楂樺害锛屽惁鍒?grid 榛樿 auto rows 浼氳窡鍐呭闀匡紝鍙虫爮 overflow:auto
-          灏遍€€鍖栨垚"娌′笢瑗块渶瑕?scroll"锛屼簬鏄ぇ瀹剁収鏃т竴璧烽銆?*/}
+      {/* embedded（在 SettingsModal 里）模式下：mini-sidebar 固定，仅右栏 scroll。
+          外层 flex:1 minHeight:0 让 grid 拿到确定高度；gridTemplateRows: minmax(0, 1fr)
+          强制行高等于容器高度，否则 grid 默认 auto rows 会跟内容长，右栏 overflow:auto
+          就退化成"没东西需要 scroll"，于是大家照旧一起飘。 */}
       <div
         style={{
           display: 'grid',
@@ -952,9 +952,9 @@ function AutostartRow() {
   const { t } = useTranslation();
   const [enabled, setEnabled] = useState(false);
   const [loaded, setLoaded] = useState(false);
-  // 鍒?plist / 娉ㄥ唽琛ㄥけ璐ユ椂缁欑敤鎴风湅鐨勯敊璇€俷ull = 娌℃湁澶辫触/涓婃鎿嶄綔宸叉垚鍔熴€?
-  // 涓嶆覆鏌撶瓑浜庢妸澶辫触鍚炴帀 鈥斺€?Windows 鍐?HKCU\Run 琚粍绛栫暐鎷︺€乵acOS 鍐?
-  // LaunchAgent plist 鏉冮檺涓嶅 閮芥槸鐪熷疄鍙兘銆俰ssue #194銆?
+  // 切 plist / 注册表失败时给用户看的错误。null = 没有失败/上次操作已成功。
+  // 不渲染等于把失败吞掉 —— Windows 写 HKCU\Run 被组策略拦、macOS 写
+  // LaunchAgent plist 权限不够 都是真实可能。issue #194。
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -1044,11 +1044,11 @@ type LlmPresetId = typeof LLM_PRESETS[number]['id'];
 
 const ASR_DEFAULT_RESOURCE_ID = 'volc.seedasr.sauc.duration';
 
-// `volcengine` 璧拌嚜寤烘祦寮忓鎴风锛涘叾浣欒蛋 OpenAI 鍏煎 `/audio/transcriptions`
-// 锛坄coordinator.rs::is_whisper_compatible_provider`锛夈€傛柊澧炲吋瀹瑰巶鍟嗭細
-//   1. 鍦ㄨ繖閲屽姞涓€椤?`{ id, nameKey, baseUrl, model }`锛?
-//   2. `coordinator.rs::is_whisper_compatible_provider` 鍔犲悓鍚?id锛?
-//   3. 鍦?i18n 鐨?`settings.providers.presets.<nameKey>` 鍔犳枃妗堛€?
+// `volcengine` 走自建流式客户端；其余走 OpenAI 兼容 `/audio/transcriptions`
+// （`coordinator.rs::is_whisper_compatible_provider`）。新增兼容厂商：
+//   1. 在这里加一项 `{ id, nameKey, baseUrl, model }`；
+//   2. `coordinator.rs::is_whisper_compatible_provider` 加同名 id；
+//   3. 在 i18n 的 `settings.providers.presets.<nameKey>` 加文案。
 const ASR_PRESETS = [
   { id: 'volcengine',   nameKey: 'asrVolcengine',   baseUrl: '',                                              model: ''                              },
   { id: 'siliconflow',  nameKey: 'asrSiliconflow',  baseUrl: 'https://api.siliconflow.cn/v1',                  model: 'FunAudioLLM/SenseVoiceSmall' },
@@ -1056,7 +1056,7 @@ const ASR_PRESETS = [
   { id: 'groq',         nameKey: 'asrGroq',         baseUrl: 'https://api.groq.com/openai/v1',                 model: 'whisper-large-v3-turbo'      },
   { id: 'whisper',      nameKey: 'asrWhisper',      baseUrl: 'https://api.openai.com/v1',                      model: 'whisper-1'                   },
   { id: 'foundry-local-whisper', nameKey: 'asrFoundryLocalWhisper', baseUrl: '',                              model: ''                              },
-  // 鏈湴 Qwen3-ASR锛氭棤 baseUrl/model 閰嶇疆锛屾ā鍨嬪湪銆屾ā鍨嬭缃€嶉〉涓嬭浇涓庡垏鎹€?
+  // 本地 Qwen3-ASR：无 baseUrl/model 配置，模型在「模型设置」页下载与切换。
   { id: 'local-qwen3',  nameKey: 'asrLocalQwen3',   baseUrl: '',                                              model: ''                              },
 ] as const;
 
@@ -1065,13 +1065,13 @@ type AsrPresetId = typeof ASR_PRESETS[number]['id'];
 function ProvidersSection() {
   const { t } = useTranslation();
   const { prefs, updatePrefs } = useHotkeySettings();
-  // `*Provider` 绔嬪嵆璺熼殢 <select> 鏀瑰姩锛堝彈鎺х粍浠跺繀椤诲疄鏃跺弽鏄犵敤鎴疯緭鍏ワ級锛?
-  // `committed*Provider` 鎵嶅喅瀹?CredentialField 鐨?key锛屼粎鍦ㄥ悗绔?active
-  // 鍒囨崲 + 榛樿鍊煎啓瀹屽悗鍐?commit銆備袱鑰呮媶寮€鏄负浜嗗悓鏃舵弧瓒筹細
-  //   - <select> 绔嬪埢鏄剧ず鐢ㄦ埛鐨勯€夋嫨锛坕ssue #220 P2锛歝odex 鎸囧嚭鍙楁帶閫変笉搴旂瓑 await锛?
-  //   - CredentialField 涓嶈鍦ㄥ悗绔?active 鍒囧畬鍓?remount锛坕ssue #219锛氶伩鍏嶈鍒版棫 entry锛?
-  // `*SwitchSeq` 鏄?stale-write 瀹堝崼锛氱敤鎴?100ms 鍐呰繛鐐逛袱娆℃椂锛屽厛鍙戠殑璇锋眰鏅氬埌涓?
-  // 浼氳鐩栧悗鍙戠殑 commit銆?
+  // `*Provider` 立即跟随 <select> 改动（受控组件必须实时反映用户输入）；
+  // `committed*Provider` 才决定 CredentialField 的 key，仅在后端 active
+  // 切换 + 默认值写完后再 commit。两者拆开是为了同时满足：
+  //   - <select> 立刻显示用户的选择（issue #220 P2：codex 指出受控选不应等 await）
+  //   - CredentialField 不要在后端 active 切完前 remount（issue #219：避免读到旧 entry）
+  // `*SwitchSeq` 是 stale-write 守卫：用户 100ms 内连点两次时，先发的请求晚到不
+  // 会覆盖后发的 commit。
   const [llmProvider, setLlmProvider] = useState<LlmPresetId>('ark');
   const [asrProvider, setAsrProvider] = useState<AsrPresetId>('volcengine');
   const [committedLlmProvider, setCommittedLlmProvider] = useState<LlmPresetId>('ark');
@@ -1097,12 +1097,12 @@ function ProvidersSection() {
     setCommittedAsrProvider(asrId);
   }, [prefs, os]);
 
-  // issue #219 / #220 P2锛?
-  //   1. 绔嬪埢 setLlmProvider 鈥斺€?鍙楁帶 <select> 蹇呴』鍙嶆槧鐢ㄦ埛鏈€鏂伴€夋嫨銆?
-  //   2. 鐢?seq 瀹堝崼姣忎釜 await锛氱敤鎴疯繛鐐逛袱娆℃椂鏃ц姹傛櫄鍒颁篃涓嶄細鐩栨帀鏂伴€夋嫨銆?
-  //   3. 浠?setCommittedLlmProvider 涔嬪悗 CredentialField 鎵?remount 璇绘柊 entry锛?
-  //      姝ゆ椂鍚庣 root.active.llm 宸茬粡鏄?id锛宭ookup_account 钀藉埌姝ｇ‘ entry銆?
-  //   4. endpoint/model 榛樿鍊间粎鍦ㄨ provider entry 璇ュ瓧娈典负绌烘椂鎵嶅～锛屼笉瑕嗙洊鐢ㄦ埛鑷畾涔夈€?
+  // issue #219 / #220 P2：
+  //   1. 立刻 setLlmProvider —— 受控 <select> 必须反映用户最新选择。
+  //   2. 用 seq 守卫每个 await：用户连点两次时旧请求晚到也不会盖掉新选择。
+  //   3. 仅 setCommittedLlmProvider 之后 CredentialField 才 remount 读新 entry，
+  //      此时后端 root.active.llm 已经是 id，lookup_account 落到正确 entry。
+  //   4. endpoint/model 默认值仅在该 provider entry 该字段为空时才填，不覆盖用户自定义。
   const onLlmProviderChange = async (id: LlmPresetId) => {
     setLlmProvider(id);
     const seq = ++llmSwitchSeqRef.current;
@@ -1135,9 +1135,9 @@ function ProvidersSection() {
       await updatePrefs(next);
       if (seq !== asrSwitchSeqRef.current) return;
     }
-    // OpenAI 鍏煎鍘傚晢棣栨鍒囨崲鏃堕濉?baseUrl / model 榛樿鍊硷紝鐪佸緱鐢ㄦ埛蹇呰俯
-    // 銆岃法鍘傚晢 model 鍚嶆牴鏈笉涓€鏍枫€嶇殑鍧戯紱浣嗙敤鎴峰凡鑷畾涔夊悗灏变笉鍐嶈鐩栥€?
-    // volcengine 璧板彟涓€濂楀嚟鎹紝璺宠繃銆?
+    // OpenAI 兼容厂商首次切换时预填 baseUrl / model 默认值，省得用户必踩
+    // 「跨厂商 model 名根本不一样」的坑；但用户已自定义后就不再覆盖。
+    // volcengine 走另一套凭据，跳过。
     const preset = ASR_PRESETS.find(p => p.id === id);
     if (preset && preset.baseUrl) {
       const existing = await readCredential('asr.endpoint');
@@ -1158,9 +1158,9 @@ function ProvidersSection() {
     setCommittedAsrProvider(id);
   };
 
-  // preset 鍐冲畾 placeholder 涓?default 鈥斺€?蹇呴』璺熺潃 committed*Provider 璧帮紝
-  // 鍚﹀垯鍙楁帶 <select> 绔嬪埢鍒囧埌鏂板巶鍟嗭紝浣嗗嚟鎹瓧娈佃繕鍦ㄦ樉绀烘棫 entry锛宲laceholder
-  // 浼氬厛浜庡疄闄呮暟鎹垏鎹€佽瑙変笂瀵逛笉涓娿€?
+  // preset 决定 placeholder 与 default —— 必须跟着 committed*Provider 走，
+  // 否则受控 <select> 立刻切到新厂商，但凭据字段还在显示旧 entry，placeholder
+  // 会先于实际数据切换、视觉上对不上。
   const preset = LLM_PRESETS.find(p => p.id === committedLlmProvider) ?? LLM_PRESETS[LLM_PRESETS.length - 1];
   const asrPreset = visibleAsrPresets.find(p => p.id === committedAsrProvider);
 
@@ -1779,7 +1779,7 @@ function PermissionsSection() {
     refreshHotkey();
     refreshWindowsIme();
     const hotkeyId = window.setInterval(refreshHotkey, 1000);
-    // 楹﹀厠椋庢鏌ヤ細鐭殏鎵撳紑杈撳叆娴侊紝閬垮厤姣忕鎺㈡祴瀵艰嚧闅愮鎸囩ず鍣ㄩ绻侀棯鐑併€?
+    // 麦克风检查会短暂打开输入流，避免每秒探测导致隐私指示器频繁闪烁。
     const permissionId = window.setInterval(refreshPermissions, 10000);
     const onFocus = () => {
       refreshPermissions();
@@ -1942,7 +1942,7 @@ function LanguageSection() {
   );
 }
 
-// AboutSection 宸茬Щ闄わ細鍐呭骞跺叆 SettingsModal 鐨?AboutMini锛岄伩鍏嶈缃唴澶栦袱涓?鍏充簬"閲嶅鍏ュ彛銆?
+// AboutSection 已移除：内容并入 SettingsModal 的 AboutMini，避免设置内外两个"关于"重复入口。
 
 export function AboutUpdateControl({ tagline }: { tagline: string }) {
   const { t } = useTranslation();
@@ -2006,9 +2006,9 @@ function adapterDisplayName(adapter: HotkeyCapability['adapter'] | HotkeyStatus[
   return i18n.t('hotkey.adapter.rdev');
 }
 
-/// 鏈湴 Qwen3-ASR 鍦?Settings 鈫?鏈嶅姟鍟嗗尯閲?*涓?*璁╃敤鎴峰～绌衡€斺€斿睍绀哄綋鍓嶆縺娲绘ā鍨?
-/// 鏄惁宸蹭笅杞姐€佸垪鍑烘墍鏈夊凡涓嬭浇妯″瀷 + 鍒犻櫎鎸夐挳锛屽苟鎻愮ず鎬ц兘/璐ㄩ噺棰勬湡锛屽紩瀵艰烦鍒?
-/// 銆屾ā鍨嬭缃€嶉〉鍋氫笅杞姐€?
+/// 本地 Qwen3-ASR 在 Settings → 服务商区里**不**让用户填空——展示当前激活模型
+/// 是否已下载、列出所有已下载模型 + 删除按钮，并提示性能/质量预期，引导跳到
+/// 「模型设置」页做下载。
 function LocalAsrProviderHint({
   provider,
   selectedProvider,
@@ -2132,7 +2132,7 @@ function LocalAsrProviderHint({
 
   return (
     <div style={{ padding: '8px 0 4px', display: 'flex', flexDirection: 'column', gap: 12 }}>
-      {/* 鎬ц兘/璐ㄩ噺棰勬湡璀﹀憡 鈥斺€?鐢ㄦ埛纭姹傝鍐欐竻妤?*/}
+      {/* 性能/质量预期警告 —— 用户硬要求要写清楚 */}
       <div
         style={{
           padding: '10px 12px',
@@ -2142,14 +2142,14 @@ function LocalAsrProviderHint({
           color: 'var(--ol-ink-2)',
           lineHeight: 1.6,
         }}>
-        鈿狅笍 {t('settings.providers.localAsrPerformanceWarning')}
+        ⚠️ {t('settings.providers.localAsrPerformanceWarning')}
       </div>
 
       <div style={{ fontSize: 12.5, color: 'var(--ol-ink-3)', lineHeight: 1.6 }}>
         {t(hintKey)}
       </div>
 
-      {/* 褰撳墠婵€娲绘ā鍨嬬姸鎬?+ 璺宠浆鎸夐挳 */}
+      {/* 当前激活模型状态 + 跳转按钮 */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         <Pill tone={isReady ? 'ok' : 'outline'} size="sm">
           {isReady
@@ -2163,7 +2163,7 @@ function LocalAsrProviderHint({
         </Btn>
       </div>
 
-      {/* 宸蹭笅杞芥ā鍨嬪垪琛?+ 鍒犻櫎鎸夐挳锛堢敤鎴凤細宸蹭笅杞界殑椤圭洰瑕佸湪鏃佽竟鏄剧ず + 鎻愪緵鍒犻櫎锛?*/}
+      {/* 已下载模型列表 + 删除按钮（用户：已下载的项目要在旁边显示 + 提供删除） */}
       {downloaded.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           <div style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--ol-ink-4)', letterSpacing: '.04em', textTransform: 'uppercase' }}>
