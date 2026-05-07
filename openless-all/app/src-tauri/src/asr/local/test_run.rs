@@ -50,21 +50,18 @@ pub async fn run_test(model_id: ModelId) -> Result<TestResult> {
     // qwen_load 是同步阻塞调用且较慢（数秒）；扔到 spawn_blocking 不阻塞 tokio runtime。
     let load_start = Instant::now();
     let dir_for_blocking = dir.clone();
-    let engine = tauri::async_runtime::spawn_blocking(move || {
-        load_engine(&dir_for_blocking)
-    })
-    .await
-    .map_err(|e| anyhow::anyhow!("spawn_blocking join failed: {e:#}"))??;
+    let engine = tauri::async_runtime::spawn_blocking(move || load_engine(&dir_for_blocking))
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking join failed: {e:#}"))??;
     let load_ms = load_start.elapsed().as_millis() as u64;
 
     // transcribe_audio 也是阻塞 + 重活，同样扔到 blocking pool。
     let trans_start = Instant::now();
     let engine_clone = Arc::clone(&engine);
-    let text = tauri::async_runtime::spawn_blocking(move || {
-        engine_clone.transcribe_audio(&samples)
-    })
-    .await
-    .map_err(|e| anyhow::anyhow!("spawn_blocking join failed: {e:#}"))??;
+    let text =
+        tauri::async_runtime::spawn_blocking(move || engine_clone.transcribe_audio(&samples))
+            .await
+            .map_err(|e| anyhow::anyhow!("spawn_blocking join failed: {e:#}"))??;
     let transcribe_ms = trans_start.elapsed().as_millis() as u64;
 
     Ok(TestResult {
@@ -113,13 +110,17 @@ fn decode_wav_16k_mono(bytes: &[u8]) -> Result<Vec<f32>> {
                 if body_start + 16 > bytes.len() {
                     anyhow::bail!("fmt chunk 越界");
                 }
-                let format = u16::from_le_bytes(bytes[body_start..body_start + 2].try_into().unwrap());
+                let format =
+                    u16::from_le_bytes(bytes[body_start..body_start + 2].try_into().unwrap());
                 if format != 1 {
                     anyhow::bail!("只支持 PCM（format=1），当前 format={format}");
                 }
-                channels = u16::from_le_bytes(bytes[body_start + 2..body_start + 4].try_into().unwrap());
-                sample_rate = u32::from_le_bytes(bytes[body_start + 4..body_start + 8].try_into().unwrap());
-                bits_per_sample = u16::from_le_bytes(bytes[body_start + 14..body_start + 16].try_into().unwrap());
+                channels =
+                    u16::from_le_bytes(bytes[body_start + 2..body_start + 4].try_into().unwrap());
+                sample_rate =
+                    u32::from_le_bytes(bytes[body_start + 4..body_start + 8].try_into().unwrap());
+                bits_per_sample =
+                    u16::from_le_bytes(bytes[body_start + 14..body_start + 16].try_into().unwrap());
             }
             b"data" => {
                 data_offset = body_start;

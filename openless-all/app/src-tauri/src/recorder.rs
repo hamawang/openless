@@ -115,14 +115,15 @@ fn run_audio_thread(
     startup_tx: Sender<Result<(), RecorderError>>,
     runtime_error_tx: Sender<RecorderError>,
 ) {
-    let (stream, state) = match build_input_stream(consumer, level_handler, runtime_error_tx.clone()) {
-        Ok(s) => s,
-        Err(err) => {
-            // 启动失败：通知主线程后即退出。
-            let _ = startup_tx.send(Err(err));
-            return;
-        }
-    };
+    let (stream, state) =
+        match build_input_stream(consumer, level_handler, runtime_error_tx.clone()) {
+            Ok(s) => s,
+            Err(err) => {
+                // 启动失败：通知主线程后即退出。
+                let _ = startup_tx.send(Err(err));
+                return;
+            }
+        };
 
     if let Err(err) = stream.play() {
         let _ = startup_tx.send(Err(RecorderError::EngineFailed(format!("play: {err}"))));
@@ -133,9 +134,9 @@ fn run_audio_thread(
     let _ = startup_tx.send(Ok(()));
 
     // 启动 liveness watchdog 线程：检测录音回调是否静默停止
-    const WATCHDOG_CHECK_INTERVAL_MS: u64 = 1000;  // 每秒检查一次
-    const CALLBACK_TIMEOUT_SECS: u64 = 3;  // 3 秒没有回调视为异常
-    const FIRST_CALLBACK_DEADLINE_SECS: u64 = 5;  // 5 秒内必须收到首次回调
+    const WATCHDOG_CHECK_INTERVAL_MS: u64 = 1000; // 每秒检查一次
+    const CALLBACK_TIMEOUT_SECS: u64 = 3; // 3 秒没有回调视为异常
+    const FIRST_CALLBACK_DEADLINE_SECS: u64 = 5; // 5 秒内必须收到首次回调
 
     let stop_flag_for_watchdog = Arc::clone(&stop_flag);
     let state_for_watchdog = Arc::clone(&state);
@@ -160,10 +161,11 @@ fn run_audio_thread(
                                 "[recorder] watchdog: 录音回调已停止 {} 秒，触发错误恢复",
                                 elapsed.as_secs()
                             );
-                            let _ = runtime_error_tx_for_watchdog.send(RecorderError::EngineFailed(
-                                format!("录音回调静默停止 {} 秒", elapsed.as_secs())
-                            ));
-                            break;  // 只报告一次
+                            let _ =
+                                runtime_error_tx_for_watchdog.send(RecorderError::EngineFailed(
+                                    format!("录音回调静默停止 {} 秒", elapsed.as_secs()),
+                                ));
+                            break; // 只报告一次
                         }
                     }
                     None => {
@@ -174,10 +176,11 @@ fn run_audio_thread(
                                 "[recorder] watchdog: {} 秒内未收到首次回调，触发错误恢复",
                                 elapsed.as_secs()
                             );
-                            let _ = runtime_error_tx_for_watchdog.send(RecorderError::EngineFailed(
-                                format!("录音启动后 {} 秒内未收到回调", elapsed.as_secs())
-                            ));
-                            break;  // 只报告一次
+                            let _ =
+                                runtime_error_tx_for_watchdog.send(RecorderError::EngineFailed(
+                                    format!("录音启动后 {} 秒内未收到回调", elapsed.as_secs()),
+                                ));
+                            break; // 只报告一次
                         }
                     }
                 }

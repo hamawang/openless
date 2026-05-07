@@ -7,16 +7,17 @@
 //! 仅产出 `QaHotkeyEvent::Pressed` 边沿事件；toggle / 录音生命周期由
 //! coordinator 解释（第一次按 → 开始问答；第二次按 → 结束）。
 //!
-//! 模块依赖：仅 `types`，与 CLAUDE.md "Rust 模块依赖只通过 types.rs 跨模块" 一致。
+//! 通过 `global_hotkey_runtime` 共享进程级 manager / event receiver。
 
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
 
-use global_hotkey::hotkey::{Code, HotKey, Modifiers};
-use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
+use global_hotkey::{GlobalHotKeyEvent, HotKeyState};
 use parking_lot::Mutex;
 
-use crate::types::QaHotkeyBinding;
+use crate::global_hotkey_runtime::{GlobalHotkeyRuntime, RegisteredHotkey};
+use crate::shortcut_binding::{parse_global_hotkey, ShortcutBindingError};
+use crate::types::ShortcutBinding;
 
 #[derive(Debug, Clone, Copy)]
 pub enum QaHotkeyEvent {
@@ -44,13 +45,9 @@ pub struct QaHotkeyMonitor {
 }
 
 struct Inner {
-    manager: GlobalHotKeyManager,
     /// 当前注册的 hotkey 句柄；用于 unregister。
-    registered: Mutex<Option<HotKey>>,
-    /// 事件转发线程接收 global-hotkey crate 的全局 channel，再过滤 id 后转发到 tx。
-    forward_alive: Arc<std::sync::atomic::AtomicBool>,
-    /// 当前关心的 hotkey id（filter 用）。
-    active_id: Arc<std::sync::atomic::AtomicU32>,
+    registered: Mutex<Option<RegisteredHotkey>>,
+    tx: Sender<QaHotkeyEvent>,
 }
 
 // global-hotkey 0.6 的 GlobalHotKeyManager 在 Windows 内部持有 HHOOK / window
@@ -70,93 +67,71 @@ impl QaHotkeyMonitor {
     /// `AppHandle::run_on_main_thread` 跳到主线程后再 spawn 这个 monitor）。
     /// 本函数不强制断言主线程——单元 / 集成测试也跑不到 manager 创建那一行。
     pub fn start(
-        binding: QaHotkeyBinding,
+        binding: ShortcutBinding,
         tx: Sender<QaHotkeyEvent>,
     ) -> Result<Self, QaHotkeyError> {
-        let manager = GlobalHotKeyManager::new()
+        let runtime = GlobalHotkeyRuntime::shared()
             .map_err(|e| QaHotkeyError::ManagerInitFailed(e.to_string()))?;
 
         let hotkey = parse_binding(&binding)?;
-        manager
+        let (registered, rx) = runtime
             .register(hotkey)
             .map_err(|e| QaHotkeyError::RegisterFailed(e.to_string()))?;
 
-        let active_id = Arc::new(std::sync::atomic::AtomicU32::new(hotkey.id()));
-        let forward_alive = Arc::new(std::sync::atomic::AtomicBool::new(true));
-
-        // 启动转发线程：消费 global-hotkey 的进程级 channel，filter id 后投递到上层 tx。
-        // global-hotkey 用 crossbeam_channel，自带超时 recv，便于优雅退出。
-        let alive_for_thread = Arc::clone(&forward_alive);
-        let id_for_thread = Arc::clone(&active_id);
+        // 启动转发线程：runtime 已按 hotkey id 分发；这里保留 id 检查作为防线，
+        // 避免未来误接回进程级事件流后串到其他快捷键。
+        let hotkey_id = registered.hotkey().id();
+        let tx_for_thread = tx.clone();
         std::thread::Builder::new()
             .name("openless-qa-hotkey-forward".into())
-            .spawn(move || forward_loop(alive_for_thread, id_for_thread, tx))
+            .spawn(move || forward_loop(hotkey_id, rx, tx_for_thread))
             .map_err(|e| QaHotkeyError::RegisterFailed(format!("spawn forward thread: {e}")))?;
 
         Ok(Self {
             inner: Arc::new(Inner {
-                manager,
-                registered: Mutex::new(Some(hotkey)),
-                forward_alive,
-                active_id,
+                registered: Mutex::new(Some(registered)),
+                tx,
             }),
         })
     }
 
     /// 替换当前注册的 hotkey（用户在设置里改了组合键时）。
-    pub fn update_binding(&self, binding: QaHotkeyBinding) -> Result<(), QaHotkeyError> {
+    pub fn update_binding(&self, binding: ShortcutBinding) -> Result<(), QaHotkeyError> {
         let next = parse_binding(&binding)?;
         let mut current = self.inner.registered.lock();
-        if let Some(prev) = current.take() {
-            if prev == next {
-                *current = Some(prev);
+        if let Some(prev) = current.as_ref() {
+            if prev.hotkey() == next {
                 return Ok(());
             }
-            if let Err(e) = self.inner.manager.unregister(prev) {
-                log::warn!("[qa-hotkey] unregister 旧绑定失败: {e}");
-            }
         }
-        self.inner
-            .manager
+        let runtime = GlobalHotkeyRuntime::shared()
+            .map_err(|e| QaHotkeyError::ManagerInitFailed(e.to_string()))?;
+        let (registered, rx) = runtime
             .register(next)
             .map_err(|e| QaHotkeyError::RegisterFailed(e.to_string()))?;
-        *current = Some(next);
-        self.inner
-            .active_id
-            .store(next.id(), std::sync::atomic::Ordering::SeqCst);
+        let hotkey_id = registered.hotkey().id();
+        // Keep event forwarding alive for the replacement registration.
+        std::thread::Builder::new()
+            .name("openless-qa-hotkey-forward".into())
+            .spawn({
+                let tx = self.inner.tx.clone();
+                move || forward_loop(hotkey_id, rx, tx)
+            })
+            .map_err(|e| QaHotkeyError::RegisterFailed(format!("spawn forward thread: {e}")))?;
+        *current = Some(registered);
         Ok(())
     }
 }
 
 impl Drop for QaHotkeyMonitor {
     fn drop(&mut self) {
-        // 通知转发线程退出；超时 recv 后自然结束。
-        self.inner
-            .forward_alive
-            .store(false, std::sync::atomic::Ordering::SeqCst);
-        if let Some(prev) = self.inner.registered.lock().take() {
-            if let Err(e) = self.inner.manager.unregister(prev) {
-                log::warn!("[qa-hotkey] drop 时 unregister 失败: {e}");
-            }
-        }
+        self.inner.registered.lock().take();
     }
 }
 
-fn forward_loop(
-    alive: Arc<std::sync::atomic::AtomicBool>,
-    active_id: Arc<std::sync::atomic::AtomicU32>,
-    tx: Sender<QaHotkeyEvent>,
-) {
-    // global-hotkey crate 用 crossbeam_channel；其 receiver 没暴露 RecvTimeoutError 给外部，
-    // 所以不区分 timeout vs disconnect，统一 250ms tick 重新 check alive 标志。
-    let receiver = GlobalHotKeyEvent::receiver();
-    while alive.load(std::sync::atomic::Ordering::SeqCst) {
-        let event = match receiver.recv_timeout(std::time::Duration::from_millis(250)) {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-        let want = active_id.load(std::sync::atomic::Ordering::SeqCst);
-        if event.id() != want {
+fn forward_loop(hotkey_id: u32, rx: Receiver<GlobalHotKeyEvent>, tx: Sender<QaHotkeyEvent>) {
+    while let Ok(event) = rx.recv() {
+        if event.id() != hotkey_id {
             continue;
         }
         if !matches!(event.state(), HotKeyState::Pressed) {
@@ -170,146 +145,23 @@ fn forward_loop(
     log::info!("[qa-hotkey] 转发线程退出");
 }
 
-fn parse_binding(binding: &QaHotkeyBinding) -> Result<HotKey, QaHotkeyError> {
-    let mut mods = Modifiers::empty();
-    for raw in &binding.modifiers {
-        let tag = normalize_modifier_tag(raw);
-        let bit = match tag.as_str() {
-            "cmd" | "command" | "super" | "meta" | "win" => Modifiers::SUPER,
-            "ctrl" | "control" => Modifiers::CONTROL,
-            "alt" | "option" | "opt" => Modifiers::ALT,
-            "shift" => Modifiers::SHIFT,
-            other => return Err(QaHotkeyError::UnsupportedModifier(other.to_string())),
-        };
-        mods |= bit;
-    }
-    let code = parse_primary(&binding.primary)?;
-    Ok(HotKey::new(Some(mods), code))
-}
-
-fn normalize_modifier_tag(raw: &str) -> String {
-    let tag = raw.trim().to_ascii_lowercase();
-    #[cfg(target_os = "windows")]
-    {
-        if matches!(tag.as_str(), "cmd" | "command") {
-            return "ctrl".to_string();
-        }
-    }
-    tag
-}
-
-/// 把用户配置的主键字符串解析成 keyboard_types::Code。
-/// 支持单字符（字母 / 数字 / 符号）+ 常见命名键（F1..F12 / Enter / Tab / Escape / Space）。
-fn parse_primary(raw: &str) -> Result<Code, QaHotkeyError> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return Err(QaHotkeyError::UnsupportedKey("(空)".into()));
-    }
-    // 单字符
-    if trimmed.chars().count() == 1 {
-        let ch = trimmed.chars().next().unwrap();
-        if let Some(code) = char_to_code(ch) {
-            return Ok(code);
-        }
-    }
-    // 命名键
-    let upper = trimmed.to_ascii_uppercase();
-    let named = match upper.as_str() {
-        "ENTER" | "RETURN" => Code::Enter,
-        "TAB" => Code::Tab,
-        "ESC" | "ESCAPE" => Code::Escape,
-        "SPACE" => Code::Space,
-        "BACKSPACE" => Code::Backspace,
-        "DELETE" | "DEL" => Code::Delete,
-        "HOME" => Code::Home,
-        "END" => Code::End,
-        "PAGEUP" => Code::PageUp,
-        "PAGEDOWN" => Code::PageDown,
-        "ARROWUP" | "UP" => Code::ArrowUp,
-        "ARROWDOWN" | "DOWN" => Code::ArrowDown,
-        "ARROWLEFT" | "LEFT" => Code::ArrowLeft,
-        "ARROWRIGHT" | "RIGHT" => Code::ArrowRight,
-        "F1" => Code::F1,
-        "F2" => Code::F2,
-        "F3" => Code::F3,
-        "F4" => Code::F4,
-        "F5" => Code::F5,
-        "F6" => Code::F6,
-        "F7" => Code::F7,
-        "F8" => Code::F8,
-        "F9" => Code::F9,
-        "F10" => Code::F10,
-        "F11" => Code::F11,
-        "F12" => Code::F12,
-        _ => return Err(QaHotkeyError::UnsupportedKey(trimmed.to_string())),
-    };
-    Ok(named)
-}
-
-fn char_to_code(ch: char) -> Option<Code> {
-    let c = ch.to_ascii_uppercase();
-    let code = match c {
-        'A' => Code::KeyA,
-        'B' => Code::KeyB,
-        'C' => Code::KeyC,
-        'D' => Code::KeyD,
-        'E' => Code::KeyE,
-        'F' => Code::KeyF,
-        'G' => Code::KeyG,
-        'H' => Code::KeyH,
-        'I' => Code::KeyI,
-        'J' => Code::KeyJ,
-        'K' => Code::KeyK,
-        'L' => Code::KeyL,
-        'M' => Code::KeyM,
-        'N' => Code::KeyN,
-        'O' => Code::KeyO,
-        'P' => Code::KeyP,
-        'Q' => Code::KeyQ,
-        'R' => Code::KeyR,
-        'S' => Code::KeyS,
-        'T' => Code::KeyT,
-        'U' => Code::KeyU,
-        'V' => Code::KeyV,
-        'W' => Code::KeyW,
-        'X' => Code::KeyX,
-        'Y' => Code::KeyY,
-        'Z' => Code::KeyZ,
-        '0' => Code::Digit0,
-        '1' => Code::Digit1,
-        '2' => Code::Digit2,
-        '3' => Code::Digit3,
-        '4' => Code::Digit4,
-        '5' => Code::Digit5,
-        '6' => Code::Digit6,
-        '7' => Code::Digit7,
-        '8' => Code::Digit8,
-        '9' => Code::Digit9,
-        ';' => Code::Semicolon,
-        ':' => Code::Semicolon,
-        ',' => Code::Comma,
-        '.' => Code::Period,
-        '/' => Code::Slash,
-        '\\' => Code::Backslash,
-        '[' => Code::BracketLeft,
-        ']' => Code::BracketRight,
-        '\'' => Code::Quote,
-        '`' => Code::Backquote,
-        '-' => Code::Minus,
-        '=' => Code::Equal,
-        ' ' => Code::Space,
-        _ => return None,
-    };
-    Some(code)
+fn parse_binding(
+    binding: &ShortcutBinding,
+) -> Result<global_hotkey::hotkey::HotKey, QaHotkeyError> {
+    parse_global_hotkey(binding).map_err(|e| match e {
+        ShortcutBindingError::UnsupportedModifier(m) => QaHotkeyError::UnsupportedModifier(m),
+        ShortcutBindingError::UnsupportedKey(k) => QaHotkeyError::UnsupportedKey(k),
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use global_hotkey::hotkey::{Code, Modifiers};
 
     #[test]
     fn parse_default_binding() {
-        let binding = QaHotkeyBinding::default();
+        let binding = ShortcutBinding::default_qa();
         let parsed = parse_binding(&binding).expect("default binding parses");
         assert!(parsed.mods.contains(Modifiers::SHIFT));
         assert_eq!(parsed.key, Code::Semicolon);
@@ -317,7 +169,7 @@ mod tests {
 
     #[test]
     fn parse_letter_binding() {
-        let binding = QaHotkeyBinding {
+        let binding = ShortcutBinding {
             primary: "k".into(),
             modifiers: vec!["cmd".into(), "alt".into()],
         };
@@ -329,7 +181,7 @@ mod tests {
 
     #[test]
     fn unsupported_modifier_rejected() {
-        let binding = QaHotkeyBinding {
+        let binding = ShortcutBinding {
             primary: ";".into(),
             modifiers: vec!["hyper".into()],
         };
@@ -341,7 +193,7 @@ mod tests {
 
     #[test]
     fn empty_primary_rejected() {
-        let binding = QaHotkeyBinding {
+        let binding = ShortcutBinding {
             primary: "".into(),
             modifiers: vec!["cmd".into()],
         };
@@ -353,7 +205,7 @@ mod tests {
 
     #[test]
     fn cmd_modifier_normalizes_per_platform() {
-        let binding = QaHotkeyBinding {
+        let binding = ShortcutBinding {
             primary: ";".into(),
             modifiers: vec!["cmd".into(), "shift".into()],
         };
@@ -369,5 +221,36 @@ mod tests {
         {
             assert!(parsed.mods.contains(Modifiers::SUPER));
         }
+    }
+
+    #[test]
+    fn forward_loop_ignores_unrelated_hotkey_ids() {
+        let (event_tx, event_rx) = std::sync::mpsc::channel();
+        let (out_tx, out_rx) = std::sync::mpsc::channel();
+
+        event_tx
+            .send(GlobalHotKeyEvent {
+                id: 41,
+                state: HotKeyState::Pressed,
+            })
+            .unwrap();
+        event_tx
+            .send(GlobalHotKeyEvent {
+                id: 42,
+                state: HotKeyState::Released,
+            })
+            .unwrap();
+        event_tx
+            .send(GlobalHotKeyEvent {
+                id: 42,
+                state: HotKeyState::Pressed,
+            })
+            .unwrap();
+        drop(event_tx);
+
+        forward_loop(42, event_rx, out_tx);
+
+        assert!(matches!(out_rx.recv().unwrap(), QaHotkeyEvent::Pressed));
+        assert!(out_rx.try_recv().is_err());
     }
 }

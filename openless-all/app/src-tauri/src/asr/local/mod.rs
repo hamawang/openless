@@ -24,9 +24,9 @@ mod qwen_engine;
 mod qwen_ffi;
 
 #[cfg(target_os = "macos")]
-pub use qwen_engine::QwenAsrEngine;
-#[cfg(target_os = "macos")]
 pub use local_provider::LocalQwenAsr;
+#[cfg(target_os = "macos")]
+pub use qwen_engine::QwenAsrEngine;
 
 pub use download::{DownloadManager, Mirror};
 pub use models::{ModelId, ModelStatus};

@@ -246,6 +246,7 @@ function Pill({ os, state, level, insertedChars, message, onCancel, onConfirm }:
         padding: '0 8px',
         width: metrics.width,
         height: metrics.height,
+        boxSizing: metrics.boxSizing,
         borderRadius: 999,
         background: 'rgba(255, 255, 255, 0.62)',
         backdropFilter: useBackdrop ? 'blur(28px) saturate(180%)' : 'none',
@@ -327,7 +328,10 @@ export function Capsule() {
         position: 'relative',
         display: 'flex',
         alignItems: 'center',
-        justifyContent: os === 'win' ? 'flex-end' : 'center',
+        justifyContent: 'center',
+        paddingLeft: hostMetrics.horizontalInset,
+        paddingRight: hostMetrics.horizontalInset,
+        boxSizing: hostMetrics.boxSizing,
         paddingTop: os === 'win'
           ? Math.max(0, hostMetrics.height - metrics.height - hostMetrics.bottomInset)
           : 0,
@@ -345,7 +349,7 @@ export function Capsule() {
           position: 'absolute',
           left: '50%',
           // macOS / Linux：胶囊窗口 220×110、pill 居中，badge 锚到 pill 中线上方 21+8。
-          // Windows：pill 不居中（带 12pt 阴影 inset），用 hostMetrics 量到底部 inset + pill 高 + gap。
+          // Windows：host 比 pill 多出左右 12px / 底部 12px 的阴影空间，pill 仍保持居中。
           bottom: os === 'win'
             ? `${hostMetrics.bottomInset + metrics.height + hostMetrics.badgeGap}px`
             : 'calc(50% + 21px + 8px)',

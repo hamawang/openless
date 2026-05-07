@@ -79,9 +79,8 @@ impl QwenAsrEngine {
     /// 批式转写：一次性给完整音频（mono f32 16kHz）。
     pub fn transcribe_audio(&self, samples: &[f32]) -> Result<String> {
         // SAFETY: samples 在调用期间存活；返回是 C `malloc` 出的字符串。
-        let raw = unsafe {
-            qwen_transcribe_audio(self.ctx, samples.as_ptr(), samples.len() as i32)
-        };
+        let raw =
+            unsafe { qwen_transcribe_audio(self.ctx, samples.as_ptr(), samples.len() as i32) };
         if raw.is_null() {
             anyhow::bail!("qwen_transcribe_audio 返回 NULL");
         }
@@ -95,9 +94,8 @@ impl QwenAsrEngine {
     /// 流式转写：内部按 2s chunk 切片，token 通过 `set_token_handler` 注册的
     /// 回调实时吐出；返回值是最终完整文本。
     pub fn transcribe_stream(&self, samples: &[f32]) -> Result<String> {
-        let raw = unsafe {
-            qwen_transcribe_stream(self.ctx, samples.as_ptr(), samples.len() as i32)
-        };
+        let raw =
+            unsafe { qwen_transcribe_stream(self.ctx, samples.as_ptr(), samples.len() as i32) };
         if raw.is_null() {
             anyhow::bail!("qwen_transcribe_stream 返回 NULL");
         }

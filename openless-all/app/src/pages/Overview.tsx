@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../components/Icon';
-import { getHotkeyTriggerLabel } from '../lib/hotkey';
+import { formatComboLabel } from '../lib/hotkey';
 import { getCredentials, listHistory } from '../lib/ipc';
 import type { CredentialsStatus, DictationSession, PolishMode } from '../lib/types';
 import { useHotkeySettings } from '../state/HotkeySettingsContext';
@@ -53,7 +53,7 @@ export function Overview({ onOpenHistory }: OverviewProps) {
     volcengineConfigured: false,
     arkConfigured: false,
   });
-  const { hotkey } = useHotkeySettings();
+  const { prefs } = useHotkeySettings();
 
   useEffect(() => {
     listHistory().then(setHistory);
@@ -103,6 +103,29 @@ export function Overview({ onOpenHistory }: OverviewProps) {
         kicker={t('overview.kicker')}
         title={t('overview.title')}
         desc={t('overview.desc')}
+        right={
+          <div
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 8,
+              padding: '6px 12px',
+              borderRadius: 999,
+              border: '0.5px solid var(--ol-line-strong)',
+              background: 'var(--ol-surface-2)',
+              color: 'var(--ol-ink-3)',
+              fontSize: 12,
+            }}
+          >
+            <Icon name="cmd" size={12} />
+            {t('overview.pressPrefix')}
+            <kbd style={{
+              padding: '2px 7px', fontSize: 11, fontFamily: 'var(--ol-font-mono)',
+              background: '#fff', borderRadius: 5,
+              border: '0.5px solid var(--ol-line-strong)',
+              color: 'var(--ol-ink)',
+            }}>{prefs ? formatComboLabel(prefs.dictationHotkey) : ''}</kbd>
+            {t('overview.pressSuffix')}
+          </div>
+        }
       />
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 18 }}>
@@ -150,7 +173,7 @@ export function Overview({ onOpenHistory }: OverviewProps) {
           <div className="ol-thinscroll" style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
             {history.length === 0 && (
               <div style={{ padding: 24, textAlign: 'center', fontSize: 12, color: 'var(--ol-ink-4)' }}>
-                {t('overview.recentEmpty', { trigger: getHotkeyTriggerLabel(hotkey?.trigger) })}
+                {t('overview.recentEmpty', { trigger: prefs ? formatComboLabel(prefs.dictationHotkey) : '' })}
               </div>
             )}
             {history.slice(0, 5).map(s => (

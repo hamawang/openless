@@ -48,7 +48,8 @@ export type HotkeyTrigger =
   | 'leftControl'
   | 'rightCommand'
   | 'fn'
-  | 'rightAlt';
+  | 'rightAlt'
+  | 'custom';
 
 export type HotkeyMode = 'toggle' | 'hold';
 
@@ -83,13 +84,18 @@ export interface HotkeyStatus {
   lastError: HotkeyInstallError | null;
 }
 
-/** 划词语音问答快捷键绑定。null 表示未启用。详见 issue #118。 */
-export interface QaHotkeyBinding {
-  /** 主键（去掉所有修饰符的字面字符），例如 ";" / "/" / "a" */
+export interface ShortcutBinding {
+  /** 主键，例如 "D" / "Space" / "F1" / "RightOption" / "Shift" */
   primary: string;
-  /** 修饰符列表，元素小写："cmd" | "shift" | "option" | "ctrl"。 */
+  /** 修饰符列表，元素小写："cmd" | "shift" | "alt" | "ctrl"。 */
   modifiers: string[];
 }
+
+/** 划词语音问答快捷键绑定。null 表示未启用。详见 issue #118。 */
+export type QaHotkeyBinding = ShortcutBinding;
+
+/** 自定义录音组合键绑定。当 hotkey.trigger == 'custom' 时使用。 */
+export type ComboBinding = ShortcutBinding;
 
 export type WindowsImeInstallState =
   | 'installed'
@@ -106,6 +112,7 @@ export interface WindowsImeStatus {
 
 export interface UserPreferences {
   hotkey: HotkeyBinding;
+  dictationHotkey: ShortcutBinding;
   defaultMode: PolishMode;
   enabledModes: PolishMode[];
   launchAtLogin: boolean;
@@ -130,6 +137,14 @@ export interface UserPreferences {
   qaHotkey: QaHotkeyBinding | null;
   /** 是否把 Q&A 历史写到本地存档。详见 issue #118。 */
   qaSaveHistory: boolean;
+  /** 自定义录音组合键。当 hotkey.trigger == 'custom' 时使用。null = 未设置。 */
+  customComboHotkey: ComboBinding | null;
+  /** 录音中触发翻译的全局快捷键。默认 Shift。 */
+  translationHotkey: ShortcutBinding;
+  /** 切换到上一个润色风格的全局快捷键。 */
+  switchStyleHotkey: ShortcutBinding;
+  /** 打开 OpenLess 主窗口的全局快捷键。 */
+  openAppHotkey: ShortcutBinding;
   /** 本地 Qwen3-ASR 当前激活的模型 id。仅在 activeAsrProvider === 'local-qwen3' 时有意义。 */
   localAsrActiveModel: string;
   /** 本地模型下载源镜像（'huggingface' / 'hf-mirror'）。 */

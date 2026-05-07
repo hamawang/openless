@@ -6,13 +6,16 @@ export interface CapsulePillMetrics {
   width: number;
   height: number;
   textWidth: number;
+  boxSizing: 'border-box' | 'content-box';
 }
 
 export interface CapsuleHostMetrics {
   width: number;
   height: number;
+  horizontalInset: number;
   bottomInset: number;
   badgeGap: number;
+  boxSizing: 'border-box' | 'content-box';
 }
 
 export interface CapsuleMessageLayout {
@@ -22,10 +25,11 @@ export interface CapsuleMessageLayout {
 
 export function getCapsulePillMetrics(os: OS): CapsulePillMetrics {
   if (os === 'win') {
-    return { width: 196, height: 52, textWidth: 104 };
+    // Windows metrics describe the visible outer footprint of the pill.
+    return { width: 196, height: 52, textWidth: 104, boxSizing: 'border-box' };
   }
 
-  return { width: 176, height: 42, textWidth: 84 };
+  return { width: 176, height: 42, textWidth: 84, boxSizing: 'border-box' };
 }
 
 // macOS 走 1.2.11 calc 布局，不依赖 host metrics；Windows 端要更大的 host
@@ -35,9 +39,25 @@ export function getCapsuleHostMetrics(
   translationActive: boolean,
 ): CapsuleHostMetrics {
   if (os === 'win') {
-    return { width: 220, height: translationActive ? 118 : 84, bottomInset: 12, badgeGap: 8 };
+    const horizontalInset = 12;
+    const pill = getCapsulePillMetrics(os);
+    return {
+      width: pill.width + horizontalInset * 2,
+      height: translationActive ? 118 : 84,
+      horizontalInset,
+      bottomInset: 12,
+      badgeGap: 8,
+      boxSizing: 'border-box',
+    };
   }
-  return { width: 176, height: 42, bottomInset: 0, badgeGap: 8 };
+  return {
+    width: 176,
+    height: 42,
+    horizontalInset: 0,
+    bottomInset: 0,
+    badgeGap: 8,
+    boxSizing: 'border-box',
+  };
 }
 
 export function getCapsuleMessageLayout(

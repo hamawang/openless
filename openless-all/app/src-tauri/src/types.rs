@@ -109,10 +109,11 @@ fn default_true() -> bool {
     true
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct UserPreferences {
     pub hotkey: HotkeyBinding,
+    pub dictation_hotkey: ShortcutBinding,
     pub default_mode: PolishMode,
     pub enabled_modes: Vec<PolishMode>,
     pub launch_at_login: bool,
@@ -154,11 +155,22 @@ pub struct UserPreferences {
     /// coordinator 用 global-hotkey crate 注册组合键（modifier + 主键）。
     /// 默认 Cmd+Shift+; (macOS) / Ctrl+Shift+; (Windows)。详见 issue #118。
     #[serde(default = "default_qa_hotkey")]
-    pub qa_hotkey: Option<QaHotkeyBinding>,
+    pub qa_hotkey: Option<ShortcutBinding>,
     /// 是否把每次 QA 会话写进 history.json。默认 false：QA 默认临时不留痕。
     /// 详见 issue #118。
     #[serde(default)]
     pub qa_save_history: bool,
+    /// 自定义录音组合键。当 `hotkey.trigger == Custom` 时，coordinator 用
+    /// `global-hotkey` crate 注册此组合键（支持 Toggle + Hold 模式）。
+    /// `None` 且 trigger == Custom 表示用户选了自定义但还没录制。
+    #[serde(default)]
+    pub custom_combo_hotkey: Option<ComboBinding>,
+    #[serde(default = "default_translation_hotkey")]
+    pub translation_hotkey: ShortcutBinding,
+    #[serde(default = "default_switch_style_hotkey")]
+    pub switch_style_hotkey: ShortcutBinding,
+    #[serde(default = "default_open_app_hotkey")]
+    pub open_app_hotkey: ShortcutBinding,
     /// 本地 Qwen3-ASR 当前激活的模型 id（"qwen3-asr-0.6b" / "qwen3-asr-1.7b"）。
     /// 仅在 active_asr_provider == "local-qwen3" 时有意义。
     #[serde(default = "default_local_asr_model")]
@@ -209,8 +221,182 @@ fn default_active_asr_provider() -> String {
     }
 }
 
-fn default_qa_hotkey() -> Option<QaHotkeyBinding> {
-    Some(QaHotkeyBinding::default())
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct UserPreferencesWire {
+    hotkey: HotkeyBinding,
+    dictation_hotkey: Option<ShortcutBinding>,
+    default_mode: PolishMode,
+    enabled_modes: Vec<PolishMode>,
+    launch_at_login: bool,
+    show_capsule: bool,
+    #[serde(default)]
+    mute_during_recording: bool,
+    active_asr_provider: String,
+    active_llm_provider: String,
+    restore_clipboard_after_paste: bool,
+    allow_non_tsf_insertion_fallback: bool,
+    working_languages: Vec<String>,
+    translation_target_language: String,
+    chinese_script_preference: ChineseScriptPreference,
+    #[serde(default)]
+    output_language_preference: OutputLanguagePreference,
+    qa_hotkey: Option<ShortcutBinding>,
+    qa_save_history: bool,
+    custom_combo_hotkey: Option<ComboBinding>,
+    translation_hotkey: Option<ShortcutBinding>,
+    switch_style_hotkey: Option<ShortcutBinding>,
+    open_app_hotkey: Option<ShortcutBinding>,
+    #[serde(default = "default_local_asr_model")]
+    local_asr_active_model: String,
+    #[serde(default = "default_local_asr_mirror")]
+    local_asr_mirror: String,
+    #[serde(default = "default_local_asr_keep_loaded_secs")]
+    local_asr_keep_loaded_secs: u32,
+    #[serde(default = "default_foundry_local_asr_model")]
+    foundry_local_asr_model: String,
+    #[serde(default)]
+    foundry_local_asr_language_hint: String,
+    #[serde(default = "default_local_asr_keep_loaded_secs")]
+    foundry_local_asr_keep_loaded_secs: u32,
+}
+
+impl Default for UserPreferencesWire {
+    fn default() -> Self {
+        let prefs = UserPreferences::default();
+        Self {
+            hotkey: prefs.hotkey,
+            dictation_hotkey: None,
+            default_mode: prefs.default_mode,
+            enabled_modes: prefs.enabled_modes,
+            launch_at_login: prefs.launch_at_login,
+            show_capsule: prefs.show_capsule,
+            mute_during_recording: prefs.mute_during_recording,
+            active_asr_provider: prefs.active_asr_provider,
+            active_llm_provider: prefs.active_llm_provider,
+            restore_clipboard_after_paste: prefs.restore_clipboard_after_paste,
+            allow_non_tsf_insertion_fallback: prefs.allow_non_tsf_insertion_fallback,
+            working_languages: prefs.working_languages,
+            translation_target_language: prefs.translation_target_language,
+            chinese_script_preference: prefs.chinese_script_preference,
+            output_language_preference: prefs.output_language_preference,
+            qa_hotkey: prefs.qa_hotkey,
+            qa_save_history: prefs.qa_save_history,
+            custom_combo_hotkey: prefs.custom_combo_hotkey,
+            translation_hotkey: None,
+            switch_style_hotkey: None,
+            open_app_hotkey: None,
+            local_asr_active_model: prefs.local_asr_active_model,
+            local_asr_mirror: prefs.local_asr_mirror,
+            local_asr_keep_loaded_secs: prefs.local_asr_keep_loaded_secs,
+            foundry_local_asr_model: prefs.foundry_local_asr_model,
+            foundry_local_asr_language_hint: prefs.foundry_local_asr_language_hint,
+            foundry_local_asr_keep_loaded_secs: prefs.foundry_local_asr_keep_loaded_secs,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for UserPreferences {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let wire = UserPreferencesWire::deserialize(deserializer)?;
+        let dictation_hotkey = match wire.dictation_hotkey {
+            Some(binding) => binding,
+            None => default_dictation_hotkey_from_legacy(&wire.hotkey, &wire.custom_combo_hotkey)
+                .map_err(serde::de::Error::custom)?,
+        };
+        Ok(Self {
+            hotkey: wire.hotkey,
+            dictation_hotkey,
+            default_mode: wire.default_mode,
+            enabled_modes: wire.enabled_modes,
+            launch_at_login: wire.launch_at_login,
+            show_capsule: wire.show_capsule,
+            mute_during_recording: wire.mute_during_recording,
+            active_asr_provider: wire.active_asr_provider,
+            active_llm_provider: wire.active_llm_provider,
+            restore_clipboard_after_paste: wire.restore_clipboard_after_paste,
+            allow_non_tsf_insertion_fallback: wire.allow_non_tsf_insertion_fallback,
+            working_languages: wire.working_languages,
+            translation_target_language: wire.translation_target_language,
+            chinese_script_preference: wire.chinese_script_preference,
+            output_language_preference: wire.output_language_preference,
+            qa_hotkey: wire.qa_hotkey,
+            qa_save_history: wire.qa_save_history,
+            custom_combo_hotkey: wire.custom_combo_hotkey,
+            translation_hotkey: wire
+                .translation_hotkey
+                .unwrap_or_else(default_translation_hotkey),
+            switch_style_hotkey: wire
+                .switch_style_hotkey
+                .unwrap_or_else(default_switch_style_hotkey),
+            open_app_hotkey: wire.open_app_hotkey.unwrap_or_else(default_open_app_hotkey),
+            local_asr_active_model: wire.local_asr_active_model,
+            local_asr_mirror: wire.local_asr_mirror,
+            local_asr_keep_loaded_secs: wire.local_asr_keep_loaded_secs,
+            foundry_local_asr_model: wire.foundry_local_asr_model,
+            foundry_local_asr_language_hint: wire.foundry_local_asr_language_hint,
+            foundry_local_asr_keep_loaded_secs: wire.foundry_local_asr_keep_loaded_secs,
+        })
+    }
+}
+
+fn default_qa_hotkey() -> Option<ShortcutBinding> {
+    Some(ShortcutBinding::default_qa())
+}
+
+fn default_translation_hotkey() -> ShortcutBinding {
+    ShortcutBinding {
+        primary: "Shift".into(),
+        modifiers: Vec::new(),
+    }
+}
+
+fn default_switch_style_hotkey() -> ShortcutBinding {
+    ShortcutBinding {
+        primary: "S".into(),
+        modifiers: default_app_shortcut_modifiers(),
+    }
+}
+
+fn default_open_app_hotkey() -> ShortcutBinding {
+    ShortcutBinding {
+        primary: "O".into(),
+        modifiers: default_app_shortcut_modifiers(),
+    }
+}
+
+fn default_app_shortcut_modifiers() -> Vec<String> {
+    #[cfg(target_os = "macos")]
+    {
+        vec!["cmd".into(), "shift".into()]
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        vec!["ctrl".into(), "shift".into()]
+    }
+}
+
+fn default_dictation_hotkey_from_legacy(
+    hotkey: &HotkeyBinding,
+    custom_combo_hotkey: &Option<ComboBinding>,
+) -> Result<ShortcutBinding, String> {
+    if hotkey.trigger == HotkeyTrigger::Custom {
+        if let Some(combo) = custom_combo_hotkey {
+            return Ok(ShortcutBinding {
+                primary: combo.primary.clone(),
+                modifiers: combo.modifiers.clone(),
+            });
+        }
+        return Err(
+            "hotkey.trigger is custom but dictationHotkey/customComboHotkey is missing".into(),
+        );
+    }
+    Ok(crate::shortcut_binding::binding_from_legacy_trigger(
+        hotkey.trigger,
+    ))
 }
 
 fn default_working_languages() -> Vec<String> {
@@ -221,6 +407,11 @@ impl Default for UserPreferences {
     fn default() -> Self {
         Self {
             hotkey: HotkeyBinding::default(),
+            dictation_hotkey: default_dictation_hotkey_from_legacy(
+                &HotkeyBinding::default(),
+                &None,
+            )
+            .expect("default legacy hotkey is not custom"),
             default_mode: PolishMode::Light,
             enabled_modes: vec![
                 PolishMode::Raw,
@@ -241,6 +432,10 @@ impl Default for UserPreferences {
             output_language_preference: OutputLanguagePreference::Auto,
             qa_hotkey: default_qa_hotkey(),
             qa_save_history: false,
+            custom_combo_hotkey: None,
+            translation_hotkey: default_translation_hotkey(),
+            switch_style_hotkey: default_switch_style_hotkey(),
+            open_app_hotkey: default_open_app_hotkey(),
             local_asr_active_model: default_local_asr_model(),
             local_asr_mirror: default_local_asr_mirror(),
             local_asr_keep_loaded_secs: default_local_asr_keep_loaded_secs(),
@@ -248,6 +443,44 @@ impl Default for UserPreferences {
             foundry_local_asr_language_hint: String::new(),
             foundry_local_asr_keep_loaded_secs: default_local_asr_keep_loaded_secs(),
         }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ShortcutBinding {
+    pub primary: String,
+    pub modifiers: Vec<String>,
+}
+
+impl ShortcutBinding {
+    pub fn default_qa() -> Self {
+        #[cfg(target_os = "macos")]
+        {
+            Self {
+                primary: ";".into(),
+                modifiers: vec!["cmd".into(), "shift".into()],
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            Self {
+                primary: ";".into(),
+                modifiers: vec!["ctrl".into(), "shift".into()],
+            }
+        }
+    }
+
+    pub fn display_label(&self) -> String {
+        let mut parts: Vec<String> = Vec::new();
+        let modifier_order = ["cmd", "ctrl", "alt", "shift", "super"];
+        for tag in modifier_order {
+            if self.modifiers.iter().any(|m| m.eq_ignore_ascii_case(tag)) {
+                parts.push(modifier_display(tag).to_string());
+            }
+        }
+        parts.push(display_primary(&self.primary));
+        parts.join("+")
     }
 }
 
@@ -284,7 +517,7 @@ impl Default for QaHotkeyBinding {
 }
 
 impl QaHotkeyBinding {
-    /// 渲染成给前端展示的可读标签（macOS 用 `Cmd`，其他平台用 `Ctrl`）。
+    /// 渲染成给前端展示的可读标签。
     /// 顺序与人类阅读习惯一致：`Cmd+Shift+;`、`Ctrl+Alt+Shift+.`。
     pub fn display_label(&self) -> String {
         let mut parts: Vec<String> = Vec::new();
@@ -301,9 +534,46 @@ impl QaHotkeyBinding {
     }
 }
 
+/// 录音快捷键的自定义组合键绑定。结构与 `QaHotkeyBinding` 相同：
+/// - `primary`：主键（如 `"D"`、`"Space"`、`"F1"`）。
+/// - `modifiers`：修饰键集合，元素来自 `{"cmd","ctrl","alt","shift","super"}`。
+///
+/// 当 `HotkeyBinding.trigger == Custom` 时，coordinator 用 `global-hotkey` crate
+/// 注册此组合键，而非 modifier-only 的 CGEventTap / WH_KEYBOARD_LL。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ComboBinding {
+    pub primary: String,
+    pub modifiers: Vec<String>,
+}
+
+impl ComboBinding {
+    /// 渲染成给前端展示的可读标签。复用 QaHotkeyBinding 的格式化逻辑。
+    pub fn display_label(&self) -> String {
+        let qa = QaHotkeyBinding {
+            primary: self.primary.clone(),
+            modifiers: self.modifiers.clone(),
+        };
+        qa.display_label()
+    }
+}
+
 fn modifier_display(tag: &str) -> &'static str {
     match tag {
-        "cmd" => "Cmd",
+        "cmd" => {
+            #[cfg(target_os = "macos")]
+            {
+                "Cmd"
+            }
+            #[cfg(target_os = "windows")]
+            {
+                "Ctrl"
+            }
+            #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+            {
+                "Super"
+            }
+        }
         "ctrl" => "Ctrl",
         "alt" => {
             #[cfg(target_os = "macos")]
@@ -346,6 +616,7 @@ pub enum HotkeyTrigger {
     RightCommand,
     Fn,
     RightAlt, // Windows synonym for RightOption
+    Custom,
 }
 
 impl HotkeyTrigger {
@@ -358,6 +629,7 @@ impl HotkeyTrigger {
             HotkeyTrigger::RightCommand => "右 Command",
             HotkeyTrigger::Fn => "Fn (地球键)",
             HotkeyTrigger::RightAlt => "右 Alt",
+            HotkeyTrigger::Custom => "自定义组合键",
         }
     }
 }
@@ -388,7 +660,7 @@ impl HotkeyAdapterKind {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(default, rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
 pub struct HotkeyBinding {
     pub trigger: HotkeyTrigger,
     pub mode: HotkeyMode,
@@ -419,6 +691,7 @@ impl HotkeyCapability {
                     HotkeyTrigger::LeftControl,
                     HotkeyTrigger::RightCommand,
                     HotkeyTrigger::Fn,
+                    HotkeyTrigger::Custom,
                 ],
                 requires_accessibility_permission: true,
                 supports_modifier_only_trigger: true,
@@ -437,6 +710,7 @@ impl HotkeyCapability {
                     HotkeyTrigger::RightAlt,
                     HotkeyTrigger::LeftControl,
                     HotkeyTrigger::RightCommand,
+                    HotkeyTrigger::Custom,
                 ],
                 requires_accessibility_permission: false,
                 supports_modifier_only_trigger: true,
@@ -457,6 +731,7 @@ impl HotkeyCapability {
                     HotkeyTrigger::RightAlt,
                     HotkeyTrigger::RightControl,
                     HotkeyTrigger::LeftControl,
+                    HotkeyTrigger::Custom,
                 ],
                 requires_accessibility_permission: false,
                 supports_modifier_only_trigger: true,
@@ -624,5 +899,44 @@ mod tests {
         let prefs: UserPreferences = serde_json::from_str("{}").unwrap();
 
         assert!(prefs.allow_non_tsf_insertion_fallback);
+    }
+
+    #[test]
+    fn legacy_custom_hotkey_without_custom_binding_is_rejected() {
+        let result = serde_json::from_str::<UserPreferences>(
+            r#"{
+                "hotkey": { "trigger": "custom", "mode": "toggle" }
+            }"#,
+        );
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn legacy_custom_hotkey_uses_custom_combo_binding() {
+        let prefs: UserPreferences = serde_json::from_str(
+            r#"{
+                "hotkey": { "trigger": "custom", "mode": "toggle" },
+                "customComboHotkey": { "primary": "D", "modifiers": ["cmd", "shift"] }
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(prefs.dictation_hotkey.primary, "D");
+        assert_eq!(prefs.dictation_hotkey.modifiers, vec!["cmd", "shift"]);
+    }
+
+    #[test]
+    fn custom_hotkey_with_dictation_hotkey_preserves_dictation_binding() {
+        let prefs: UserPreferences = serde_json::from_str(
+            r#"{
+                "hotkey": { "trigger": "custom", "mode": "toggle" },
+                "dictationHotkey": { "primary": "Space", "modifiers": ["ctrl"] }
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(prefs.dictation_hotkey.primary, "Space");
+        assert_eq!(prefs.dictation_hotkey.modifiers, vec!["ctrl"]);
     }
 }
