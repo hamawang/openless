@@ -210,6 +210,18 @@ fn local_asr_release_plan_for_provider(provider: &str) -> LocalAsrReleasePlan {
     }
 }
 
+async fn release_foundry_runtime_if_inactive(
+    runtime: &Arc<FoundryLocalRuntime>,
+    release_foundry: bool,
+) {
+    if release_foundry {
+        runtime.request_cancel_prepare();
+        if let Err(error) = runtime.release_now().await {
+            log::warn!("[foundry-asr] release inactive runtime failed: {error:#}");
+        }
+    }
+}
+
 #[tauri::command]
 pub fn set_credential(window: Window, account: String, value: String) -> Result<(), String> {
     ensure_main_window(&window)?;
@@ -242,11 +254,7 @@ pub async fn set_active_asr_provider(
         // 再走 local 路径，引擎会驻留到进程退出。
         coord.release_local_asr_engine();
     }
-    if release_plan.foundry {
-        if let Err(error) = runtime.release_now().await {
-            log::warn!("[foundry-asr] release inactive runtime failed: {error:#}");
-        }
-    }
+    release_foundry_runtime_if_inactive(runtime.inner(), release_plan.foundry).await;
     Ok(())
 }
 
@@ -1472,7 +1480,8 @@ mod tests {
         asr_configured_for_provider, asr_transcriptions_url, fetch_provider_models,
         llm_configured_for_snapshot, local_asr_release_plan_for_provider, models_url,
         normalize_foundry_language_hint, parse_model_ids, persist_settings,
-        validate_foundry_model_alias, ProviderConfig, SettingsWriter,
+        release_foundry_runtime_if_inactive, validate_foundry_model_alias, ProviderConfig,
+        SettingsWriter,
     };
     use crate::persistence::CredentialsSnapshot;
     use crate::types::{
@@ -1585,6 +1594,16 @@ mod tests {
         let cloud = local_asr_release_plan_for_provider("volcengine");
         assert!(cloud.qwen);
         assert!(cloud.foundry);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[tokio::test]
+    async fn provider_switch_release_requests_foundry_prepare_cancel_first() {
+        let runtime = std::sync::Arc::new(crate::asr::local::FoundryLocalRuntime::new());
+
+        release_foundry_runtime_if_inactive(&runtime, true).await;
+
+        assert!(runtime.cancel_prepare_requested_for_tests());
     }
 
     #[test]
